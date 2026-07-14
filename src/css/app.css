@@ -1,0 +1,321 @@
+/* ============================================================
+   RackWerk — App-Layout
+   ============================================================ */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;               /* App-Feeling: kein Body-Scroll */
+  background: var(--bg-case);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;      /* kein Pull-to-Refresh im WebView */
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* ===================== Transport ===================== */
+.transport {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(8px + var(--safe-top)) 12px 8px;
+  background: linear-gradient(#2b313b, #1d222a);
+  border-bottom: 1px solid var(--edge-dark);
+  box-shadow: 0 1px 0 var(--edge-light) inset;
+}
+
+.transport__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.brand__mark { color: var(--m-subsynth); font-size: 18px; }
+.brand__name {
+  font-weight: 700;
+  letter-spacing: .06em;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+/* LCD-Anzeige */
+.transport__lcd {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  background: var(--lcd-bg);
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: var(--tap-min);
+  align-items: center;
+  font-family: var(--font-lcd);
+  color: var(--lcd-ink);
+  text-shadow: 0 0 8px var(--lcd-glow);
+  box-shadow: 0 2px 6px rgba(0,0,0,.6) inset, 0 1px 0 var(--edge-light);
+}
+.lcd__bpm   { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lcd__label { font-size: 10px; opacity: .7; letter-spacing: .12em; }
+.lcd__pos   { font-size: 14px; opacity: .85; font-variant-numeric: tabular-nums; margin-left: auto; }
+
+/* Transport-Buttons */
+.transport__controls { display: flex; gap: 8px; }
+.t-btn {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-ctl);
+  background: linear-gradient(#3a414d, #262b34);
+  box-shadow: var(--shadow-panel);
+  font-size: 22px;
+  color: var(--ink);
+  touch-action: manipulation;
+}
+.t-btn:active { transform: translateY(1px); filter: brightness(1.15); }
+.t-btn--play svg { width: 22px; height: 22px; fill: var(--led-play); }
+.t-btn--play.is-playing { box-shadow: 0 0 12px rgba(102,224,122,.35), var(--shadow-panel); }
+
+/* ===================== Rack ===================== */
+.rack {
+  flex: 1 1 auto;
+  min-height: 0;                  /* erlaubt dem Scroll-Container zu schrumpfen */
+  overflow-y: auto;               /* nur das Rack scrollt */
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 12px calc(24px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0 46px,
+      rgba(0,0,0,.18) 46px 48px   /* Rack-Schienen-Textur */
+    ),
+    var(--bg-rail);
+}
+
+/* Wichtig: Maschinen dürfen NICHT schrumpfen — das Rack scrollt stattdessen.
+   (Flex-Kinder haben flex-shrink:1 als Default; zusammen mit overflow:hidden
+   auf .machine wurden die Faceplates sonst abgeschnitten.) */
+.rack > * { flex: 0 0 auto; }
+
+/* Slot »Maschine hinzufügen« */
+.rack__add {
+  min-height: 72px;
+  border: 2px dashed var(--ink-faint);
+  border-radius: var(--r-panel);
+  display: grid;
+  place-items: center;
+  color: var(--ink-dim);
+  font-size: 15px;
+  letter-spacing: .04em;
+  touch-action: manipulation;
+}
+.rack__add:active { background: rgba(255,255,255,.04); color: var(--ink); }
+
+/* ===================== Bottom Sheet ===================== */
+.sheet { position: fixed; inset: 0; z-index: 50; }
+.sheet[hidden] { display: none; }
+.sheet__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+.sheet__panel {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: var(--bg-sheet);
+  border-radius: 16px 16px 0 0;
+  padding: 8px 16px calc(20px + var(--safe-bottom));
+  box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+  animation: sheet-in .22s ease-out;
+}
+@keyframes sheet-in { from { transform: translateY(24px); opacity: 0; } }
+.sheet__grip {
+  width: 40px; height: 4px;
+  background: var(--ink-faint);
+  border-radius: 2px;
+  margin: 4px auto 12px;
+}
+.sheet__title { margin: 0 0 12px; font-size: 16px; }
+.sheet__list { display: flex; flex-direction: column; gap: 8px; }
+
+.sheet__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  text-align: left;
+  touch-action: manipulation;
+}
+.sheet__item:active { filter: brightness(1.15); }
+.sheet__swatch { width: 12px; height: 32px; border-radius: 3px; flex: 0 0 auto; }
+.sheet__name { font-weight: 600; font-size: 15px; }
+.sheet__desc { font-size: 12px; color: var(--ink-dim); }
+
+/* ===================== Audio-Unlock ===================== */
+.unlock {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center;
+  background: rgba(10,11,14,.92);
+  backdrop-filter: blur(4px);
+}
+.unlock[hidden] { display: none; }
+.unlock__btn {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 44px;
+  border-radius: 16px;
+  background: linear-gradient(#3a414d, #262b34);
+  box-shadow: var(--shadow-panel);
+  font-size: 17px;
+  font-weight: 600;
+}
+.unlock__icon { font-size: 30px; color: var(--led-play); }
+.unlock__btn small { color: var(--ink-dim); font-weight: 400; }
+
+@media (max-width: 460px) {
+  .brand__name { display: none; }  /* schmale Phones: nur das Logo-Zeichen */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* REC-Button */
+.t-btn--rec { color: var(--led-on); font-size: 16px; }
+.t-btn--rec.is-armed {
+  background: linear-gradient(#5a2626, #3a1a1a);
+  box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse { 50% { box-shadow: 0 0 4px rgba(255,77,77,.25), var(--shadow-panel); } }
+
+/* PRJ-Button + Projekte-Sheet */
+.t-btn--prj { font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.saverow { display: flex; gap: 8px; margin-bottom: 12px; }
+.saverow__input {
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel-deep);
+  color: var(--ink);
+  font: inherit;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+}
+.saverow__input::placeholder { color: var(--ink-faint); }
+.saverow__btn { min-height: 44px; padding: 0 16px; }
+.sheet__item--project { padding: 4px 4px 4px 12px; gap: 8px; }
+.project__load {
+  flex: 1 1 auto;
+  text-align: left;
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.project__delete {
+  width: 44px; height: 44px;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  font-size: 15px;
+}
+.project__delete:active { color: #ff8a8a; }
+.sheet__empty, .sheet__hint { color: var(--ink-dim); font-size: 13px; }
+
+/* Sequenzer-Kopfzeile mit Pager */
+.stepseq__ctrl { display: flex; gap: 6px; align-items: center; }
+.stepseq__page {
+  font-family: var(--font-lcd);
+  font-size: 12px;
+  color: var(--lcd-ink);
+  min-width: 32px;
+  text-align: center;
+}
+.stepseq__bar .m-btn { min-width: 40px; }
+.stepseq__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Datei- und Aufnahme-Bereich im Projekte-Sheet */
+.sheet__sub {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.filerow, .recrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filerow .m-btn, .recrow .m-btn { min-height: 44px; padding: 0 14px; }
+.recrow__time {
+  font-family: var(--font-lcd);
+  color: var(--led-on);
+  font-size: 15px;
+}
+.rec-link {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  color: var(--led-play);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow-panel);
+}
+.t-btn--prj.is-recording {
+  color: var(--led-on);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+/* Aufnahme-Ergebnis: Player + Teilen */
+.rec-player { width: 100%; margin-top: 10px; }
+.rec-share { margin: 10px 10px 0 0; min-height: 44px; padding: 0 14px; color: var(--led-play); }
+
+/* Jam-Session */
+.jam-code {
+  width: 100%;
+  min-height: 76px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel-deep);
+  color: var(--lcd-ink);
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  resize: vertical;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.t-btn--prj.is-linked {
+  color: var(--led-play);
+  box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
+}
+.sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }

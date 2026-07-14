@@ -1,1 +1,29 @@
-# rackwerk
+# RackWerk
+
+Groovebox-Web-App im Stil von Caustic 3 — Web-first (Web Audio API), Touch-first,
+gebaut für spätere Verpackung mit Capacitor (iOS/Android).
+
+## Aufbau dieses Repos
+
+| Pfad | Zweck |
+|---|---|
+| `index.html` | Gebündelte Einzeldatei — das, was GitHub Pages ausliefert. Wird generiert, nicht von Hand bearbeitet! |
+| `src/` | Das modulare Quellprojekt (ES-Module, CSS, Bundler). Hier wird entwickelt. |
+
+## Entwickeln & Deployen
+
+1. Änderungen in `src/` machen (Details zur Architektur: [`src/README.md`](src/README.md)).
+2. Bundle bauen:
+   ```bash
+   cd src
+   python3 build-preview.py        # erzeugt rackwerk-preview.html
+   ```
+3. Für GitHub Pages: den Titel-Präfix entfernen und als `index.html` ins Repo-Root legen:
+   ```bash
+   sed 's/<title>Preview — /<title>/' rackwerk-preview.html > ../index.html
+   ```
+4. Commit auf `main` → Pages ist nach 1–2 Minuten aktuell.
+
+**Wichtig:** Jedes neue JS-Modul und jeder neue Export muss in die `MODULES`-Liste
+in `src/build-preview.py` eingetragen werden (in Abhängigkeitsreihenfolge), sonst
+fehlt er im Bundle.
