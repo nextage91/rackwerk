@@ -2092,7 +2092,21 @@ class JamLink {
 
   #newPeer() {
     return new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        // Best-Effort-TURN-Relay (Open-Relay-Projekt, kostenlos):
+        // hilft bei Carrier-NAT (Mobilfunk) und strengen Routern.
+        // Ist der Dienst nicht erreichbar, wird er einfach ignoriert.
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp',
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject',
+        },
+      ],
     });
   }
 
