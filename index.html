@@ -1,0 +1,3749 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <!-- Capacitor-ready: kein Zoom, App-artiges Verhalten, Safe-Areas via viewport-fit -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#101216">
+  <!-- Als Home-Bildschirm-App: Vollbild ohne Safari-Leisten -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RackWerk">
+  <title>RackWerk — Groovebox</title><style>
+/* ============================================================
+   RackWerk — Design-Tokens
+   Look: dunkles Hardware-Rack, lackierte Faceplates, Amber-LCD.
+   Alle Maße Touch-first (min. 44px Ziele, Apple/Android HIG).
+   ============================================================ */
+:root {
+  /* --- Gehäuse & Flächen --- */
+  --bg-case:        #101216;   /* Rack-Gehäuse */
+  --bg-rail:        #0a0b0e;   /* Schienen zwischen Slots */
+  --bg-panel:       #232830;   /* Maschinen-Faceplate */
+  --bg-panel-deep:  #1a1e25;   /* vertiefte Bereiche (Keybed, Wannen) */
+  --bg-sheet:       #262b34;
+
+  /* --- Linien & Kanten --- */
+  --edge-light:     rgba(255,255,255,.07);  /* obere Lichtkante */
+  --edge-dark:      rgba(0,0,0,.55);        /* untere Schattenkante */
+  --screw:          #4a505b;
+
+  /* --- Text --- */
+  --ink:            #e8eaee;
+  --ink-dim:        #9aa1ad;
+  --ink-faint:      #5b6270;
+
+  /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
+  --lcd-bg:         #1c1204;
+  --lcd-ink:        #ffb84d;
+  --lcd-glow:       rgba(255,184,77,.35);
+
+  /* --- Maschinen-Akzentfarben (eine pro Maschinentyp) --- */
+  --m-subsynth:     #4dc3ff;
+  --m-beatbox:      #ff7a59;
+  --m-bassline:     #9dff4d;
+  --m-master:       #c9a2ff;
+
+  /* --- Status --- */
+  --led-off:        #3a2020;
+  --led-on:         #ff4d4d;
+  --led-play:       #66e07a;
+
+  /* --- Typografie (Systemfonts: offline-fähig für Capacitor) --- */
+  --font-ui:   -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-lcd:  "SF Mono", "Roboto Mono", "Cascadia Mono", ui-monospace, monospace;
+
+  /* --- Touch-Maße --- */
+  --tap-min:    44px;   /* kleinste Zielgröße */
+  --knob-size:  64px;
+  --key-h:      120px;
+
+  /* --- Radien & Schatten --- */
+  --r-panel:  10px;
+  --r-ctl:    8px;
+  --shadow-panel: 0 1px 0 var(--edge-light) inset,
+                  0 -1px 0 var(--edge-dark) inset,
+                  0 4px 14px rgba(0,0,0,.45);
+
+  /* --- Safe-Areas (Notch/Home-Indicator im Capacitor-WebView) --- */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+}
+
+/* ============================================================
+   RackWerk — App-Layout
+   ============================================================ */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;               /* App-Feeling: kein Body-Scroll */
+  background: var(--bg-case);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;      /* kein Pull-to-Refresh im WebView */
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* ===================== Transport ===================== */
+.transport {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(8px + var(--safe-top)) 12px 8px;
+  background: linear-gradient(#2b313b, #1d222a);
+  border-bottom: 1px solid var(--edge-dark);
+  box-shadow: 0 1px 0 var(--edge-light) inset;
+}
+
+.transport__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.brand__mark { color: var(--m-subsynth); font-size: 18px; }
+.brand__name {
+  font-weight: 700;
+  letter-spacing: .06em;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+/* LCD-Anzeige */
+.transport__lcd {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  background: var(--lcd-bg);
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: var(--tap-min);
+  align-items: center;
+  font-family: var(--font-lcd);
+  color: var(--lcd-ink);
+  text-shadow: 0 0 8px var(--lcd-glow);
+  box-shadow: 0 2px 6px rgba(0,0,0,.6) inset, 0 1px 0 var(--edge-light);
+}
+.lcd__bpm   { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lcd__label { font-size: 10px; opacity: .7; letter-spacing: .12em; }
+.lcd__pos   { font-size: 14px; opacity: .85; font-variant-numeric: tabular-nums; margin-left: auto; }
+
+/* Transport-Buttons */
+.transport__controls { display: flex; gap: 8px; }
+.t-btn {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-ctl);
+  background: linear-gradient(#3a414d, #262b34);
+  box-shadow: var(--shadow-panel);
+  font-size: 22px;
+  color: var(--ink);
+  touch-action: manipulation;
+}
+.t-btn:active { transform: translateY(1px); filter: brightness(1.15); }
+.t-btn--play svg { width: 22px; height: 22px; fill: var(--led-play); }
+.t-btn--play.is-playing { box-shadow: 0 0 12px rgba(102,224,122,.35), var(--shadow-panel); }
+
+/* ===================== Rack ===================== */
+.rack {
+  flex: 1 1 auto;
+  min-height: 0;                  /* erlaubt dem Scroll-Container zu schrumpfen */
+  overflow-y: auto;               /* nur das Rack scrollt */
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 12px calc(24px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      transparent 0 46px,
+      rgba(0,0,0,.18) 46px 48px   /* Rack-Schienen-Textur */
+    ),
+    var(--bg-rail);
+}
+
+/* Wichtig: Maschinen dürfen NICHT schrumpfen — das Rack scrollt stattdessen.
+   (Flex-Kinder haben flex-shrink:1 als Default; zusammen mit overflow:hidden
+   auf .machine wurden die Faceplates sonst abgeschnitten.) */
+.rack > * { flex: 0 0 auto; }
+
+/* Slot »Maschine hinzufügen« */
+.rack__add {
+  min-height: 72px;
+  border: 2px dashed var(--ink-faint);
+  border-radius: var(--r-panel);
+  display: grid;
+  place-items: center;
+  color: var(--ink-dim);
+  font-size: 15px;
+  letter-spacing: .04em;
+  touch-action: manipulation;
+}
+.rack__add:active { background: rgba(255,255,255,.04); color: var(--ink); }
+
+/* ===================== Bottom Sheet ===================== */
+.sheet { position: fixed; inset: 0; z-index: 50; }
+.sheet[hidden] { display: none; }
+.sheet__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+.sheet__panel {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: var(--bg-sheet);
+  border-radius: 16px 16px 0 0;
+  padding: 8px 16px calc(20px + var(--safe-bottom));
+  box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+  animation: sheet-in .22s ease-out;
+}
+@keyframes sheet-in { from { transform: translateY(24px); opacity: 0; } }
+.sheet__grip {
+  width: 40px; height: 4px;
+  background: var(--ink-faint);
+  border-radius: 2px;
+  margin: 4px auto 12px;
+}
+.sheet__title { margin: 0 0 12px; font-size: 16px; }
+.sheet__list { display: flex; flex-direction: column; gap: 8px; }
+
+.sheet__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  text-align: left;
+  touch-action: manipulation;
+}
+.sheet__item:active { filter: brightness(1.15); }
+.sheet__swatch { width: 12px; height: 32px; border-radius: 3px; flex: 0 0 auto; }
+.sheet__name { font-weight: 600; font-size: 15px; }
+.sheet__desc { font-size: 12px; color: var(--ink-dim); }
+
+/* ===================== Audio-Unlock ===================== */
+.unlock {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center;
+  background: rgba(10,11,14,.92);
+  backdrop-filter: blur(4px);
+}
+.unlock[hidden] { display: none; }
+.unlock__btn {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 44px;
+  border-radius: 16px;
+  background: linear-gradient(#3a414d, #262b34);
+  box-shadow: var(--shadow-panel);
+  font-size: 17px;
+  font-weight: 600;
+}
+.unlock__icon { font-size: 30px; color: var(--led-play); }
+.unlock__btn small { color: var(--ink-dim); font-weight: 400; }
+
+@media (max-width: 460px) {
+  .brand__name { display: none; }  /* schmale Phones: nur das Logo-Zeichen */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* REC-Button */
+.t-btn--rec { color: var(--led-on); font-size: 16px; }
+.t-btn--rec.is-armed {
+  background: linear-gradient(#5a2626, #3a1a1a);
+  box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse { 50% { box-shadow: 0 0 4px rgba(255,77,77,.25), var(--shadow-panel); } }
+
+/* PRJ-Button + Projekte-Sheet */
+.t-btn--prj { font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.saverow { display: flex; gap: 8px; margin-bottom: 12px; }
+.saverow__input {
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel-deep);
+  color: var(--ink);
+  font: inherit;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+}
+.saverow__input::placeholder { color: var(--ink-faint); }
+.saverow__btn { min-height: 44px; padding: 0 16px; }
+.sheet__item--project { padding: 4px 4px 4px 12px; gap: 8px; }
+.project__load {
+  flex: 1 1 auto;
+  text-align: left;
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.project__delete {
+  width: 44px; height: 44px;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  font-size: 15px;
+}
+.project__delete:active { color: #ff8a8a; }
+.sheet__empty, .sheet__hint { color: var(--ink-dim); font-size: 13px; }
+
+/* Sequenzer-Kopfzeile mit Pager */
+.stepseq__ctrl { display: flex; gap: 6px; align-items: center; }
+.stepseq__page {
+  font-family: var(--font-lcd);
+  font-size: 12px;
+  color: var(--lcd-ink);
+  min-width: 32px;
+  text-align: center;
+}
+.stepseq__bar .m-btn { min-width: 40px; }
+.stepseq__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Datei- und Aufnahme-Bereich im Projekte-Sheet */
+.sheet__sub {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.filerow, .recrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filerow .m-btn, .recrow .m-btn { min-height: 44px; padding: 0 14px; }
+.recrow__time {
+  font-family: var(--font-lcd);
+  color: var(--led-on);
+  font-size: 15px;
+}
+.rec-link {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  color: var(--led-play);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow-panel);
+}
+.t-btn--prj.is-recording {
+  color: var(--led-on);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+/* Aufnahme-Ergebnis: Player + Teilen */
+.rec-player { width: 100%; margin-top: 10px; }
+.rec-share { margin: 10px 10px 0 0; min-height: 44px; padding: 0 14px; color: var(--led-play); }
+
+/* Jam-Session */
+.jam-code {
+  width: 100%;
+  min-height: 76px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel-deep);
+  color: var(--lcd-ink);
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  resize: vertical;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.t-btn--prj.is-linked {
+  color: var(--led-play);
+  box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
+}
+.sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ============================================================
+   RackWerk — Komponenten (Maschine, Knob, Keybed)
+   ============================================================ */
+
+/* ===================== Maschinen-Faceplate ===================== */
+.machine {
+  border-radius: var(--r-panel);
+  background: linear-gradient(#272d36, var(--bg-panel-deep));
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  position: relative;
+}
+/* dekorative Rackschrauben in den Ecken */
+.machine::before, .machine::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #6a7280, var(--screw) 60%, #20242b);
+  box-shadow: 0 1px 1px rgba(0,0,0,.7);
+  pointer-events: none;
+}
+.machine::before { left: 10px; }
+.machine::after  { right: 10px; }
+
+/* Kopfzeile */
+.machine__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--edge-dark);
+  box-shadow: 0 1px 0 var(--edge-light);
+}
+.machine__stripe {
+  width: 5px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 8px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.machine__name {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.machine__type {
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: .04em;
+}
+.machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.m-btn {
+  min-width: var(--tap-min);
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: linear-gradient(#343b46, #23272f);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  color: var(--ink-dim);
+  touch-action: manipulation;
+}
+.m-btn:active { transform: translateY(1px); }
+.m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
+.m-btn--remove { color: var(--ink-faint); }
+
+/* Bedienfeld der Maschine */
+.machine__body { padding: 14px 12px; }
+.machine__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 6px;
+  justify-content: flex-start;
+}
+
+/* ===================== Knob (x-knob) ===================== */
+x-knob {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: calc(var(--knob-size) + 12px);
+  padding: 4px 0;
+  touch-action: none;               /* Drag gehört dem Knob, nicht dem Scroll */
+}
+.knob__dial {
+  width: var(--knob-size);
+  height: var(--knob-size);
+  border-radius: 50%;
+  position: relative;
+  background:
+    radial-gradient(circle at 30% 28%, #4a525f, #262b33 70%);
+  box-shadow:
+    0 2px 0 var(--edge-light) inset,
+    0 -3px 6px rgba(0,0,0,.5) inset,
+    0 4px 10px rgba(0,0,0,.55);
+}
+.knob__pointer {
+  position: absolute;
+  left: 50%; top: 6px;
+  width: 4px; height: 40%;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--m-color, var(--lcd-ink));
+  transform-origin: 50% calc(var(--knob-size) / 2 - 6px);
+  box-shadow: 0 0 6px var(--m-color-glow, var(--lcd-glow));
+}
+.knob__label {
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.knob__value {
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  color: var(--lcd-ink);
+  min-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===================== Keybed (Test-Tastatur) ===================== */
+.keybed {
+  margin-top: 12px;
+  display: flex;
+  height: var(--key-h);
+  background: var(--bg-panel-deep);
+  border-radius: 8px;
+  padding: 6px;
+  gap: 3px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
+  touch-action: none;               /* Glissando statt Scroll */
+}
+.key {
+  flex: 1 1 0;
+  border-radius: 5px;
+  background: linear-gradient(#f0f1f3, #c9ccd2);
+  box-shadow: 0 -3px 0 rgba(0,0,0,.25) inset;
+  position: relative;
+}
+.key--black {
+  flex: .7 1 0;
+  background: linear-gradient(#3a3f48, #14161a);
+  box-shadow: 0 -3px 0 rgba(0,0,0,.6) inset;
+}
+.key.is-down {
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+
+/* ===================== Step-Sequenzer ===================== */
+.stepseq { margin-top: 12px; }
+
+.stepseq__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.stepseq__title {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.stepseq__grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr); /* 2 Reihen à 8 — auf Phones groß genug */
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0,0,0,.3);            /* vertiefte Wanne wie das Keybed */
+  box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
+  touch-action: none;                    /* Pitch-Drag statt Scroll */
+}
+
+.cell {
+  min-height: 52px;
+  border-radius: 6px;
+  background: #2b313b;                   /* deutlich heller als die Wanne */
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  color: var(--ink-faint);
+  position: relative;
+}
+/* Beat-Markierung (Step 1, 5, 9, 13) */
+.cell--beat::before {
+  content: "";
+  position: absolute;
+  top: 5px; left: 50%;
+  width: 5px; height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.cell.is-on {
+  background: var(--m-color-dim, rgba(77,195,255,.22));
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+.cell.is-on::before { background: currentColor; }
+.cell.is-play {
+  outline: 2px solid var(--lcd-ink);
+  outline-offset: -2px;
+}
+
+/* ===================== BeatBox-Pads ===================== */
+.pads {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  touch-action: manipulation;
+}
+.pad {
+  min-height: 56px;
+  border-radius: 8px;
+  background: linear-gradient(#333a45, #22262e);
+  box-shadow: var(--shadow-panel);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--ink-dim);
+}
+.pad:active {
+  filter: brightness(1.3);
+  transform: translateY(1px);
+}
+.pad.is-selected {
+  color: var(--m-color, var(--m-beatbox));
+  box-shadow: 0 0 0 2px var(--m-color, var(--m-beatbox)) inset,
+              var(--shadow-panel);
+}
+
+/* Knob mit aufgezeichneter Automation: rote LED am Reglerrand */
+x-knob.has-auto .knob__dial::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--led-on);
+  box-shadow: 0 0 6px var(--led-on);
+}
+
+/* Lösch-Chip für Automation (erscheint bei Long-Press auf einen Knob) */
+.auto-chip {
+  position: fixed;
+  z-index: 60;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  background: linear-gradient(#4a2222, #351717);
+  color: #ff8a8a;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+}
+@keyframes chip-in { from { transform: translateY(6px); opacity: 0; } }
+
+/* Solo-Zustände */
+.m-btn--solo.is-active {
+  color: #0f130f;
+  background: linear-gradient(#7fe28e, #4faf5f);
+}
+.pad.is-solo {
+  box-shadow: 0 0 0 2px var(--led-play) inset, var(--shadow-panel);
+}
+
+/* Hinweis bei neu aufgezeichneter Automation */
+.auto-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: linear-gradient(#4a2222, #351717);
+  color: #ff8a8a;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6);
+  animation: chip-in .15s ease-out;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
+.seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.seg__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 4px;
+}
+.seg__btn {
+  min-width: 52px;
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#343b46, #23272f);
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.seg__btn:active { transform: translateY(1px); }
+.seg__btn.is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 2px 4px rgba(0,0,0,.4);
+}
+
+</style>
+</head>
+<body>
+
+  <!-- ===== Transport-Leiste (fixiert oben) ===== -->
+  <header class="transport" id="transport">
+    <div class="transport__brand">
+      <span class="brand__mark">▦</span>
+      <span class="brand__name">RackWerk</span>
+    </div>
+    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projekte">PRJ</button>
+
+    <div class="transport__lcd" id="lcd">
+      <span class="lcd__bpm" id="lcd-bpm">120.0</span>
+      <span class="lcd__label">BPM</span>
+      <span class="lcd__pos" id="lcd-pos">1.1</span>
+    </div>
+
+    <div class="transport__controls">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Automation aufnehmen">●</button>
+      <button class="t-btn" id="btn-bpm-down" aria-label="Tempo verringern">−</button>
+      <button class="t-btn" id="btn-bpm-up" aria-label="Tempo erhöhen">+</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Wiedergabe starten">
+        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
+        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== Das Rack ===== -->
+  <main class="rack" id="rack">
+    <!-- Maschinen-Slots werden hier von js/rack/rack.js gerendert -->
+  </main>
+
+  <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
+  <div class="sheet" id="machine-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Maschine hinzufügen">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Maschine hinzufügen</h2>
+      <div class="sheet__list" id="machine-list">
+        <!-- Einträge kommen aus der Machine-Registry -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Projekte (Bottom Sheet) ===== -->
+  <div class="sheet" id="project-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Projekte">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Projekte</h2>
+      <div class="saverow">
+        <input class="saverow__input" id="project-name" placeholder="Projektname" maxlength="40">
+        <button class="m-btn saverow__btn" id="btn-save-project">Speichern</button>
+      </div>
+      <div class="sheet__list" id="project-list"></div>
+
+      <h3 class="sheet__sub">Datei</h3>
+      <div class="filerow">
+        <button class="m-btn" id="btn-export">Exportieren</button>
+        <button class="m-btn" id="btn-import-replace">Datei laden</button>
+        <button class="m-btn" id="btn-import-merge">Dazuladen</button>
+        <input type="file" id="file-input" accept="application/json,.json" hidden>
+      </div>
+
+      <h3 class="sheet__sub">Jam-Session (2 Geräte)</h3>
+      <div id="jam-idle">
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-host">Session erstellen</button>
+          <button class="m-btn" id="btn-jam-join">Beitreten</button>
+        </div>
+      </div>
+      <div id="jam-setup" hidden>
+        <p class="sheet__hint" id="jam-instructions"></p>
+        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Eigener Code erscheint hier …"></textarea>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-copy">Code kopieren</button>
+          <button class="m-btn" id="btn-jam-cancel">Abbrechen</button>
+        </div>
+        <textarea class="jam-code" id="jam-code-in" placeholder="Code des anderen Geräts hier einfügen …"></textarea>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-apply">Übernehmen</button>
+        </div>
+      </div>
+      <div id="jam-active" hidden>
+        <p class="sheet__hint" id="jam-status"></p>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-send">Maschinen senden</button>
+          <button class="m-btn" id="btn-jam-leave">Trennen</button>
+        </div>
+      </div>
+
+      <h3 class="sheet__sub">Master-Aufnahme</h3>
+      <div class="recrow">
+        <button class="m-btn" id="btn-audio-rec">● Aufnahme starten</button>
+        <span class="recrow__time" id="rec-time" hidden>0:00</span>
+      </div>
+      <div id="rec-result"></div>
+
+      <p class="sheet__hint" id="project-hint" hidden>
+        ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
+      </p>
+    </div>
+  </div>
+
+  <!-- Audio-Freischaltung: mobile Browser & WebViews verlangen eine Nutzergeste -->
+  <div class="unlock" id="unlock-overlay">
+    <button class="unlock__btn" id="btn-unlock">
+      <span class="unlock__icon">▶</span>
+      <span>Tippen zum Starten</span>
+      <small>Audio wird aktiviert</small>
+    </button>
+  </div>
+
+  <script>
+/* ===== js/ui/knob.js ===== */
+const { XKnob } = (() => {
+/**
+ * <x-knob> — touch-optimierter Drehregler.
+ *
+ * Bedienung wie in Hardware-Apps üblich:
+ * - Ziehen ändert den Wert: hoch ODER nach rechts = mehr, beides
+ *   kombiniert sich (diagonal). Horizontal ist wichtig für eingebettete
+ *   WebViews/Sheets, in denen vertikales Wischen native Gesten auslöst.
+ * - Volle Drag-Strecke ≈ 150 px für den ganzen Wertebereich
+ * - Doppeltipp setzt auf den Standardwert zurück
+ * - touch-action:none im CSS verhindert, dass das Rack dabei scrollt
+ *
+ * Attribute: label, min, max, value, default, unit, step, curve ("lin"|"log")
+ * Event: "input" (detail.value) bei jeder Änderung.
+ */
+const DRAG_RANGE_PX = 150;
+const ANGLE_MIN = -135;
+const ANGLE_MAX = 135;
+
+class XKnob extends HTMLElement {
+  static observedAttributes = ['value'];
+
+  connectedCallback() {
+    if (this.#built) return;
+    this.#built = true;
+
+    this.min = parseFloat(this.getAttribute('min') ?? '0');
+    this.max = parseFloat(this.getAttribute('max') ?? '1');
+    this.step = parseFloat(this.getAttribute('step') ?? '0');
+    this.curve = this.getAttribute('curve') ?? 'lin';
+    this.unit = this.getAttribute('unit') ?? '';
+    this.defaultValue = parseFloat(
+      this.getAttribute('default') ?? this.getAttribute('value') ?? `${this.min}`
+    );
+    this.#value = parseFloat(this.getAttribute('value') ?? `${this.min}`);
+
+    this.innerHTML = `
+      <div class="knob__dial"><div class="knob__pointer"></div></div>
+      <span class="knob__label">${this.getAttribute('label') ?? ''}</span>
+      <span class="knob__value"></span>
+    `;
+    this.#dial = this.querySelector('.knob__dial');
+    this.#pointer = this.querySelector('.knob__pointer');
+    this.#readout = this.querySelector('.knob__value');
+
+    this.#dial.addEventListener('pointerdown', this.#onDown);
+    this.#render();
+  }
+
+  #built = false;
+  #value = 0;
+  #dial; #pointer; #readout;
+  #dragStartY = 0;
+  #dragStartX = 0;
+  #dragStartNorm = 0;
+  #lastTap = 0;
+  #lpTimer = null;
+  #lpStartY = 0;
+
+  get value() {
+    // Vor dem Aufbau (Element noch nicht im DOM) den Attributwert liefern
+    return this.#built ? this.#value : parseFloat(this.getAttribute('value') ?? '0');
+  }
+  set value(v) {
+    if (!this.#built) {
+      // Noch nicht verbunden → puffern; connectedCallback liest das Attribut
+      this.setAttribute('value', v);
+      return;
+    }
+    this.#value = Math.min(this.max, Math.max(this.min, v));
+    this.#render();
+  }
+
+  attributeChangedCallback(name, _old, val) {
+    if (name === 'value' && this.#built) this.value = parseFloat(val);
+  }
+
+  /* ---------- Normalisierung (0..1), optional logarithmisch ---------- */
+  #toNorm(v) {
+    if (this.curve === 'log') {
+      return Math.log(v / this.min) / Math.log(this.max / this.min);
+    }
+    return (v - this.min) / (this.max - this.min);
+  }
+  #fromNorm(n) {
+    n = Math.min(1, Math.max(0, n));
+    let v = this.curve === 'log'
+      ? this.min * Math.pow(this.max / this.min, n)
+      : this.min + n * (this.max - this.min);
+    if (this.step > 0) v = Math.round(v / this.step) * this.step;
+    return v;
+  }
+
+  /* ---------- Pointer-Handling ---------- */
+  #onDown = (e) => {
+    e.preventDefault();
+    this.#dial.setPointerCapture?.(e.pointerId);
+    this.#emitPlain('knob-grab');
+
+    // Long-Press (z. B. »Automation löschen«): 550 ms ohne nennenswerte
+    // Bewegung. Wird beim Ziehen oder Loslassen abgebrochen.
+    this.#lpStartY = e.clientY;
+    clearTimeout(this.#lpTimer);
+    this.#lpTimer = setTimeout(() => {
+      this.#lpTimer = null;
+      this.#emitPlain('knob-longpress');
+    }, 550);
+
+    // Doppeltipp → Reset auf Standardwert (+ Signal an die Automation)
+    const now = performance.now();
+    if (now - this.#lastTap < 300) {
+      this.value = this.defaultValue;
+      this.#emit();
+      this.#emitPlain('knob-reset');
+    }
+    this.#lastTap = now;
+
+    this.#dragStartY = e.clientY;
+    this.#dragStartX = e.clientX;
+    this.#dragStartNorm = this.#toNorm(this.#value);
+
+    this.#dial.addEventListener('pointermove', this.#onMove);
+    this.#dial.addEventListener('pointerup', this.#onUp);
+    this.#dial.addEventListener('pointercancel', this.#onUp);
+  };
+
+  #onMove = (e) => {
+    if (this.#lpTimer &&
+        (Math.abs(e.clientY - this.#lpStartY) > 6 ||
+         Math.abs((e.clientX ?? this.#dragStartX) - this.#dragStartX) > 6)) {
+      clearTimeout(this.#lpTimer);
+      this.#lpTimer = null;
+    }
+    const dy = this.#dragStartY - e.clientY;                       // hoch = mehr
+    const dx = (e.clientX ?? this.#dragStartX) - this.#dragStartX; // rechts = mehr
+    const norm = this.#dragStartNorm + (dy + dx) / DRAG_RANGE_PX;
+    const next = this.#fromNorm(norm);
+    if (next !== this.#value) {
+      this.#value = next;
+      this.#render();
+      this.#emit();
+    }
+  };
+
+  #onUp = (e) => {
+    clearTimeout(this.#lpTimer);
+    this.#lpTimer = null;
+    this.#dial.releasePointerCapture?.(e.pointerId);
+    this.#dial.removeEventListener('pointermove', this.#onMove);
+    this.#dial.removeEventListener('pointerup', this.#onUp);
+    this.#dial.removeEventListener('pointercancel', this.#onUp);
+    this.#emitPlain('knob-release');
+  };
+
+  #emitPlain(type) {
+    this.dispatchEvent(new CustomEvent(type, { bubbles: true }));
+  }
+
+  #emit() {
+    this.dispatchEvent(new CustomEvent('input', {
+      detail: { value: this.#value },
+      bubbles: true,
+    }));
+  }
+
+  #render() {
+    const norm = this.#toNorm(this.#value);
+    const angle = ANGLE_MIN + norm * (ANGLE_MAX - ANGLE_MIN);
+    this.#pointer.style.transform = `rotate(${angle}deg)`;
+
+    const digits = (this.max - this.min) > 100 ? 0 : 2;
+    this.#readout.textContent =
+      `${this.#value.toFixed(digits)}${this.unit ? ' ' + this.unit : ''}`;
+  }
+}
+
+customElements.define('x-knob', XKnob);
+
+return { XKnob };
+})();
+
+/* ===== js/ui/step-seq.js ===== */
+const { StepSeq, resizePattern } = (() => {
+/**
+ * StepSeq — Step-Sequenzer-Grid (Touch-first, 303-Stil) mit 1–8 Takten.
+ *
+ * Das Grid zeigt immer einen Takt (16 Zellen, 2×8); längere Patterns
+ * werden seitenweise durchgeblättert (◀ 1/4 ▶). Der »2T«-Button schaltet
+ * die Länge 1 → 2 → 4 → 8 Takte durch; die Datenänderung macht die
+ * Maschine selbst (opts.onLengthChange), weil z. B. die BeatBox dabei
+ * alle 8 Spuren gleichzeitig anpassen muss.
+ *
+ * Bedienung:
+ * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
+ * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
+ */
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const noteLabel = (midi) => NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
+
+const SEMITONE_PX = 10;
+const TAP_THRESHOLD = 8;
+const MIDI_MIN = 36;
+const MIDI_MAX = 84;
+const BAR_STEPS = 16;
+const BAR_CHOICES = [1, 2, 4, 8];
+
+class StepSeq {
+  /**
+   * @param {{on:boolean, midi?:number}[]} pattern  Daten der Maschine (Referenz)
+   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function}} [opts]
+   */
+  constructor(pattern, opts = {}) {
+    this.pattern = pattern;
+    this.onChange = opts.onChange ?? null;
+    this.pitchMode = opts.pitch ?? true;
+    this.onLengthChange = opts.onLengthChange ?? null;
+    this.page = 0;
+
+    this.el = document.createElement('div');
+    this.el.className = 'stepseq';
+    this.el.innerHTML = `
+      <div class="stepseq__bar">
+        <span class="stepseq__title">Pattern</span>
+        <span class="stepseq__ctrl">
+          <button class="m-btn" data-page="-1" aria-label="Vorheriger Takt">◀</button>
+          <span class="stepseq__page" data-pagelabel>1/1</span>
+          <button class="m-btn" data-page="1" aria-label="Nächster Takt">▶</button>
+          <button class="m-btn" data-len aria-label="Pattern-Länge">1T</button>
+          <button class="m-btn" data-clear>Leeren</button>
+        </span>
+      </div>
+      <div class="stepseq__grid"></div>
+    `;
+
+    this.grid = this.el.querySelector('.stepseq__grid');
+    this.cells = [];
+    for (let c = 0; c < BAR_STEPS; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (c % 4 === 0 ? ' cell--beat' : '');
+      cell.dataset.cell = c;
+      this.grid.appendChild(cell);
+      this.cells.push(cell);
+    }
+
+    this.el.querySelector('[data-clear]').addEventListener('click', () => {
+      for (const st of this.pattern) st.on = false;
+      this.#renderAll();
+      this.onChange?.();
+    });
+
+    this.el.querySelectorAll('[data-page]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const dir = parseInt(btn.dataset.page, 10);
+        this.page = Math.min(this.bars - 1, Math.max(0, this.page + dir));
+        this.#renderAll();
+      }));
+
+    this.lenBtn = this.el.querySelector('[data-len]');
+    this.lenBtn.addEventListener('click', () => {
+      if (!this.onLengthChange) return;
+      const next = BAR_CHOICES[(BAR_CHOICES.indexOf(this.bars) + 1) % BAR_CHOICES.length];
+      this.onLengthChange(next); // Maschine passt Daten an und ruft setPattern()
+    });
+
+    this.#wirePointer();
+    this.#renderAll();
+  }
+
+  get bars() { return Math.max(1, Math.round(this.pattern.length / BAR_STEPS)); }
+
+  /** Zell-Index (0..15) → Index im Pattern-Array. */
+  #patIdx(c) { return this.page * BAR_STEPS + c; }
+
+  /* ---------- Rendering ---------- */
+  #renderCell(c) {
+    const st = this.pattern[this.#patIdx(c)];
+    const cell = this.cells[c];
+    cell.classList.toggle('is-on', !!st?.on);
+    cell.textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
+  }
+
+  #renderAll() {
+    for (let c = 0; c < BAR_STEPS; c++) this.#renderCell(c);
+    const multi = this.bars > 1;
+    this.el.querySelector('[data-pagelabel]').textContent = `${this.page + 1}/${this.bars}`;
+    this.el.querySelectorAll('[data-page]').forEach((b) => (b.style.display = multi ? '' : 'none'));
+    this.el.querySelector('[data-pagelabel]').style.display = multi ? '' : 'none';
+    this.lenBtn.textContent = `${this.bars}T`;
+  }
+
+  /** Pattern-Daten austauschen (Spurwechsel, Längenänderung, Laden). */
+  setPattern(pattern) {
+    this.pattern = pattern;
+    this.page = Math.min(this.page, this.bars - 1);
+    this.#renderAll();
+  }
+
+  /* ---------- Playhead ---------- */
+  /** patternIdx ist der Index im GESAMTEN Pattern; sichtbar nur auf seiner Seite. */
+  flashStep(patternIdx, delayMs, durMs) {
+    setTimeout(() => {
+      if (Math.floor(patternIdx / BAR_STEPS) !== this.page) return;
+      const cell = this.cells[patternIdx % BAR_STEPS];
+      if (!cell) return;
+      cell.classList.add('is-play');
+      setTimeout(() => cell.classList.remove('is-play'), durMs);
+    }, Math.max(0, delayMs));
+  }
+
+  clearPlayhead() {
+    for (const c of this.cells) c.classList.remove('is-play');
+  }
+
+  /* ---------- Gesten: Tippen vs. Pitch-Drag ---------- */
+  #wirePointer() {
+    let active = null; // { idx, startY, startMidi, moved }
+
+    this.grid.addEventListener('pointerdown', (e) => {
+      const cell = e.target.closest('.cell');
+      if (!cell) return;
+      e.preventDefault();
+      this.grid.setPointerCapture?.(e.pointerId);
+      const idx = this.#patIdx(parseInt(cell.dataset.cell, 10));
+      active = { idx, startY: e.clientY, startMidi: this.pattern[idx].midi, moved: false };
+    });
+
+    this.grid.addEventListener('pointermove', (e) => {
+      if (!active || !this.pitchMode) return;
+      const dy = active.startY - e.clientY;
+      if (!active.moved && Math.abs(dy) < TAP_THRESHOLD) return;
+
+      const st = this.pattern[active.idx];
+      if (!active.moved) {
+        active.moved = true;
+        st.on = true;
+      }
+      st.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
+        active.startMidi + Math.round(dy / SEMITONE_PX)));
+      this.#renderCell(active.idx % BAR_STEPS);
+    });
+
+    const finish = (e) => {
+      if (!active) return;
+      if (!active.moved) {
+        const st = this.pattern[active.idx];
+        st.on = !st.on;
+        this.#renderCell(active.idx % BAR_STEPS);
+      }
+      this.grid.releasePointerCapture?.(e.pointerId);
+      active = null;
+      this.onChange?.();
+    };
+    this.grid.addEventListener('pointerup', finish);
+    this.grid.addEventListener('pointercancel', finish);
+  }
+}
+
+/**
+ * Pattern auf `bars` Takte bringen. Verlängern dupliziert den bestehenden
+ * Loop (musikalisch: Inhalt wiederholen), Verkürzen schneidet ab.
+ */
+function resizePattern(pattern, bars) {
+  const target = bars * BAR_STEPS;
+  if (target <= pattern.length) {
+    pattern.length = target;
+  } else {
+    const src = pattern.length;
+    for (let i = src; i < target; i++) pattern.push({ ...pattern[i % src] });
+  }
+  return pattern;
+}
+
+return { StepSeq, resizePattern };
+})();
+
+/* ===== js/ui/keybed.js ===== */
+const { createKeybed } = (() => {
+/**
+ * createKeybed — Touch-Tastatur (eine Oktave) mit Glissando.
+ *
+ * Ein Finger kann über die Tasten wischen; die Taste unter dem Finger
+ * wird per elementFromPoint ermittelt (funktioniert für Maus, Stift und
+ * Touch gleich). Für One-Shot-Instrumente einfach onNoteOff weglassen.
+ */
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B', 'C'];
+
+function createKeybed({ baseMidi = 60, onNoteOn, onNoteOff = () => {} }) {
+  const bed = document.createElement('div');
+  bed.className = 'keybed';
+
+  for (let i = 0; i <= 12; i++) {
+    const key = document.createElement('div');
+    const isBlack = NOTE_NAMES[i].includes('#');
+    key.className = 'key' + (isBlack ? ' key--black' : '');
+    key.dataset.midi = baseMidi + i;
+    bed.appendChild(key);
+  }
+
+  /** pointerId → aktuell gedrückte MIDI-Note */
+  const held = new Map();
+
+  const press = (pointerId, keyEl) => {
+    const midi = keyEl ? parseInt(keyEl.dataset.midi, 10) : null;
+    const prev = held.get(pointerId);
+    if (prev === midi) return;
+
+    if (prev != null) {
+      onNoteOff(prev);
+      bed.querySelector(`[data-midi="${prev}"]`)?.classList.remove('is-down');
+    }
+    if (midi != null) {
+      onNoteOn(midi);
+      keyEl.classList.add('is-down');
+      held.set(pointerId, midi);
+    } else {
+      held.delete(pointerId);
+    }
+  };
+
+  bed.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    bed.setPointerCapture?.(e.pointerId);
+    press(e.pointerId, e.target.closest('.key'));
+  });
+
+  bed.addEventListener('pointermove', (e) => {
+    if (!held.has(e.pointerId)) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    press(e.pointerId, el?.closest('.key') ?? null);
+  });
+
+  const release = (e) => {
+    const midi = held.get(e.pointerId);
+    if (midi != null) {
+      onNoteOff(midi);
+      bed.querySelector(`[data-midi="${midi}"]`)?.classList.remove('is-down');
+      held.delete(e.pointerId);
+    }
+  };
+  bed.addEventListener('pointerup', release);
+  bed.addEventListener('pointercancel', release);
+
+  return bed;
+}
+
+return { createKeybed };
+})();
+
+/* ===== js/core/store.js ===== */
+const { store } = (() => {
+/**
+ * store — dünner Wrapper um localStorage mit In-Memory-Fallback.
+ *
+ * In manchen eingebetteten WebViews (z. B. Datei-Previews) ist
+ * localStorage blockiert; dann läuft der Speicher nur für die Sitzung.
+ * `store.persistent` sagt der UI, welcher Fall vorliegt.
+ */
+const PREFIX = 'rackwerk:';
+
+class Store {
+  constructor() {
+    this.mem = new Map();
+    this.persistent = false;
+    try {
+      localStorage.setItem(PREFIX + '__test', '1');
+      localStorage.removeItem(PREFIX + '__test');
+      this.persistent = true;
+    } catch { /* Fallback auf Map */ }
+  }
+
+  get(key) {
+    try {
+      if (this.persistent) return localStorage.getItem(PREFIX + key);
+    } catch { /* fällt durch */ }
+    return this.mem.get(key) ?? null;
+  }
+
+  set(key, value) {
+    try {
+      if (this.persistent) {
+        localStorage.setItem(PREFIX + key, value);
+        return;
+      }
+    } catch { /* fällt durch */ }
+    this.mem.set(key, value);
+  }
+
+  remove(key) {
+    try {
+      if (this.persistent) {
+        localStorage.removeItem(PREFIX + key);
+        return;
+      }
+    } catch { /* fällt durch */ }
+    this.mem.delete(key);
+  }
+
+  /** Alle Schlüssel (ohne Prefix). */
+  keys() {
+    if (this.persistent) {
+      const out = [];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(PREFIX)) out.push(k.slice(PREFIX.length));
+        }
+        return out;
+      } catch { /* fällt durch */ }
+    }
+    return [...this.mem.keys()];
+  }
+}
+
+const store = new Store();
+
+return { store };
+})();
+
+/* ===== js/core/audio-engine.js ===== */
+const { engine } = (() => {
+/**
+ * AudioEngine — zentrale Verwaltung des AudioContext.
+ *
+ * Warum so gebaut:
+ * - Mobile Browser (und Capacitor-WebViews) erlauben Audio erst nach einer
+ *   Nutzergeste. Der Context wird deshalb erst in unlock() erzeugt/resumed.
+ * - Alle Maschinen hängen an einem gemeinsamen Master-Bus mit Limiter,
+ *   damit nichts clippt, egal wie viele Maschinen spielen.
+ * - Singleton: eine App = ein AudioContext (mehrere sind auf iOS fragil).
+ */
+class AudioEngine {
+  constructor() {
+    /** @type {AudioContext|null} */
+    this.ctx = null;
+    /** @type {GainNode|null}  Master-Summe, hier docken Maschinen an */
+    this.masterBus = null;
+    /** @type {DynamicsCompressorNode|null} */
+    this.limiter = null;
+    this.unlocked = false;
+  }
+
+  /**
+   * Muss aus einer Nutzergeste heraus aufgerufen werden (pointerdown/click).
+   * Idempotent — mehrfacher Aufruf schadet nicht.
+   */
+  async unlock() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)({
+        latencyHint: 'interactive',
+      });
+      this.#buildMasterChain();
+    }
+    if (this.ctx.state !== 'running') {
+      await this.ctx.resume();
+    }
+    this.unlocked = this.ctx.state === 'running';
+    return this.unlocked;
+  }
+
+  #buildMasterChain() {
+    const ctx = this.ctx;
+
+    this.masterBus = ctx.createGain();
+    // Bewusst Headroom lassen: Der Limiter soll Sicherheitsnetz sein,
+    // kein Dauer-Effekt. Ständiges Pumpen macht Transienten (v. a. den
+    // Kick-Attack) von Anschlag zu Anschlag hörbar unterschiedlich,
+    // weil die Gain-Reduktion vom restlichen Mix-Moment abhängt.
+    this.masterBus.gain.value = 0.65;
+
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -2;
+    this.limiter.knee.value = 1;
+    this.limiter.ratio.value = 12;
+    this.limiter.attack.value = 0.003;
+    // Langsameres Release: Falls er doch arbeitet, bleibt die Reduktion
+    // über die Hits hinweg gleichmäßiger statt pro Schlag zu springen.
+    this.limiter.release.value = 0.25;
+
+    this.masterBus.connect(this.limiter);
+    this.limiter.connect(ctx.destination);
+  }
+
+  /** Aktuelle Audio-Zeit (Sekunden), 0 solange nicht entsperrt. */
+  get now() {
+    return this.ctx ? this.ctx.currentTime : 0;
+  }
+
+  /**
+   * Rundet eine geplante Startzeit auf die nächste Render-Quantum-Grenze
+   * AUF (128 Samples). Web-Audio-Engines rechnen in 128er-Blöcken; je nach
+   * Browser werden Quellen-Starts unterschiedlich in den Block einsortiert.
+   * Bei streng periodischen Triggern wird daraus ein hörbares Muster:
+   * 0,5 s Kick-Abstand bei 48 kHz = 24 000 Samples = 187,5 Blöcke → jeder
+   * zweite Schlag liegt anders im Block und klingt minimal anders (v. a.
+   * der Attack von Sounds mit Pitch-Hüllkurve). Auf der Blockgrenze ist
+   * jeder Anschlag identisch ausgerichtet; Kosten: max. ~2,7 ms Versatz.
+   */
+  quantizeTime(t) {
+    if (!this.ctx) return t;
+    const quantum = 128 / this.ctx.sampleRate;
+    return Math.ceil(t / quantum) * quantum;
+  }
+}
+
+/** App-weites Singleton */
+const engine = new AudioEngine();
+
+return { engine };
+})();
+
+/* ===== js/core/dsp.js ===== */
+const { noise, env, autoStop, midiToHz } = (() => {
+/**
+ * dsp.js — kleine, gemeinsam genutzte Audio-Helfer.
+ * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
+ */
+
+let _noiseBuffer = null;
+
+/** Gecachter 1-Sekunden-Rauschbuffer. Quellen starten immer bei Offset 0
+ *  → jeder Anschlag klingt identisch (deterministisch). */
+function noise(ctx) {
+  if (!_noiseBuffer) {
+    _noiseBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = _noiseBuffer.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return _noiseBuffer;
+}
+
+/** Exponentiell abfallende Hüllkurve als Gain-Node. */
+function env(ctx, t, peak, dur) {
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(Math.max(peak, 0.001), t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  return g;
+}
+
+/** Quelle sauber beenden und den Teilgraphen abbauen. */
+function autoStop(src, t, dur, nodes) {
+  src.start(t);
+  src.stop(t + dur + 0.05);
+  src.onended = () => { src.disconnect(); nodes.forEach((n) => n.disconnect()); };
+}
+
+const midiToHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+return { noise, env, autoStop, midiToHz };
+})();
+
+/* ===== js/core/transport.js ===== */
+const { transport, STEPS_PER_BAR } = (() => {
+/**
+ * Transport — der Takt-Motor der App.
+ *
+ * Nutzt das bewährte Lookahead-Pattern für Web Audio:
+ * Ein setInterval-Timer (ungenau) plant Events ein Stück in die Zukunft
+ * auf der sample-genauen AudioContext-Uhr. So bleibt das Timing stabil,
+ * auch wenn der JS-Main-Thread kurz hakt — wichtig auf Mobilgeräten.
+ *
+ * Maschinen registrieren sich als Listener und bekommen pro 16tel-Step:
+ *   onStep(stepIndex, audioTime)  → hier planen sie ihre Noten ein.
+ */
+
+const LOOKAHEAD_MS = 25;     // wie oft der Planer aufwacht
+const SCHEDULE_AHEAD = 0.1;  // wie weit (s) im Voraus geplant wird
+const STEPS_PER_BAR = 16;    // 16tel-Raster, wie in klassischen Grooveboxen
+
+class Transport {
+  constructor() {
+    this.bpm = 120;
+    this.isPlaying = false;
+
+    this.#step = 0;
+    this.#nextStepTime = 0;
+    this.#timerId = null;
+
+    /** @type {Set<{onStep?:Function,onTransport?:Function}>} */
+    this.listeners = new Set();
+  }
+
+  #step;
+  #nextStepTime;
+  #timerId;
+
+  /** Dauer eines 16tel-Steps in Sekunden. */
+  get stepDuration() {
+    return 60 / this.bpm / 4;
+  }
+
+  setBpm(bpm) {
+    this.bpm = Math.min(300, Math.max(40, bpm));
+    this.#notify('bpm');
+  }
+
+  play() {
+    if (this.isPlaying || !engine.ctx) return;
+    this.isPlaying = true;
+    this.#step = 0;
+    // kleiner Vorlauf, damit der erste Step sicher in der Zukunft liegt
+    this.#nextStepTime = engine.now + 0.06;
+    this.#timerId = setInterval(() => this.#schedule(), LOOKAHEAD_MS);
+    this.#notify('play');
+  }
+
+  stop() {
+    if (!this.isPlaying) return;
+    this.isPlaying = false;
+    clearInterval(this.#timerId);
+    this.#timerId = null;
+    this.#notify('stop');
+  }
+
+  toggle() {
+    this.isPlaying ? this.stop() : this.play();
+  }
+
+  /**
+   * Plant alle Steps ein, die ins Lookahead-Fenster fallen.
+   * Der Step-Zähler läuft absolut (0, 1, 2, …) — jede Maschine loopt ihr
+   * Pattern selbst via `step % patternLänge`. So können Maschinen
+   * unterschiedliche Pattern-Längen fahren (1–8 Takte, polymetrisch).
+   */
+  #schedule() {
+    while (this.#nextStepTime < engine.now + SCHEDULE_AHEAD) {
+      // Taktanfang auf der Audio-Uhr mitführen → Basis für get phase()
+      this.#loopStart = this.#nextStepTime -
+        (this.#step % STEPS_PER_BAR) * this.stepDuration;
+      for (const l of this.listeners) {
+        l.onStep?.(this.#step, this.#nextStepTime);
+      }
+      this.#nextStepTime += this.stepDuration;
+      this.#step = this.#step + 1;
+    }
+  }
+
+  #loopStart = 0;
+
+  /**
+   * Aktuelle Position im 1-Takt-Loop als 0..1 (auf der Audio-Uhr).
+   * Grundlage für Automation-Aufnahme und -Playback.
+   */
+  get phase() {
+    if (!this.isPlaying) return 0;
+    const bar = this.stepDuration * STEPS_PER_BAR;
+    return (((engine.now - this.#loopStart) / bar) % 1 + 1) % 1;
+  }
+
+  /** Position als "Takt.Viertel" fürs LCD (grob, UI-Zwecke). */
+  get positionLabel() {
+    const bar = Math.floor(this.#step / STEPS_PER_BAR) + 1;
+    const beat = Math.floor((this.#step % STEPS_PER_BAR) / 4) + 1;
+    return `${bar}.${beat}`;
+  }
+
+  /* ---------- Jam-Sync: Snapshot liefern & sich einem Master anpassen ---------- */
+
+  /** Anker für die Clock-Übertragung: nächster Step + seine Audio-Zeit. */
+  syncSnapshot() {
+    return {
+      bpm: this.bpm,
+      playing: this.isPlaying,
+      step: this.#step,
+      audioTime: this.#nextStepTime,
+    };
+  }
+
+  /**
+   * Dem Master folgen. `audioTime` ist bereits in UNSERE Audio-Uhr
+   * umgerechnet. Kleine Abweichungen werden mit max. ±6 ms pro Update
+   * nachgezogen (unhörbar); ist der Versatz größer als ein Step,
+   * wird hart neu aufgesetzt.
+   */
+  syncTo({ bpm, playing, step, audioTime }) {
+    if (Math.abs(bpm - this.bpm) > 0.01) this.setBpm(bpm);
+
+    if (!playing) {
+      if (this.isPlaying) this.stop();
+      return;
+    }
+
+    const d = this.stepDuration;
+    // Anker sicher in die Zukunft schieben
+    const minTime = engine.now + 0.05;
+    if (audioTime < minTime) {
+      const n = Math.ceil((minTime - audioTime) / d);
+      step += n;
+      audioTime += n * d;
+    }
+
+    if (!this.isPlaying) {
+      this.isPlaying = true;
+      this.#step = step;
+      this.#nextStepTime = audioTime;
+      this.#timerId = setInterval(() => this.#schedule(), LOOKAHEAD_MS);
+      this.#notify('play');
+      return;
+    }
+
+    const expected = this.#nextStepTime + (step - this.#step) * d;
+    const drift = audioTime - expected;
+    if (Math.abs(drift) > d) {
+      this.#step = step;                    // komplett daneben → hart setzen
+      this.#nextStepTime = audioTime;
+    } else if (Math.abs(drift) > 0.002) {
+      this.#nextStepTime += Math.max(-0.006, Math.min(0.006, drift));
+    }
+  }
+
+  addListener(l) { this.listeners.add(l); }
+  removeListener(l) { this.listeners.delete(l); }
+
+  #notify(event) {
+    for (const l of this.listeners) l.onTransport?.(event, this);
+  }
+}
+
+const transport = new Transport();
+
+return { transport, STEPS_PER_BAR };
+})();
+
+/* ===== js/core/automation.js ===== */
+const { automation } = (() => {
+/**
+ * Automation — Echtzeit-Aufnahme und Loop-Playback von Parameterfahrten.
+ *
+ * Modell (bewusst einfach, Caustic-artig):
+ * - Eine Lane pro Parameter: Float32Array mit 128 Slots über den 1-Takt-Loop
+ * - Aufnahme: REC scharf + Transport läuft + Knob angefasst → der aktuelle
+ *   Knob-Wert wird fortlaufend an die Playhead-Position geschrieben.
+ *   Lücken zwischen zwei Ticks werden aufgefüllt (kein Löcher-Pattern).
+ * - Neue Lanes werden komplett mit dem Ausgangswert vorbefüllt, damit der
+ *   Rest des Takts definiert ist.
+ * - Playback: ~45 Hz-Ticker liest die Lane (linear interpoliert), bewegt den
+ *   Knob und feuert dessen input-Event — die Parameter laufen also durch
+ *   exakt dieselbe Leitung wie eine Handbewegung. Angefasste Knobs werden
+ *   übersprungen (Hand schlägt Automation).
+ * - Löschen: bei scharfem REC löscht Doppeltipp auf den Knob dessen Lane.
+ *
+ * Maschinen melden ihre Knobs über register(); der Schlüssel ist
+ * `${machineId}:${paramName}`, unregisterMachine() räumt beim Entfernen auf.
+ */
+
+const RESOLUTION = 128;   // Slots pro Takt
+const TICK_MS = 22;       // ~45 Hz UI-/Playback-Rate
+
+class Automation {
+  constructor() {
+    this.armed = false;
+    /** @type {Map<string,{knob:HTMLElement, apply:Function}>} */
+    this.targets = new Map();
+    /** @type {Map<string,Float32Array>} */
+    this.lanes = new Map();
+    /** @type {Map<string,{lastIdx:number|null}>} aktuell angefasste Knobs */
+    this.grabbed = new Map();
+    this.timer = null;
+
+    transport.addListener(this);
+  }
+
+  setArmed(armed) {
+    this.armed = armed;
+  }
+
+  register(key, knob, apply) {
+    this.targets.set(key, { knob, apply });
+
+    knob.addEventListener('knob-grab', () => {
+      // Ausgangswert sofort festhalten — nicht erst beim nächsten Tick,
+      // sonst geht bei schnellen Bewegungen der Referenzwert verloren
+      this.grabbed.set(key, { lastIdx: null, startValue: knob.value });
+    });
+    knob.addEventListener('knob-release', () => {
+      this.grabbed.delete(key);
+    });
+    this.#attachGestures(knob, () => key);
+  }
+
+  /**
+   * Für Knobs, deren Ziel sich zur Laufzeit ändert (z. B. die Spur-Knobs
+   * der BeatBox, die immer auf die gewählte Drum-Spur zeigen):
+   * Der Lane-Schlüssel wird erst beim Anfassen über resolveKey() gebildet —
+   * so bekommt jede Spur ihre eigenen Fahrten, obwohl alle denselben
+   * physischen Knob teilen.
+   */
+  registerDynamic(knob, resolveKey, applyForKey) {
+    knob.addEventListener('knob-grab', () => {
+      const key = resolveKey();
+      if (!this.targets.has(key)) {
+        this.targets.set(key, { knob, apply: (v) => applyForKey(key, v) });
+      }
+      this.grabbed.set(key, { lastIdx: null, startValue: knob.value });
+    });
+    knob.addEventListener('knob-release', () => {
+      this.grabbed.delete(resolveKey());
+    });
+    this.#attachGestures(knob, resolveKey);
+  }
+
+  /* ---------- Trim-Modus & Löschen (für beide Register-Pfade) ---------- */
+
+  /**
+   * Trim: Wird ein Knob mit Automation gedreht, ohne dass gerade
+   * aufgenommen wird, verschiebt sich die GANZE Lane relativ mit —
+   * die Form der Fahrt bleibt erhalten. Lineare Knobs verschieben
+   * additiv, logarithmische (Cutoff, Tune …) multiplikativ, damit
+   * die Kurve auch im Log-Bereich ihre Gestalt behält.
+   *
+   * Long-Press (550 ms still halten) zeigt den Lösch-Button für die
+   * Lane des Knobs — unabhängig vom REC-Status.
+   */
+  #attachGestures(knob, resolveKey) {
+    let trim = null;
+
+    knob.addEventListener('knob-grab', () => {
+      const key = resolveKey();
+      const lane = this.lanes.get(key);
+      const recording = this.armed && transport.isPlaying;
+      trim = (lane && !recording)
+        ? { key, start: knob.value, snapshot: lane.slice(),
+            log: knob.getAttribute('curve') === 'log' }
+        : null;
+    });
+
+    knob.addEventListener('input', () => {
+      if (!trim) return;
+      const lane = this.lanes.get(trim.key);
+      if (!lane) { trim = null; return; }
+      const v = knob.value;
+      const lo = knob.min, hi = knob.max;
+      if (trim.log) {
+        const factor = v / trim.start;
+        for (let i = 0; i < lane.length; i++) {
+          lane[i] = Math.min(hi, Math.max(lo, trim.snapshot[i] * factor));
+        }
+      } else {
+        const delta = v - trim.start;
+        for (let i = 0; i < lane.length; i++) {
+          lane[i] = Math.min(hi, Math.max(lo, trim.snapshot[i] + delta));
+        }
+      }
+    });
+
+    knob.addEventListener('knob-release', () => { trim = null; });
+
+    knob.addEventListener('knob-longpress', () => {
+      this.#offerDelete(resolveKey(), knob);
+    });
+  }
+
+  #toast = null;
+
+  /** Kurzer Hinweis unten im Bild, sobald eine neue Lane entsteht. */
+  #announce(knob) {
+    const label = knob.getAttribute('label') ?? 'Parameter';
+    this.#toast?.remove();
+    const el = document.createElement('div');
+    el.className = 'auto-toast';
+    el.textContent = `● Automation aufgenommen: ${label}`;
+    document.body.appendChild(el);
+    this.#toast = el;
+    setTimeout(() => {
+      el.remove();
+      if (this.#toast === el) this.#toast = null;
+    }, 1800);
+  }
+
+  #chip = null;
+
+  #offerDelete(key, knob) {
+    if (!this.lanes.has(key)) return;
+    this.#dismissChip();
+
+    const chip = document.createElement('button');
+    chip.className = 'auto-chip';
+    chip.textContent = '✕ Automation löschen';
+    document.body.appendChild(chip);
+
+    // über dem Knob positionieren, am Bildschirmrand einklemmen
+    const r = knob.getBoundingClientRect();
+    const left = Math.max(8, Math.min(
+      window.innerWidth - chip.offsetWidth - 8,
+      r.left + r.width / 2 - chip.offsetWidth / 2,
+    ));
+    chip.style.left = `${left}px`;
+    chip.style.top = `${Math.max(8, r.top - 48)}px`;
+
+    chip.addEventListener('click', () => {
+      this.clearLane(key);
+      this.#dismissChip();
+    });
+
+    this.#chip = chip;
+    this.#chipDismissTimer = setTimeout(() => this.#dismissChip(), 4000);
+    document.addEventListener('pointerdown', this.#onOutside);
+  }
+
+  #chipDismissTimer = null;
+
+  #onOutside = (e) => {
+    if (this.#chip && !this.#chip.contains(e.target)) this.#dismissChip();
+  };
+
+  #dismissChip() {
+    clearTimeout(this.#chipDismissTimer);
+    document.removeEventListener('pointerdown', this.#onOutside);
+    this.#chip?.remove();
+    this.#chip = null;
+  }
+
+  /** Existiert für diesen Schlüssel eine aufgezeichnete Lane? */
+  hasLane(key) {
+    return this.lanes.has(key);
+  }
+
+  /** Applier vorregistrieren, ohne Events zu binden (z. B. damit geladene
+   *  Per-Spur-Lanes sofort abspielen, bevor der Knob je angefasst wurde). */
+  ensureTarget(key, knob, apply) {
+    if (!this.targets.has(key)) this.targets.set(key, { knob, apply });
+  }
+
+  /* ---------- Persistenz ---------- */
+  /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
+  exportLanes(machineId) {
+    const prefix = `${machineId}:`;
+    const out = {};
+    for (const [key, lane] of this.lanes) {
+      if (key.startsWith(prefix)) out[key.slice(prefix.length)] = Array.from(lane);
+    }
+    return out;
+  }
+
+  importLanes(machineId, lanes) {
+    if (!lanes) return;
+    for (const [suffix, values] of Object.entries(lanes)) {
+      const key = `${machineId}:${suffix}`;
+      this.lanes.set(key, Float32Array.from(values));
+      // LED nur für statische (maschinenweite) Knobs direkt setzen —
+      // Per-Spur-Knobs aktualisiert die Maschine über onLanesImported()
+      if (!suffix.includes(':')) {
+        this.targets.get(key)?.knob.classList.add('has-auto');
+      }
+    }
+  }
+
+  unregisterMachine(machineId) {
+    this.#dismissChip();
+    const prefix = `${machineId}:`;
+    for (const key of [...this.targets.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.targets.delete(key);
+        this.lanes.delete(key);
+        this.grabbed.delete(key);
+      }
+    }
+  }
+
+  clearLane(key) {
+    this.lanes.delete(key);
+    this.targets.get(key)?.knob.classList.remove('has-auto');
+  }
+
+  /* ---------- Ticker läuft nur bei laufendem Transport ---------- */
+  onTransport(event) {
+    if (event === 'play' && !this.timer) {
+      this.timer = setInterval(() => this.#tick(), TICK_MS);
+    }
+    if (event === 'stop') {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  #ensureLane(key, baseValue) {
+    let lane = this.lanes.get(key);
+    if (!lane) {
+      lane = new Float32Array(RESOLUTION).fill(baseValue);
+      this.lanes.set(key, lane);
+      this.targets.get(key)?.knob.classList.add('has-auto');
+    }
+    return lane;
+  }
+
+  #tick() {
+    const exact = transport.phase * RESOLUTION;
+    const idx = Math.floor(exact) % RESOLUTION;
+
+    // ---- Aufnahme: alle angefassten Knobs bei scharfem REC ----
+    if (this.armed) {
+      for (const [key, state] of this.grabbed) {
+        const target = this.targets.get(key);
+        if (!target) continue;
+        const value = target.knob.value;
+
+        // Bloßes Antippen darf keine Lane anlegen: Aufnahme startet erst,
+        // wenn sich der Wert gegenüber dem Anfassen wirklich geändert hat.
+        let lane = this.lanes.get(key);
+        if (!lane) {
+          if (state.startValue == null) state.startValue = value;
+          if (value === state.startValue) { state.lastIdx = idx; continue; }
+          lane = this.#ensureLane(key, state.startValue);
+          this.#announce(target.knob);
+        }
+
+        // vom letzten Schreibpunkt bis heute füllen (wrap-sicher)
+        let i = state.lastIdx == null ? idx : (state.lastIdx + 1) % RESOLUTION;
+        for (let n = 0; n < RESOLUTION; n++) {
+          lane[i] = value;
+          if (i === idx) break;
+          i = (i + 1) % RESOLUTION;
+        }
+        state.lastIdx = idx;
+      }
+    }
+
+    // ---- Playback: interpoliert, angefasste Knobs auslassen ----
+    const frac = exact - Math.floor(exact);
+    const i1 = (idx + 1) % RESOLUTION;
+    for (const [key, lane] of this.lanes) {
+      if (this.grabbed.has(key)) continue;
+      const target = this.targets.get(key);
+      if (!target) continue;
+      target.apply(lane[idx] + (lane[i1] - lane[idx]) * frac);
+    }
+  }
+}
+
+const automation = new Automation();
+
+return { automation };
+})();
+
+/* ===== js/core/recorder.js ===== */
+const { recorder } = (() => {
+/**
+ * recorder — schneidet die Master-Summe (nach dem Limiter) als Audiodatei mit.
+ *
+ * Nutzt MediaRecorder auf einem MediaStreamDestination-Node. Das Format
+ * wählt der Browser: Safari/iOS liefert AAC in .m4a, Chrome Opus in .webm.
+ */
+
+const MIME_CANDIDATES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+
+class Recorder {
+  constructor() {
+    this.rec = null;
+    this.dest = null;
+    this.chunks = [];
+    this.startedAt = 0;
+  }
+
+  get supported() {
+    return typeof MediaRecorder !== 'undefined';
+  }
+
+  get active() {
+    return this.rec?.state === 'recording';
+  }
+
+  get elapsed() {
+    return this.active ? (performance.now() - this.startedAt) / 1000 : 0;
+  }
+
+  start() {
+    if (this.active || !this.supported || !engine.ctx) return false;
+
+    this.dest = engine.ctx.createMediaStreamDestination();
+    engine.limiter.connect(this.dest);
+
+    const mime = MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported?.(m));
+    this.rec = new MediaRecorder(this.dest.stream, mime ? { mimeType: mime } : undefined);
+    this.chunks = [];
+    this.rec.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.start(250); // regelmäßige Chunks → nichts geht bei Abbruch verloren
+    this.startedAt = performance.now();
+    return true;
+  }
+
+  /** @returns {Promise<{blob: Blob, ext: string, seconds: number}|null>} */
+  stop() {
+    if (!this.active) return Promise.resolve(null);
+    const seconds = this.elapsed;
+    return new Promise((resolve) => {
+      this.rec.onstop = () => {
+        const type = this.rec.mimeType || 'audio/webm';
+        const ext = type.includes('mp4') ? 'm4a' : 'webm';
+        const blob = new Blob(this.chunks, { type });
+        engine.limiter.disconnect(this.dest);
+        this.rec = null;
+        this.dest = null;
+        resolve({ blob, ext, seconds });
+      };
+      this.rec.stop();
+    });
+  }
+}
+
+const recorder = new Recorder();
+
+return { recorder };
+})();
+
+/* ===== js/core/jamlink.js ===== */
+const { jamlink } = (() => {
+/**
+ * jamlink — verbindet zwei Geräte für synchrones Jammen.
+ *
+ * Aufbau (serverlos, per Copy-Paste-Signaling):
+ *   Host: createOffer() → Code A → an Gast schicken
+ *   Gast: createAnswer(A) → Code B → zurück an Host
+ *   Host: acceptAnswer(B) → DataChannel offen
+ *
+ * Sync-Prinzip (wie Ableton Link: nur Uhr, kein Audio):
+ * - Der Gast misst per Ping/Pong den Versatz zwischen den performance-
+ *   Uhren beider Geräte (NTP-artig: offset = t1 − (t0 + rtt/2), geglättet).
+ * - Der Host sendet alle 500 ms (und bei Play/Stop/BPM sofort) einen
+ *   Clock-Anker: „Step S liegt bei Host-Zeit T, BPM B, läuft/steht".
+ * - Der Gast rechnet T über den Offset in seine eigene Audio-Uhr um und
+ *   ruft transport.syncTo() — der zieht den Scheduler sanft nach.
+ * - Zusätzlich können beide Seiten ihren Maschinen-Zustand über den
+ *   Kanal schicken (Jam-Import ohne Datei-Umweg).
+ */
+
+const CLOCK_INTERVAL_MS = 500;
+const PING_INTERVAL_MS = 2000;
+
+class JamLink {
+  constructor() {
+    this.pc = null;
+    this.dc = null;
+    this.role = null;          // 'host' | 'guest'
+    this.connected = false;
+    this.offset = null;        // hostPerf − localPerf (ms), geglättet
+    this.rtt = 0;
+    this.onstate = null;       // (event: 'open'|'closed'|'sync') => void
+    this.onProjectReceived = null;
+    this.clockTimer = null;
+    this.pingTimer = null;
+    this.transportListener = null;
+  }
+
+  get supported() {
+    return typeof RTCPeerConnection !== 'undefined';
+  }
+
+  #newPeer() {
+    return new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+  }
+
+  /** Wartet auf abgeschlossenes ICE-Gathering (max. 3 s). */
+  #gathered() {
+    return new Promise((resolve) => {
+      if (this.pc.iceGatheringState === 'complete') return resolve();
+      const check = () => {
+        if (this.pc.iceGatheringState === 'complete') {
+          this.pc.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      };
+      this.pc.addEventListener('icegatheringstatechange', check);
+      setTimeout(resolve, 3000);
+    });
+  }
+
+  /* ---------- Verbindungsaufbau ---------- */
+  async createOffer() {
+    this.close();
+    this.role = 'host';
+    this.pc = this.#newPeer();
+    this.dc = this.pc.createDataChannel('jam');
+    this.#wireChannel();
+    await this.pc.setLocalDescription(await this.pc.createOffer());
+    await this.#gathered();
+    return btoa(JSON.stringify(this.pc.localDescription));
+  }
+
+  async acceptAnswer(code) {
+    await this.pc.setRemoteDescription(JSON.parse(atob(code.trim())));
+  }
+
+  async createAnswer(offerCode) {
+    this.close();
+    this.role = 'guest';
+    this.pc = this.#newPeer();
+    this.pc.ondatachannel = (e) => {
+      this.dc = e.channel;
+      this.#wireChannel();
+    };
+    await this.pc.setRemoteDescription(JSON.parse(atob(offerCode.trim())));
+    await this.pc.setLocalDescription(await this.pc.createAnswer());
+    await this.#gathered();
+    return btoa(JSON.stringify(this.pc.localDescription));
+  }
+
+  /* ---------- Kanal ---------- */
+  #wireChannel() {
+    this.dc.onopen = () => {
+      this.connected = true;
+      if (this.role === 'guest') {
+        this.#ping();
+        this.pingTimer = setInterval(() => this.#ping(), PING_INTERVAL_MS);
+      } else {
+        this.clockTimer = setInterval(() => this.#sendClock(), CLOCK_INTERVAL_MS);
+        this.transportListener = { onTransport: () => this.#sendClock() };
+        transport.addListener(this.transportListener);
+      }
+      this.onstate?.('open');
+    };
+    this.dc.onclose = () => {
+      this.connected = false;
+      this.#stopTimers();
+      this.onstate?.('closed');
+    };
+    this.dc.onmessage = (e) => {
+      try { this.#onMsg(JSON.parse(e.data)); } catch { /* fremdes Paket */ }
+    };
+  }
+
+  #send(obj) {
+    if (this.dc?.readyState === 'open') this.dc.send(JSON.stringify(obj));
+  }
+
+  /* ---------- Uhren-Abgleich (Gast) ---------- */
+  #ping() {
+    this.#send({ t: 'ping', t0: performance.now() });
+  }
+
+  /* ---------- Clock-Anker (Host) ---------- */
+  #sendClock() {
+    const snap = transport.syncSnapshot();
+    // Audio-Zeit des Ankers → performance-Zeit des Hosts
+    const anchorPerf = performance.now() + (snap.audioTime - engine.now) * 1000;
+    this.#send({
+      t: 'clock',
+      bpm: snap.bpm,
+      playing: snap.playing,
+      step: snap.step,
+      anchorPerf,
+    });
+  }
+
+  /* ---------- Nachrichten ---------- */
+  #onMsg(m) {
+    if (m.t === 'ping') {
+      this.#send({ t: 'pong', t0: m.t0, t1: performance.now() });
+
+    } else if (m.t === 'pong') {
+      const t2 = performance.now();
+      const rtt = t2 - m.t0;
+      const offset = m.t1 - (m.t0 + rtt / 2);
+      // exponentiell glätten — einzelne Jitter-Ausreißer verwerfen
+      this.offset = this.offset == null ? offset : this.offset * 0.7 + offset * 0.3;
+      this.rtt = rtt;
+      this.onstate?.('sync');
+
+    } else if (m.t === 'clock' && this.role === 'guest') {
+      if (this.offset == null) return; // erst Uhr abgleichen
+      const localPerf = m.anchorPerf - this.offset;
+      const localAudio = engine.now + (localPerf - performance.now()) / 1000;
+      transport.syncTo({
+        bpm: m.bpm,
+        playing: m.playing,
+        step: m.step,
+        audioTime: localAudio,
+      });
+
+    } else if (m.t === 'project') {
+      this.onProjectReceived?.(m.data);
+    }
+  }
+
+  /** Eigene Maschinen ans andere Gerät schicken (beide Richtungen möglich). */
+  sendProject(data) {
+    this.#send({ t: 'project', data });
+  }
+
+  #stopTimers() {
+    clearInterval(this.clockTimer);
+    clearInterval(this.pingTimer);
+    this.clockTimer = this.pingTimer = null;
+    if (this.transportListener) {
+      transport.removeListener(this.transportListener);
+      this.transportListener = null;
+    }
+  }
+
+  close() {
+    this.#stopTimers();
+    try { this.dc?.close(); } catch { /* egal */ }
+    try { this.pc?.close(); } catch { /* egal */ }
+    this.dc = this.pc = null;
+    this.connected = false;
+    this.offset = null;
+    this.role = null;
+  }
+}
+
+const jamlink = new JamLink();
+
+return { jamlink };
+})();
+
+/* ===== js/machines/machine.js ===== */
+const { Machine } = (() => {
+/**
+ * Machine — Basisklasse für alle Rack-Maschinen.
+ *
+ * Vertrag für Unterklassen:
+ *   static meta = { type, name, desc, color }   → für Registry & Faceplate
+ *   buildAudio()   → eigenen Audiographen bauen und an this.output hängen
+ *   buildControls(container) → Bedienelemente in den Body rendern
+ *   onStep(step, time)       → optional, vom Transport aufgerufen
+ *   disposeAudio() → optional, eigene Nodes aufräumen
+ *
+ * Die Basisklasse übernimmt: Output-Gain + Mute, Faceplate-DOM
+ * (Kopfzeile mit Farbstreifen, Mute, Entfernen) und Lifecycle.
+ */
+
+let nextId = 1;
+
+/** Alle lebenden Maschinen — für die Solo-Koordination über das ganze Rack. */
+const machines = new Set();
+
+/**
+ * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
+ * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
+ */
+function refreshGates() {
+  const soloActive = [...machines].some((m) => m.soloed);
+  const t = engine.now;
+  for (const m of machines) {
+    const open = !m.muted && (!soloActive || m.soloed);
+    m.gate.gain.cancelScheduledValues(t);
+    m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
+  }
+}
+
+class Machine {
+  static meta = { type: 'machine', name: 'Machine', desc: '', color: '#888' };
+
+  constructor() {
+    this.id = nextId++;
+    this.muted = false;
+    this.soloed = false;
+
+    /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
+     *  (Volume-Regler schreiben hierauf). */
+    this.output = engine.ctx.createGain();
+    /** @type {GainNode} Mute/Solo-Gate — getrennt vom Volume, damit
+     *  Entmuten nicht die Reglerstellung überschreibt. */
+    this.gate = engine.ctx.createGain();
+    this.output.connect(this.gate);
+    this.gate.connect(engine.masterBus);
+    machines.add(this);
+
+    /** @type {HTMLElement|null} */
+    this.el = null;
+
+    this.buildAudio();
+    transport.addListener(this);
+  }
+
+  /* ---------- Von Unterklassen zu implementieren ---------- */
+  buildAudio() {}
+  buildControls(_container) {}
+  disposeAudio() {}
+  serialize() { return {}; }
+  deserialize(_state) {}
+  /** Wert für einen Knob (data-p) — Basis: aus this.params. */
+  getParamForKnob(key) { return this.params?.[key]; }
+
+  /* ---------- Faceplate ---------- */
+  render() {
+    const { name, type, color } = this.constructor.meta;
+
+    const el = document.createElement('section');
+    el.className = 'machine';
+    // Farbvarianten hier berechnen statt per CSS color-mix() —
+    // funktioniert damit auch in älteren WebViews zuverlässig
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+    el.style.setProperty('--m-color', color);
+    el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
+    el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+    el.innerHTML = `
+      <header class="machine__head">
+        <span class="machine__stripe"></span>
+        <div>
+          <div class="machine__name">${name}</div>
+          <div class="machine__type">${type} · #${this.id}</div>
+        </div>
+        <div class="machine__head-actions">
+          <button class="m-btn m-btn--solo" data-solo>SOLO</button>
+          <button class="m-btn m-btn--mute" data-mute>MUTE</button>
+          <button class="m-btn m-btn--remove" data-remove aria-label="Maschine entfernen">✕</button>
+        </div>
+      </header>
+      <div class="machine__body"></div>
+    `;
+
+    el.querySelector('[data-mute]').addEventListener('click', (e) => {
+      this.setMuted(!this.muted);
+      e.currentTarget.classList.toggle('is-active', this.muted);
+    });
+
+    el.querySelector('[data-solo]').addEventListener('click', (e) => {
+      this.setSoloed(!this.soloed);
+      e.currentTarget.classList.toggle('is-active', this.soloed);
+    });
+
+    el.querySelector('[data-remove]').addEventListener('click', () => {
+      this.dispose();
+      el.dispatchEvent(new CustomEvent('machine:removed', {
+        detail: { machine: this },
+        bubbles: true,
+      }));
+    });
+
+    this.buildControls(el.querySelector('.machine__body'));
+
+    // Knob-Stellungen mit dem (ggf. geladenen) Zustand synchronisieren —
+    // die value-Attribute im Markup sind nur die Werks-Defaults
+    for (const knob of el.querySelectorAll('x-knob[data-p]')) {
+      const v = this.getParamForKnob(knob.dataset.p);
+      if (v !== undefined) knob.value = v;
+    }
+
+    // Alle Knobs mit data-auto bei der Automation anmelden. apply() nutzt
+    // dieselbe input-Leitung wie eine Handbewegung — Maschinen brauchen
+    // für Automation keinen Extra-Code.
+    for (const knob of el.querySelectorAll('x-knob[data-auto]')) {
+      const key = `${this.id}:${knob.dataset.p}`;
+      automation.register(key, knob, (v) => {
+        knob.value = v;
+        knob.dispatchEvent(new CustomEvent('input', {
+          detail: { value: v },
+          bubbles: true,
+        }));
+      });
+    }
+
+    this.el = el;
+    return el;
+  }
+
+  setMuted(muted) {
+    this.muted = muted;
+    refreshGates();
+  }
+
+  setSoloed(soloed) {
+    this.soloed = soloed;
+    refreshGates();
+  }
+
+  /* ---------- Aufräumen ---------- */
+  dispose() {
+    transport.removeListener(this);
+    automation.unregisterMachine(this.id);
+    machines.delete(this);
+    refreshGates(); // falls die einzige Solo-Maschine entfernt wurde
+    this.disposeAudio();
+    // Fade-out, dann trennen — vermeidet Klicks beim Entfernen
+    const t = engine.now;
+    this.gate.gain.setTargetAtTime(0, t, 0.02);
+    setTimeout(() => { this.output.disconnect(); this.gate.disconnect(); }, 120);
+    this.el?.remove();
+  }
+}
+
+return { Machine };
+})();
+
+/* ===== js/machines/subsynth.js ===== */
+const { SubSynth } = (() => {
+/**
+ * SubSynth — erste Beispielmaschine, damit das Rack von Anfang an klingt.
+ *
+ * Signalfluss pro Stimme:
+ *   Oscillator (Saw) → Lowpass-Filter → Hüllkurven-Gain → machine.output
+ *
+ * Ein Touch-Keybed (eine Oktave) mit Glissando-Unterstützung dient als
+ * Spielfläche; später ersetzt/ergänzt durch den Pattern-Sequenzer.
+ */
+
+class SubSynth extends Machine {
+  static meta = {
+    type: 'subsynth',
+    name: 'SubSynth',
+    desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
+    color: '#4dc3ff',
+  };
+
+  buildAudio() {
+    this.params = {
+      cutoff: 1800,       // Hz (Basis, auf die die Hüllkurve zurückfällt)
+      resonance: 4,       // Q
+      envAmt: 0.3,        // Filterhüllkurve: 0..1 ≙ 0..+4 Oktaven über Cutoff
+      fDecay: 0.18,       // s — Abklingzeit der Filterhüllkurve
+      attack: 0.005,      // s (Amp)
+      release: 0.25,      // s (Amp)
+      volume: 0.7,
+      filterType: 'lowpass',
+    };
+    /** aktive Stimmen: midi → {osc, filter, env} */
+    this.voices = new Map();
+    this.output.gain.value = this.params.volume;
+
+    /** 16-Step-Pattern: {on, midi} pro Step. Startet mit einer Demo-Line. */
+    this.pattern = Array.from({ length: 16 }, () => ({ on: false, midi: 48 }));
+    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 }; // kleine Acid-Line
+    for (const [step, midi] of Object.entries(seed)) {
+      this.pattern[step].on = true;
+      this.pattern[step].midi = midi;
+    }
+  }
+
+  /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
+  onStep(step, time) {
+    const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
+    const delayMs = (time - engine.now) * 1000;
+    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
+
+    const st = this.pattern[idx];
+    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
+  }
+
+  serialize() {
+    return {
+      params: { ...this.params },
+      pattern: this.pattern.map((s) => ({ ...s })),
+    };
+  }
+
+  deserialize(state) {
+    Object.assign(this.params, state.params);
+    this.pattern = state.pattern.map((s) => ({ ...s }));
+    this.output.gain.value = this.params.volume;
+  }
+
+  onTransport(event) {
+    if (event === 'stop') this.seq?.clearPlayhead();
+  }
+
+  /**
+   * Fire-and-forget-Stimme für den Sequenzer — sample-genau bei `time`
+   * geplant, unabhängig von den gehaltenen Keybed-Stimmen.
+   */
+  playNote(midi, time, dur) {
+    time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    const ctx = engine.ctx;
+    const p = this.params;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = midiToHz(midi);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = p.filterType;
+    filter.Q.value = p.resonance;
+    this.#applyFilterEnv(filter, time);
+
+    const env = ctx.createGain();
+    const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
+    env.gain.setValueAtTime(0, time);
+    env.gain.linearRampToValueAtTime(1, time + atk);
+    env.gain.setTargetAtTime(0, time + dur, p.release / 4);
+
+    osc.connect(filter).connect(env).connect(this.output);
+    osc.start(time);
+    osc.stop(time + dur + p.release + 0.1);
+    osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
+  }
+
+  /* ---------- Stimmenverwaltung ---------- */
+  noteOn(midi) {
+    if (this.voices.has(midi)) return;
+    const ctx = engine.ctx;
+    const t = ctx.currentTime;
+    const p = this.params;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = midiToHz(midi);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = p.filterType;
+    filter.Q.value = p.resonance;
+    this.#applyFilterEnv(filter, t);
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(1, t + p.attack);
+
+    osc.connect(filter).connect(env).connect(this.output);
+    osc.start(t);
+
+    this.voices.set(midi, { osc, filter, env });
+  }
+
+  noteOff(midi) {
+    const v = this.voices.get(midi);
+    if (!v) return;
+    this.voices.delete(midi);
+
+    const t = engine.ctx.currentTime;
+    const rel = this.params.release;
+    v.env.gain.cancelScheduledValues(t);
+    v.env.gain.setTargetAtTime(0, t, rel / 4);
+    v.osc.stop(t + rel + 0.1);
+    v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
+  }
+
+  allNotesOff() {
+    for (const midi of [...this.voices.keys()]) this.noteOff(midi);
+  }
+
+  disposeAudio() {
+    this.allNotesOff();
+  }
+
+  /**
+   * Filterhüllkurve: startet envAmt Oktaven über dem Cutoff (bis +4 Okt.)
+   * und fällt exponentiell auf den Cutoff zurück — der klassische
+   * Pluck/Acid-Charakter. Gilt für Keybed- und Sequenzer-Stimmen gleich.
+   */
+  #applyFilterEnv(filter, t) {
+    const p = this.params;
+    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
+    filter.frequency.setValueAtTime(peak, t);
+    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
+  }
+
+  /* ---------- UI ---------- */
+  buildControls(container) {
+    // Filtertyp: LP / HP / BP — wirkt sofort auch auf klingende Stimmen
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.innerHTML = `
+      <span class="seg__label">Filter</span>
+      <button class="seg__btn" data-ft="lowpass">LP</button>
+      <button class="seg__btn" data-ft="highpass">HP</button>
+      <button class="seg__btn" data-ft="bandpass">BP</button>
+    `;
+    seg.querySelectorAll('.seg__btn').forEach((b) =>
+      b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ft]');
+      if (!btn) return;
+      this.params.filterType = btn.dataset.ft;
+      seg.querySelectorAll('.seg__btn').forEach((b) =>
+        b.classList.toggle('is-active', b === btn));
+      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
+    });
+    container.appendChild(seg);
+
+    const row = document.createElement('div');
+    row.className = 'machine__row';
+    row.innerHTML = `
+      <x-knob label="Cutoff" min="80" max="12000" value="1800" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
+      <x-knob label="Reso"   min="0.5" max="20"  value="4"  data-p="resonance" data-auto></x-knob>
+      <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="2" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
+    `;
+    row.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (!key) return;
+      const val = e.detail.value;
+      this.params[key] = val;
+
+      // Live-Parameter direkt auf laufende Stimmen anwenden
+      const t = engine.ctx.currentTime;
+      if (key === 'cutoff') {
+        for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'resonance') {
+        for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'volume') {
+        this.output.gain.setTargetAtTime(val, t, 0.01);
+      }
+    });
+    container.appendChild(row);
+
+    this.seq = new StepSeq(this.pattern, {
+      onLengthChange: (bars) => {
+        resizePattern(this.pattern, bars);
+        this.seq.setPattern(this.pattern);
+      },
+    });
+    container.appendChild(this.seq.el);
+
+    container.appendChild(createKeybed({
+      onNoteOn: (midi) => this.noteOn(midi),
+      onNoteOff: (midi) => this.noteOff(midi),
+    }));
+  }
+
+}
+
+return { SubSynth };
+})();
+
+/* ===== js/machines/beatbox.js ===== */
+const { BeatBox } = (() => {
+/**
+ * BeatBox — 8-Spur-Drum-Machine mit synthetisierten Sounds (808-Stil).
+ *
+ * Keine Sample-Dateien: Alle Drums werden bei jedem Trigger aus
+ * Oszillatoren + Rauschen gebaut. Das hält das Projekt asset-frei
+ * (läuft offline im Capacitor-WebView) und macht Tune/Decay echt
+ * parametrisch statt nur Playback-Tricks.
+ *
+ * UI-Konzept (Touch-first statt 8×16-Matrix, die auf Phones zu klein wird):
+ * - 8 Pads: Tippen spielt den Sound an UND wählt die Spur aus
+ * - Ein gemeinsames 16-Step-Grid zeigt immer die gewählte Spur
+ * - Tune/Decay/Level-Knobs wirken auf die gewählte Spur
+ */
+
+/* ================= Drum-Synthese ================= */
+
+/* Jede Drum: (ctx, t, dest, {tune, decay, level}) */
+
+function kick(ctx, t, dest, p) {
+  // Körper: Sinus mit Pitch-Hüllkurve. Zielfrequenz nach unten begrenzen —
+  // unter ~30 Hz ist auf Phone-Lautsprechern nichts mehr hörbar und der
+  // Anschlag zerfällt in Artefakte.
+  const f0 = Math.max(60, 160 * p.tune);
+  const f1 = Math.max(30, 45 * p.tune);
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f1, t + 0.1);
+  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay);
+  o.connect(g).connect(dest);
+  autoStop(o, t, 0.4 * p.decay, [g]);
+
+  // Klick: 12 ms Hochpass-Rauschen als Attack-Transient. Startet immer an
+  // derselben Buffer-Position → klingt bei jedem Anschlag identisch und
+  // hält den Punch unabhängig von der Stimmung konstant. Anteil über
+  // den Snap-Regler der Kick-Spur; bei 0 wird er ganz weggelassen.
+  const snap = p.snap ?? 0.45;
+  if (snap > 0.01) {
+    const n = ctx.createBufferSource();
+    n.buffer = noise(ctx);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1500;
+    const cg = env(ctx, t, snap * p.level, 0.012);
+    n.connect(hp).connect(cg).connect(dest);
+    autoStop(n, t, 0.012, [hp, cg]);
+  }
+}
+
+function snare(ctx, t, dest, p) {
+  // Körper (Ton) + Teppich (Rauschen)
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.value = 190 * p.tune;
+  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay);
+  o.connect(og).connect(dest);
+  autoStop(o, t, 0.1 * p.decay, [og]);
+
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1800 * p.tune;
+  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay);
+  n.connect(bp).connect(ng).connect(dest);
+  autoStop(n, t, 0.18 * p.decay, [bp, ng]);
+}
+
+function clap(ctx, t, dest, p) {
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1100 * p.tune;
+  bp.Q.value = 1.5;
+
+  // 3 schnelle Retrigger, dann Ausklang — der typische Clap
+  const g = ctx.createGain();
+  const dur = 0.036 + 0.2 * p.decay;
+  for (let i = 0; i < 3; i++) {
+    g.gain.setValueAtTime(0.9 * p.level, t + i * 0.012);
+    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.012 + 0.01);
+  }
+  g.gain.setValueAtTime(0.7 * p.level, t + 0.036);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+  n.connect(bp).connect(g).connect(dest);
+  autoStop(n, t, dur, [bp, g]);
+}
+
+const hat = (baseDur) => (ctx, t, dest, p) => {
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 7000 * p.tune;
+  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay);
+  n.connect(hp).connect(g).connect(dest);
+  autoStop(n, t, baseDur * p.decay, [hp, g]);
+};
+
+const tom = (mult) => (ctx, t, dest, p) => {
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  const f = 150 * mult * p.tune;
+  o.frequency.setValueAtTime(f, t);
+  o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.15);
+  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay);
+  o.connect(g).connect(dest);
+  autoStop(o, t, 0.3 * p.decay, [g]);
+};
+
+function perc(ctx, t, dest, p) {
+  // Zwei verstimmte Rechtecke durch Bandpass ≈ Cowbell
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 900 * p.tune;
+  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay);
+  bp.connect(g).connect(dest);
+  for (const f of [540, 810]) {
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.value = f * p.tune;
+    o.connect(bp);
+    autoStop(o, t, 0.18 * p.decay, [bp, g]);
+  }
+}
+
+/* ================= Die Maschine ================= */
+
+const TRACK_DEFS = [
+  { name: 'Kick',  synth: kick, snap: 0.45 },
+  { name: 'Snare', synth: snare },
+  { name: 'Clap',  synth: clap },
+  { name: 'HH cl', synth: hat(0.05) },
+  { name: 'HH op', synth: hat(0.4) },
+  { name: 'Tom L', synth: tom(0.7) },
+  { name: 'Tom H', synth: tom(1.4) },
+  { name: 'Perc',  synth: perc },
+];
+
+// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat
+const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
+
+class BeatBox extends Machine {
+  getParamForKnob(key) {
+    return key === 'volume' ? this.volume : undefined;
+  }
+
+  static meta = {
+    type: 'beatbox',
+    name: 'BeatBox',
+    desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
+    color: '#ff7a59',
+  };
+
+  buildAudio() {
+    this.volume = 0.8;
+    this.output.gain.value = this.volume;
+    this.selected = 0;
+    /** Index der solo geschalteten Spur, oder null */
+    this.soloTrack = null;
+
+    this.tracks = TRACK_DEFS.map((def) => ({
+      ...def,
+      steps: Array.from({ length: 16 }, () => ({ on: false })),
+      tune: 1,
+      decay: 1,
+      level: 0.9,
+    }));
+    for (const [name, steps] of Object.entries(SEED)) {
+      const tr = this.tracks.find((t) => t.name === name);
+      for (const s of steps) tr.steps[s].on = true;
+    }
+  }
+
+  /* ---------- Sequenzer ---------- */
+  onStep(step, time) {
+    const idx = step % this.tracks[0].steps.length; // alle Spuren gleich lang
+    const delayMs = (time - engine.now) * 1000;
+    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
+
+    for (let i = 0; i < this.tracks.length; i++) {
+      if (this.soloTrack != null && i !== this.soloTrack) continue;
+      const tr = this.tracks[i];
+      if (tr.steps[idx].on) this.#trigger(tr, time);
+    }
+  }
+
+  serialize() {
+    return {
+      volume: this.volume,
+      tracks: this.tracks.map((tr) => ({
+        tune: tr.tune,
+        decay: tr.decay,
+        level: tr.level,
+        snap: tr.snap,
+        steps: tr.steps.map((s) => ({ on: s.on })),
+      })),
+    };
+  }
+
+  deserialize(state) {
+    this.volume = state.volume ?? 0.8;
+    this.output.gain.value = this.volume;
+    state.tracks?.forEach((saved, i) => {
+      const tr = this.tracks[i];
+      if (!tr) return;
+      tr.tune = saved.tune ?? tr.tune;
+      tr.decay = saved.decay ?? tr.decay;
+      tr.level = saved.level ?? tr.level;
+      if (saved.snap !== undefined) tr.snap = saved.snap;
+      tr.steps = saved.steps.map((s) => ({ on: !!s.on }));
+    });
+  }
+
+  onTransport(event) {
+    if (event === 'stop') this.seq?.clearPlayhead();
+  }
+
+  #trigger(tr, time) {
+    // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
+    // identisch im Audio-Block positioniert (siehe engine.quantizeTime)
+    tr.synth(engine.ctx, engine.quantizeTime(time), this.output, tr);
+  }
+
+  /* ---------- UI ---------- */
+  buildControls(container) {
+    // Spur-Parameter + Maschinen-Volume
+    const row = document.createElement('div');
+    row.className = 'machine__row';
+    row.innerHTML = `
+      <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
+      <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
+      <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
+      <x-knob label="Snap"  min="0" max="1" value="0.45"  data-p="snap"></x-knob>
+      <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
+    `;
+    row.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (!key) return;
+      const val = e.detail.value;
+      if (key === 'volume') {
+        this.volume = val;
+        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+      } else {
+        this.tracks[this.selected][key] = val;
+      }
+    });
+    container.appendChild(row);
+    this.knobs = {
+      tune: row.querySelector('[data-p="tune"]'),
+      decay: row.querySelector('[data-p="decay"]'),
+      level: row.querySelector('[data-p="level"]'),
+      snap: row.querySelector('[data-p="snap"]'),
+    };
+
+    // Per-Spur-Automation: Der Lane-Schlüssel entsteht beim Anfassen aus
+    // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
+    // Playback schreibt direkt in die Spur-Parameter; der Knob bewegt
+    // sich nur mit, wenn seine Spur gerade ausgewählt ist.
+    for (const param of ['tune', 'decay', 'level', 'snap']) {
+      const applyForKey = (key, value) => {
+        const trIdx = parseInt(key.split(':')[1], 10);
+        if (this.tracks[trIdx][param] === undefined) return; // Spur ohne diesen Param
+        this.tracks[trIdx][param] = value;
+        if (trIdx === this.selected) this.knobs[param].value = value;
+      };
+      automation.registerDynamic(
+        this.knobs[param],
+        () => `${this.id}:${this.selected}:${param}`,
+        applyForKey,
+      );
+      // Alle Spur-Ziele vorregistrieren, damit GELADENE Lanes sofort
+      // abspielen (ohne dass der Knob erst angefasst werden muss)
+      for (let ti = 0; ti < this.tracks.length; ti++) {
+        const key = `${this.id}:${ti}:${param}`;
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+      }
+    }
+
+    // Pads: anspielen + Spur wählen
+    const pads = document.createElement('div');
+    pads.className = 'pads';
+    this.padEls = this.tracks.map((tr, i) => {
+      const pad = document.createElement('button');
+      pad.className = 'pad';
+      pad.textContent = tr.name;
+      pad.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.#trigger(tr, engine.ctx.currentTime);
+        this.#selectTrack(i);
+      });
+      pads.appendChild(pad);
+      return pad;
+    });
+    container.appendChild(pads);
+
+    // Ein Grid für alle Spuren — zeigt immer die gewählte
+    this.seq = new StepSeq(this.tracks[0].steps, {
+      pitch: false,
+      onLengthChange: (bars) => {
+        for (const tr of this.tracks) resizePattern(tr.steps, bars);
+        this.seq.setPattern(this.tracks[this.selected].steps);
+      },
+    });
+    container.appendChild(this.seq.el);
+
+    // Solo-Button für die gewählte Spur in die Grid-Kopfzeile einhängen
+    const ctrl = this.seq.el.querySelector('.stepseq__ctrl');
+    this.soloBtn = document.createElement('button');
+    this.soloBtn.className = 'm-btn m-btn--solo';
+    this.soloBtn.textContent = 'SOLO';
+    this.soloBtn.addEventListener('click', () => {
+      this.soloTrack = this.soloTrack === this.selected ? null : this.selected;
+      this.#refreshSoloUI();
+    });
+    ctrl.insertBefore(this.soloBtn, ctrl.querySelector('[data-clear]'));
+
+    this.#selectTrack(0);
+  }
+
+  #selectTrack(i) {
+    this.selected = i;
+    const tr = this.tracks[i];
+    this.padEls.forEach((p, j) => p.classList.toggle('is-selected', j === i));
+    this.seq.setPattern(tr.steps);
+    this.knobs.tune.value = tr.tune;
+    this.knobs.decay.value = tr.decay;
+    this.knobs.level.value = tr.level;
+    this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
+    if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    for (const param of ['tune', 'decay', 'level', 'snap']) {
+      this.knobs[param].classList.toggle('has-auto',
+        automation.hasLane(`${this.id}:${i}:${param}`));
+    }
+    this.seq.el.querySelector('.stepseq__title').textContent = `Pattern · ${tr.name}`;
+    this.#refreshSoloUI();
+  }
+
+  /** Nach dem Laden eines Projekts: LEDs an die gewählte Spur anpassen. */
+  onLanesImported() {
+    this.#selectTrack(this.selected);
+  }
+
+  #refreshSoloUI() {
+    this.soloBtn.classList.toggle('is-active', this.soloTrack === this.selected);
+    this.padEls.forEach((p, j) => p.classList.toggle('is-solo', j === this.soloTrack));
+  }
+}
+
+return { BeatBox };
+})();
+
+/* ===== js/machines/percsynth.js ===== */
+const { PercSynth } = (() => {
+/**
+ * PercSynth — getunte FM-Percussion (Zaps, Bells, Congas, Laser, Blips).
+ *
+ * Stimme pro Trigger:
+ *   Modulator (Sinus, f·Ratio) → FM auf den Carrier (Sinus, Notenfrequenz
+ *   mit Pitch-Sweep von oben) → Amp-Hüllkurve → Output.
+ *   Dazu optional ein Bandpass-Rauschanteil für Attack/„Skin".
+ *
+ * Charakter über vier Klangregler:
+ *   Ratio  — Verhältnis Modulator/Carrier: ganzzahlig = tonal (Conga,
+ *            Woodblock), krumm = metallisch/glockig (Bell, Clank)
+ *   FM Amt — Modulationstiefe (abklingend → lebendiger Attack)
+ *   Sweep  — Pitch-Hüllkurve von oben (der „Zap")
+ *   Noise  — Rauschanteil im Anschlag
+ *
+ * Noten kommen aus dem Pitch-Step-Grid (wie SubSynth) oder vom Keybed.
+ */
+
+class PercSynth extends Machine {
+  static meta = {
+    type: 'percsynth',
+    name: 'PercSynth',
+    desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
+    color: '#ffd24d',
+  };
+
+  buildAudio() {
+    this.params = {
+      ratio: 2.7,     // Modulator-Verhältnis (krumm = metallisch)
+      fmAmt: 0.4,     // Modulationstiefe 0..1
+      sweep: 0.3,     // Pitch-Hüllkurve 0..1 (0 = kein Zap)
+      noiseMix: 0.2,  // Rauschanteil 0..1
+      decay: 0.25,    // s — Amp-Hüllkurve
+      volume: 0.8,
+    };
+    this.output.gain.value = this.params.volume;
+
+    /** 16-Step-Pattern wie in der SubSynth: {on, midi} pro Step */
+    this.pattern = Array.from({ length: 16 }, () => ({ on: false, midi: 76 }));
+    const seed = { 2: 79, 7: 72, 10: 84, 15: 76 }; // sparsame Offbeat-Perc
+    for (const [step, midi] of Object.entries(seed)) {
+      this.pattern[step].on = true;
+      this.pattern[step].midi = midi;
+    }
+  }
+
+  /* ---------- Sequenzer ---------- */
+  onStep(step, time) {
+    const idx = step % this.pattern.length;
+    const delayMs = (time - engine.now) * 1000;
+    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
+
+    const st = this.pattern[idx];
+    if (st.on) this.playNote(st.midi, time);
+  }
+
+  serialize() {
+    return {
+      params: { ...this.params },
+      pattern: this.pattern.map((s) => ({ ...s })),
+    };
+  }
+
+  deserialize(state) {
+    Object.assign(this.params, state.params);
+    this.pattern = state.pattern.map((s) => ({ ...s }));
+    this.output.gain.value = this.params.volume;
+  }
+
+  onTransport(event) {
+    if (event === 'stop') this.seq?.clearPlayhead();
+  }
+
+  /* ---------- Stimme (fire-and-forget) ---------- */
+  playNote(midi, time) {
+    time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    const ctx = engine.ctx;
+    const p = this.params;
+    const f = midiToHz(midi);
+    const dur = Math.max(0.03, p.decay);
+
+    // Carrier mit Pitch-Sweep von oben
+    const car = ctx.createOscillator();
+    car.type = 'sine';
+    car.frequency.setValueAtTime(f * (1 + p.sweep * 3), time);
+    car.frequency.setTargetAtTime(f, time, 0.02);
+
+    // FM: Modulator moduliert die Carrier-Frequenz, Tiefe klingt mit ab
+    const mod = ctx.createOscillator();
+    mod.type = 'sine';
+    mod.frequency.value = f * p.ratio;
+    const modGain = ctx.createGain();
+    modGain.gain.setValueAtTime(f * p.fmAmt * 8, time);
+    modGain.gain.setTargetAtTime(0, time, dur / 4);
+    mod.connect(modGain).connect(car.frequency);
+
+    // Amp-Hüllkurve
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0.9, time);
+    amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    car.connect(amp).connect(this.output);
+
+    autoStop(car, time, dur, [amp]);
+    autoStop(mod, time, dur, [modGain]);
+
+    // Rauschanteil im Anschlag (Bandpass um die doppelte Notenfrequenz)
+    if (p.noiseMix > 0.01) {
+      const n = ctx.createBufferSource();
+      n.buffer = noise(ctx);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = Math.min(14000, f * 2);
+      bp.Q.value = 2;
+      const ng = ctx.createGain();
+      const nDur = Math.min(dur, 0.12);
+      ng.gain.setValueAtTime(0.8 * p.noiseMix, time);
+      ng.gain.exponentialRampToValueAtTime(0.001, time + nDur);
+      n.connect(bp).connect(ng).connect(this.output);
+      autoStop(n, time, nDur, [bp, ng]);
+    }
+  }
+
+  /* ---------- UI ---------- */
+  buildControls(container) {
+    const row = document.createElement('div');
+    row.className = 'machine__row';
+    row.innerHTML = `
+      <x-knob label="Ratio"  min="0.25" max="8" value="2.7" curve="log" data-p="ratio" data-auto></x-knob>
+      <x-knob label="FM Amt" min="0" max="1" value="0.4" data-p="fmAmt" data-auto></x-knob>
+      <x-knob label="Sweep"  min="0" max="1" value="0.3" data-p="sweep" data-auto></x-knob>
+      <x-knob label="Noise"  min="0" max="1" value="0.2" data-p="noiseMix" data-auto></x-knob>
+      <x-knob label="Decay"  min="0.03" max="1.5" value="0.25" curve="log" unit="s" data-p="decay" data-auto></x-knob>
+      <x-knob label="Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>
+    `;
+    row.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (!key) return;
+      const val = e.detail.value;
+      this.params[key] = val;
+      if (key === 'volume') {
+        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+      }
+    });
+    container.appendChild(row);
+
+    this.seq = new StepSeq(this.pattern, {
+      onLengthChange: (bars) => {
+        resizePattern(this.pattern, bars);
+        this.seq.setPattern(this.pattern);
+      },
+    });
+    container.appendChild(this.seq.el);
+
+    // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
+    container.appendChild(createKeybed({
+      baseMidi: 72,
+      onNoteOn: (midi) => this.playNote(midi, engine.ctx.currentTime),
+    }));
+  }
+}
+
+return { PercSynth };
+})();
+
+/* ===== js/rack/rack.js ===== */
+const { Rack, REGISTRY } = (() => {
+/**
+ * Rack — verwaltet die Maschinen-Slots.
+ *
+ * - Registry: alle verfügbaren Maschinentypen (neue Maschinen hier eintragen)
+ * - Rendert die Slot-Liste + den »Maschine hinzufügen«-Slot
+ * - Bottom-Sheet als touch-freundlicher Picker
+ */
+
+/** Neue Maschinentypen einfach hier registrieren. */
+const REGISTRY = [SubSynth, BeatBox, PercSynth];
+
+class Rack {
+  /**
+   * @param {HTMLElement} rackEl   Container für die Slots
+   * @param {HTMLElement} sheetEl  Bottom-Sheet-Element
+   */
+  constructor(rackEl, sheetEl) {
+    this.rackEl = rackEl;
+    this.sheetEl = sheetEl;
+    /** @type {import('../machines/machine.js').Machine[]} */
+    this.machines = [];
+
+    this.#buildAddSlot();
+    this.#buildSheet();
+
+    // Maschinen melden ihr Entfernen selbst (Event aus machine.js)
+    this.rackEl.addEventListener('machine:removed', (e) => {
+      this.machines = this.machines.filter((m) => m !== e.detail.machine);
+    });
+  }
+
+  /** Alle Maschinen entfernen (z. B. vor dem Laden eines Projekts). */
+  clear() {
+    for (const m of [...this.machines]) m.dispose();
+    this.machines = [];
+  }
+
+  addMachine(MachineClass, state = null) {
+    const machine = new MachineClass();
+    if (state) machine.deserialize(state);
+    this.machines.push(machine);
+    this.rackEl.insertBefore(machine.render(), this.addSlotEl);
+    // neue Maschine ins Bild scrollen
+    machine.el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    return machine;
+  }
+
+  /* ---------- »+«-Slot ---------- */
+  #buildAddSlot() {
+    const btn = document.createElement('button');
+    btn.className = 'rack__add';
+    btn.textContent = '+  Maschine hinzufügen';
+    btn.addEventListener('click', () => this.#openSheet());
+    this.rackEl.appendChild(btn);
+    this.addSlotEl = btn;
+  }
+
+  /* ---------- Bottom Sheet ---------- */
+  #buildSheet() {
+    const list = this.sheetEl.querySelector('#machine-list');
+
+    for (const MachineClass of REGISTRY) {
+      const { name, desc, color } = MachineClass.meta;
+      const item = document.createElement('button');
+      item.className = 'sheet__item';
+      item.innerHTML = `
+        <span class="sheet__swatch" style="background:${color}"></span>
+        <span>
+          <div class="sheet__name">${name}</div>
+          <div class="sheet__desc">${desc}</div>
+        </span>
+      `;
+      item.addEventListener('click', () => {
+        this.addMachine(MachineClass);
+        this.#closeSheet();
+      });
+      list.appendChild(item);
+    }
+
+    this.sheetEl.querySelector('[data-close]')
+      .addEventListener('click', () => this.#closeSheet());
+  }
+
+  #openSheet()  { this.sheetEl.hidden = false; }
+  #closeSheet() { this.sheetEl.hidden = true; }
+}
+
+return { Rack, REGISTRY };
+})();
+
+/* ===== js/core/project.js ===== */
+const { serializeProject, loadProject, importMachines } = (() => {
+/**
+ * project — komplette Sessions serialisieren und wiederherstellen.
+ *
+ * Format (v1):
+ * { v: 1, bpm, machines: [ { type, state, lanes } ] }
+ *   - state: maschinenspezifisch (machine.serialize/deserialize)
+ *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
+ *     (IDs werden beim Laden neu vergeben, deshalb nur der Suffix)
+ */
+
+const BY_TYPE = Object.fromEntries(REGISTRY.map((M) => [M.meta.type, M]));
+
+function serializeProject(rack) {
+  return {
+    v: 1,
+    bpm: transport.bpm,
+    machines: rack.machines.map((m) => ({
+      type: m.constructor.meta.type,
+      state: m.serialize(),
+      lanes: automation.exportLanes(m.id),
+    })),
+  };
+}
+
+function loadProject(rack, data) {
+  transport.stop();
+  rack.clear();
+  transport.setBpm(data.bpm ?? 120);
+
+  for (const md of data.machines ?? []) {
+    const MachineClass = BY_TYPE[md.type];
+    if (!MachineClass) continue; // unbekannter Typ (z. B. ältere/neuere Version)
+    const machine = rack.addMachine(MachineClass, md.state);
+    automation.importLanes(machine.id, md.lanes);
+    machine.onLanesImported?.();
+  }
+}
+
+/**
+ * Maschinen aus einem (fremden) Projekt ins laufende Rack übernehmen,
+ * ohne die eigene Session anzutasten — die Grundlage fürs Jammen:
+ * Das Master-Gerät importiert die Maschinen des anderen und spielt
+ * alles lokal, sample-genau, ganz ohne Audio-Übertragung.
+ */
+function importMachines(rack, data) {
+  const added = [];
+  for (const md of data.machines ?? []) {
+    const MachineClass = BY_TYPE[md.type];
+    if (!MachineClass) continue;
+    const machine = rack.addMachine(MachineClass, md.state);
+    automation.importLanes(machine.id, md.lanes);
+    machine.onLanesImported?.();
+    added.push(machine);
+  }
+  return added;
+}
+
+return { serializeProject, loadProject, importMachines };
+})();
+
+/* ===== js/main.js ===== */
+(() => {
+/**
+ * main.js — verdrahtet Engine, Transport, Rack und die Transport-Leiste.
+ */
+
+const $ = (sel) => document.querySelector(sel);
+
+/* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
+$('#btn-unlock').addEventListener('click', async () => {
+  const hint = $('#btn-unlock small');
+  try {
+    const ok = await engine.unlock();
+    if (!ok) {
+      hint.textContent = 'Audio blockiert — bitte erneut tippen';
+      return;
+    }
+  } catch (err) {
+    console.error('Audio-Unlock fehlgeschlagen:', err);
+    hint.textContent = 'Audio nicht verfügbar: ' + err.message;
+    return;
+  }
+
+  $('#unlock-overlay').hidden = true;
+  boot();
+});
+
+/* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
+function boot() {
+  const rack = new Rack($('#rack'), $('#machine-sheet'));
+
+  // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
+  let restored = false;
+  const autosave = store.get('autosave');
+  if (autosave) {
+    try {
+      loadProject(rack, JSON.parse(autosave));
+      restored = true;
+    } catch (err) {
+      console.warn('Autosave nicht ladbar, starte frisch:', err);
+    }
+  }
+  if (!restored) {
+    rack.addMachine(BeatBox);
+    rack.addMachine(SubSynth);
+  }
+
+  wireTransportUI();
+  wireProjectUI(rack);
+  wireJamUI(rack);
+
+  // Autosave: alle 3 s den kompletten Zustand sichern
+  setInterval(() => {
+    try {
+      store.set('autosave', JSON.stringify(serializeProject(rack)));
+    } catch (err) {
+      console.warn('Autosave fehlgeschlagen:', err);
+    }
+  }, 3000);
+}
+
+/* ---------- Projekte-Sheet ---------- */
+function wireProjectUI(rack) {
+  const sheet = $('#project-sheet');
+  const list = $('#project-list');
+  const nameInput = $('#project-name');
+
+  $('#project-hint').hidden = store.persistent;
+
+  const refreshList = () => {
+    list.innerHTML = '';
+    const names = store.keys()
+      .filter((k) => k.startsWith('project:'))
+      .map((k) => k.slice('project:'.length))
+      .sort();
+    if (!names.length) {
+      list.innerHTML = '<p class="sheet__empty">Noch keine gespeicherten Projekte.</p>';
+      return;
+    }
+    for (const name of names) {
+      const item = document.createElement('div');
+      item.className = 'sheet__item sheet__item--project';
+      item.innerHTML = `
+        <button class="project__load">${name}</button>
+        <button class="project__delete" aria-label="Projekt löschen">✕</button>
+      `;
+      item.querySelector('.project__load').addEventListener('click', () => {
+        try {
+          loadProject(rack, JSON.parse(store.get(`project:${name}`)));
+          nameInput.value = name;
+          sheet.hidden = true;
+        } catch (err) {
+          console.error('Projekt nicht ladbar:', err);
+        }
+      });
+      item.querySelector('.project__delete').addEventListener('click', () => {
+        store.remove(`project:${name}`);
+        refreshList();
+      });
+      list.appendChild(item);
+    }
+  };
+
+  $('#btn-projects').addEventListener('click', () => {
+    refreshList();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => {
+    sheet.hidden = true;
+  });
+
+  $('#btn-save-project').addEventListener('click', () => {
+    const name = nameInput.value.trim() || 'Ohne Titel';
+    store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
+    refreshList();
+  });
+
+  /* ---- Export / Import als Datei ---- */
+  const download = (filename, blob) => {
+    try {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } catch (err) {
+      console.error('Download nicht möglich:', err);
+    }
+  };
+
+  $('#btn-export').addEventListener('click', () => {
+    const name = (nameInput.value.trim() || 'session').replace(/[^\wäöüÄÖÜß-]+/g, '_');
+    const json = JSON.stringify(serializeProject(rack), null, 2);
+    download(`rackwerk-${name}.json`, new Blob([json], { type: 'application/json' }));
+  });
+
+  const fileInput = $('#file-input');
+  let importMode = 'replace';
+  $('#btn-import-replace').addEventListener('click', () => { importMode = 'replace'; fileInput.click(); });
+  $('#btn-import-merge').addEventListener('click', () => { importMode = 'merge'; fileInput.click(); });
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (importMode === 'replace') loadProject(rack, data);
+        else importMachines(rack, data);
+        sheet.hidden = true;
+      } catch (err) {
+        console.error('Import fehlgeschlagen:', err);
+      }
+      fileInput.value = '';
+    };
+    reader.readAsText(file);
+  });
+
+  /* ---- Master-Aufnahme ---- */
+  const recBtn = $('#btn-audio-rec');
+  const recTime = $('#rec-time');
+  const recResult = $('#rec-result');
+  const prjBtn = $('#btn-projects');
+  let recTimer = null;
+
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+  recBtn.addEventListener('click', async () => {
+    if (!recorder.active) {
+      if (!recorder.supported) {
+        recResult.textContent = 'Aufnahme wird von diesem WebView leider nicht unterstützt.';
+        return;
+      }
+      if (!recorder.start()) return;
+      recBtn.textContent = '■ Stopp & Speichern';
+      recTime.hidden = false;
+      prjBtn.classList.add('is-recording');
+      recTimer = setInterval(() => { recTime.textContent = fmtTime(recorder.elapsed); }, 500);
+    } else {
+      clearInterval(recTimer);
+      const result = await recorder.stop();
+      recBtn.textContent = '● Aufnahme starten';
+      recTime.hidden = true;
+      prjBtn.classList.remove('is-recording');
+      if (!result) return;
+      recResult.innerHTML = '';
+
+      // 1) Sofort anhören — funktioniert auch in Sandboxes ohne Download
+      let url = null;
+      try { url = URL.createObjectURL(result.blob); } catch { /* Sandbox */ }
+      if (url) {
+        const player = document.createElement('audio');
+        player.controls = true;
+        player.src = url;
+        player.className = 'rec-player';
+        // Manche Sandboxes blockieren blob:-URLs in Medien-Elementen.
+        // Fallback: einmalig als data:-URL nachladen (umgeht die Sperre).
+        let retried = false;
+        player.addEventListener('error', () => {
+          if (retried) {
+            player.replaceWith(Object.assign(document.createElement('p'), {
+              className: 'sheet__hint',
+              textContent: 'Wiedergabe wird hier blockiert — bitte Download/Teilen nutzen oder in Safari testen.',
+            }));
+            return;
+          }
+          retried = true;
+          const reader = new FileReader();
+          reader.onload = () => { player.src = reader.result; };
+          reader.readAsDataURL(result.blob);
+        });
+        recResult.appendChild(player);
+      }
+
+      // 2) Natives Teilen-Menü (iOS: »In Dateien sichern«, AirDrop, …) —
+      //    der zuverlässigste Weg aus eingebetteten WebViews heraus
+      const file = new File([result.blob], `rackwerk-jam.${result.ext}`,
+        { type: result.blob.type });
+      // canShare fehlt in manchen WebViews, obwohl share() existiert →
+      // Button auch dann zeigen und den Versuch einfach wagen
+      const canShareFiles = navigator.share &&
+        (navigator.canShare ? navigator.canShare({ files: [file] }) : true);
+      if (canShareFiles) {
+        const shareBtn = document.createElement('button');
+        shareBtn.className = 'm-btn rec-share';
+        shareBtn.textContent = '⇪ Teilen / Sichern …';
+        shareBtn.addEventListener('click', () => {
+          navigator.share({ files: [file] }).catch(() => { /* abgebrochen */ });
+        });
+        recResult.appendChild(shareBtn);
+      }
+
+      // 3) Klassischer Download als dritter Weg (Safari, Desktop)
+      if (url) {
+        const link = document.createElement('a');
+        link.className = 'rec-link';
+        link.href = url;
+        link.download = `rackwerk-jam.${result.ext}`;
+        const kb = Math.round(result.blob.size / 1024);
+        link.textContent = `⬇ Download (${fmtTime(result.seconds)}, .${result.ext}, ${kb} KB)`;
+        recResult.appendChild(link);
+      }
+    }
+  });
+}
+
+/* ---------- Jam-Session ---------- */
+function wireJamUI(rack) {
+  const idle = $('#jam-idle');
+  const setup = $('#jam-setup');
+  const active = $('#jam-active');
+  const instructions = $('#jam-instructions');
+  const codeOut = $('#jam-code-out');
+  const codeIn = $('#jam-code-in');
+  const status = $('#jam-status');
+  const prjBtn = $('#btn-projects');
+
+  const show = (phase) => {
+    idle.hidden = phase !== 'idle';
+    setup.hidden = phase !== 'setup';
+    active.hidden = phase !== 'active';
+  };
+
+  const fail = (err) => {
+    console.error('Jam-Fehler:', err);
+    instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
+  };
+
+  jamlink.onstate = (event) => {
+    if (event === 'open') {
+      show('active');
+      prjBtn.classList.add('is-linked');
+      status.textContent = jamlink.role === 'host'
+        ? 'Verbunden als Host — dieses Gerät steuert Play/Stop und BPM.'
+        : 'Verbunden als Gast — Uhr wird abgeglichen …';
+    } else if (event === 'sync' && jamlink.role === 'guest') {
+      status.textContent =
+        `Verbunden als Gast — synchron zum Host (±${Math.max(1, Math.round(jamlink.rtt / 2))} ms). ` +
+        'Play/Stop und BPM steuert der Host.';
+    } else if (event === 'closed') {
+      show('idle');
+      prjBtn.classList.remove('is-linked');
+    }
+  };
+
+  jamlink.onProjectReceived = (data) => {
+    try { importMachines(rack, data); } catch (err) { console.error(err); }
+  };
+
+  $('#btn-jam-host').addEventListener('click', async () => {
+    if (!jamlink.supported) {
+      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      show('setup');
+      codeOut.hidden = codeIn.hidden = true;
+      return;
+    }
+    show('setup');
+    codeOut.hidden = codeIn.hidden = false;
+    instructions.textContent =
+      '1) Diesen Code ans andere Gerät schicken (dort: Beitreten → einfügen → Übernehmen). ' +
+      '2) Dessen Antwort-Code unten einfügen und Übernehmen.';
+    codeOut.value = 'Erzeuge Code …';
+    try { codeOut.value = await jamlink.createOffer(); } catch (err) { fail(err); }
+  });
+
+  $('#btn-jam-join').addEventListener('click', () => {
+    if (!jamlink.supported) {
+      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      show('setup');
+      codeOut.hidden = codeIn.hidden = true;
+      return;
+    }
+    show('setup');
+    codeOut.hidden = codeIn.hidden = false;
+    instructions.textContent =
+      '1) Code des Hosts unten einfügen und Übernehmen. ' +
+      '2) Den hier erscheinenden Antwort-Code zurück an den Host schicken.';
+    codeOut.value = '';
+  });
+
+  $('#btn-jam-apply').addEventListener('click', async () => {
+    const code = codeIn.value.trim();
+    if (!code) return;
+    try {
+      if (jamlink.pc && jamlink.role === 'host') {
+        await jamlink.acceptAnswer(code);          // Host: Antwort einlesen
+      } else {
+        codeOut.value = 'Erzeuge Antwort-Code …';
+        codeOut.value = await jamlink.createAnswer(code); // Gast: Antwort bauen
+      }
+      codeIn.value = '';
+    } catch (err) { fail(err); }
+  });
+
+  $('#btn-jam-copy').addEventListener('click', () => {
+    codeOut.select();
+    navigator.clipboard?.writeText(codeOut.value).catch(() => {
+      try { document.execCommand('copy'); } catch { /* Nutzer kopiert manuell */ }
+    });
+  });
+
+  $('#btn-jam-cancel').addEventListener('click', () => {
+    jamlink.close();
+    show('idle');
+  });
+
+  $('#btn-jam-send').addEventListener('click', () => {
+    jamlink.sendProject(serializeProject(rack));
+  });
+
+  $('#btn-jam-leave').addEventListener('click', () => {
+    jamlink.close();
+    show('idle');
+    prjBtn.classList.remove('is-linked');
+  });
+}
+
+/* ---------- 3) Transport-Leiste ---------- */
+function wireTransportUI() {
+  const btnPlay = $('#btn-play');
+  const iconPlay = btnPlay.querySelector('.icon-play');
+  const iconStop = btnPlay.querySelector('.icon-stop');
+  const lcdBpm = $('#lcd-bpm');
+  const lcdPos = $('#lcd-pos');
+
+  btnPlay.addEventListener('click', () => transport.toggle());
+
+  // REC schärfen/entschärfen — aufgenommen wird nur bei laufendem Transport
+  const btnRec = $('#btn-rec');
+  btnRec.addEventListener('click', () => {
+    automation.setArmed(!automation.armed);
+    btnRec.classList.toggle('is-armed', automation.armed);
+  });
+
+  // BPM: Tippen ±1, Halten wiederholt (Touch-freundlicher als ein Slider)
+  const bindRepeat = (btn, delta) => {
+    let timer = null;
+    const change = () => transport.setBpm(transport.bpm + delta);
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      change();
+      timer = setInterval(change, 90);
+    });
+    const stop = () => { clearInterval(timer); timer = null; };
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerleave', stop);
+  };
+  bindRepeat($('#btn-bpm-down'), -1);
+  bindRepeat($('#btn-bpm-up'), +1);
+
+  // Transport-Status im UI spiegeln
+  transport.addListener({
+    onTransport(event, t) {
+      if (event === 'bpm') lcdBpm.textContent = t.bpm.toFixed(1);
+      if (event === 'play' || event === 'stop') {
+        const playing = t.isPlaying;
+        btnPlay.classList.toggle('is-playing', playing);
+        iconPlay.hidden = playing;
+        iconStop.hidden = !playing;
+        btnPlay.setAttribute('aria-label',
+          playing ? 'Wiedergabe stoppen' : 'Wiedergabe starten');
+        if (!playing) lcdPos.textContent = '1.1';
+      }
+    },
+  });
+
+  // Positionsanzeige (reines UI-Polling, unabhängig vom Audio-Scheduler)
+  setInterval(() => {
+    if (transport.isPlaying) lcdPos.textContent = transport.positionLabel;
+  }, 120);
+
+  lcdBpm.textContent = transport.bpm.toFixed(1);
+}
+
+})();
+</script>
+</body>
+</html>
