@@ -22,6 +22,54 @@ import { engine } from './audio-engine.js';
 const CLOCK_INTERVAL_MS = 500;
 const PING_INTERVAL_MS = 2000;
 
+/* ---------- Signal-Codes packen/entpacken ----------
+   SDP ist sehr redundant → Deflate drückt die Codes von ~1200 auf
+   ~400 Zeichen. Das macht die QR-Codes grob (Version ~15 statt ~30)
+   und damit vom Display gut scanbar. Präfix 'RW1.' kennzeichnet das
+   komprimierte Format; alte unkomprimierte Codes (reines base64-JSON)
+   werden weiterhin akzeptiert. */
+const CODE_PREFIX = 'RW1.';
+
+function bytesToB64(buf) {
+  let s = '';
+  for (const b of new Uint8Array(buf)) s += String.fromCharCode(b);
+  return btoa(s);
+}
+function b64ToBytes(str) {
+  const bin = atob(str);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export async function packSignal(desc) {
+  const json = JSON.stringify(desc);
+  if (typeof CompressionStream === 'undefined') return btoa(json); // altes WebView
+  const stream = new Blob([json]).stream()
+    .pipeThrough(new CompressionStream('deflate-raw'));
+  return CODE_PREFIX + bytesToB64(await new Response(stream).arrayBuffer());
+}
+
+export async function unpackSignal(code) {
+  code = code.trim();
+  if (!code.startsWith(CODE_PREFIX)) return JSON.parse(atob(code)); // Alt-Format
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Dieses Gerät kann den Code nicht lesen (System zu alt).');
+  }
+  const stream = new Blob([b64ToBytes(code.slice(CODE_PREFIX.length))]).stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'));
+  return JSON.parse(await new Response(stream).text());
+}
+
+/** Welche ICE-Kandidaten-Typen stecken im SDP? (Diagnose-Anzeige) */
+function candidateTypes(sdp) {
+  const types = new Set();
+  for (const m of (sdp ?? '').matchAll(/a=candidate:\S+ \d+ \S+ \d+ \S+ \d+ typ (\w+)/g)) {
+    types.add(m[1]);
+  }
+  return [...types];
+}
+
 class JamLink {
   constructor() {
     this.pc = null;
@@ -35,6 +83,9 @@ class JamLink {
     this.clockTimer = null;
     this.pingTimer = null;
     this.transportListener = null;
+    /** ICE-Kandidaten-Typen des eigenen Codes ('host','srflx','relay') —
+     *  nur 'host' + Fehlschlag deutet auf Client-Isolation im WLAN hin. */
+    this.localCandidateTypes = [];
   }
 
   get supported() {
@@ -106,11 +157,12 @@ class JamLink {
     this.#wireChannel();
     await this.pc.setLocalDescription(await this.pc.createOffer());
     await this.#gathered();
-    return btoa(JSON.stringify(this.pc.localDescription));
+    this.localCandidateTypes = candidateTypes(this.pc.localDescription?.sdp);
+    return packSignal(this.pc.localDescription);
   }
 
   async acceptAnswer(code) {
-    await this.pc.setRemoteDescription(JSON.parse(atob(code.trim())));
+    await this.pc.setRemoteDescription(await unpackSignal(code));
   }
 
   async createAnswer(offerCode) {
@@ -122,10 +174,11 @@ class JamLink {
       this.dc = e.channel;
       this.#wireChannel();
     };
-    await this.pc.setRemoteDescription(JSON.parse(atob(offerCode.trim())));
+    await this.pc.setRemoteDescription(await unpackSignal(offerCode));
     await this.pc.setLocalDescription(await this.pc.createAnswer());
     await this.#gathered();
-    return btoa(JSON.stringify(this.pc.localDescription));
+    this.localCandidateTypes = candidateTypes(this.pc.localDescription?.sdp);
+    return packSignal(this.pc.localDescription);
   }
 
   /* ---------- Kanal ---------- */
