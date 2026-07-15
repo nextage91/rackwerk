@@ -20,6 +20,8 @@ class AudioEngine {
     this.delayBus = null;
     /** @type {GainNode|null}  Send-Bus zum Master-Reverb (fx.js) */
     this.reverbBus = null;
+    /** @type {AnalyserNode|null}  Master-Abgriff fürs VU-Meter */
+    this.analyser = null;
     this.unlocked = false;
   }
 
@@ -68,6 +70,12 @@ class AudioEngine {
     // führt sie zurück in den masterBus (→ läuft mit durch den Limiter).
     this.delayBus = ctx.createGain();
     this.reverbBus = ctx.createGain();
+
+    // Abgriff für das VU-Meter — NACH dem Limiter, zeigt also das
+    // tatsächliche Ausgangssignal (reiner Tap, geht nirgendwo hin)
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 2048;
+    this.limiter.connect(this.analyser);
   }
 
   /** Aktuelle Audio-Zeit (Sekunden), 0 solange nicht entsperrt. */

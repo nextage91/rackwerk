@@ -180,6 +180,9 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
+        <div class="vu" data-vu aria-label="Master-Pegel">
+          ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
+        </div>
       </header>
       <div class="machine__body">
         <div class="machine__row fx__row">
@@ -214,7 +217,36 @@ class MasterFX {
 
     this.el = el;
     this.#syncUI();
+    this.#startVU();
     return el;
+  }
+
+  /* ---------- VU-Meter (LED-Kette am Limiter-Ausgang) ---------- */
+  #vuBuf;
+  #vuLit = -1;
+
+  #startVU() {
+    const analyser = engine.analyser;
+    const segs = this.el?.querySelectorAll('.vu__seg');
+    if (!analyser || !segs?.length || typeof analyser.getFloatTimeDomainData !== 'function') return;
+    this.#vuBuf = new Float32Array(analyser.fftSize);
+
+    const FLOOR_DB = -45; // Anzeigebereich: −45 dB … 0 dB
+    const tick = () => {
+      analyser.getFloatTimeDomainData(this.#vuBuf);
+      let sum = 0;
+      for (let i = 0; i < this.#vuBuf.length; i++) sum += this.#vuBuf[i] ** 2;
+      const rms = Math.sqrt(sum / this.#vuBuf.length);
+      const db = 20 * Math.log10(Math.max(1e-6, rms));
+      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * segs.length);
+
+      if (lit !== this.#vuLit) { // DOM nur anfassen, wenn sich etwas ändert
+        segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+        this.#vuLit = lit;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   }
 
   /** Regler und Notenwert-Buttons auf this.params stellen. */
