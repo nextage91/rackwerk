@@ -61,6 +61,26 @@ class JamLink {
     });
   }
 
+  /**
+   * Verbindungsphasen an die UI melden. Ohne das bleibt die Oberfläche
+   * nach dem Code-Austausch stumm, wenn sich die Geräte nicht erreichen
+   * (z. B. beide hinter Mobilfunk-NAT und kein TURN-Relay verfügbar).
+   */
+  #wirePC() {
+    const report = () => {
+      const st = this.pc?.connectionState ?? this.pc?.iceConnectionState;
+      if (st === 'connecting' || st === 'checking') {
+        this.onstate?.('connecting');
+      } else if (st === 'failed') {
+        this.onstate?.('failed');
+      } else if (st === 'disconnected' && this.connected) {
+        this.onstate?.('unstable');
+      }
+    };
+    this.pc.onconnectionstatechange = report;
+    this.pc.oniceconnectionstatechange = report;
+  }
+
   /** Wartet auf abgeschlossenes ICE-Gathering (max. 3 s). */
   #gathered() {
     return new Promise((resolve) => {
@@ -81,6 +101,7 @@ class JamLink {
     this.close();
     this.role = 'host';
     this.pc = this.#newPeer();
+    this.#wirePC();
     this.dc = this.pc.createDataChannel('jam');
     this.#wireChannel();
     await this.pc.setLocalDescription(await this.pc.createOffer());
@@ -96,6 +117,7 @@ class JamLink {
     this.close();
     this.role = 'guest';
     this.pc = this.#newPeer();
+    this.#wirePC();
     this.pc.ondatachannel = (e) => {
       this.dc = e.channel;
       this.#wireChannel();
@@ -110,10 +132,11 @@ class JamLink {
   #wireChannel() {
     this.dc.onopen = () => {
       this.connected = true;
-      if (this.role === 'guest') {
-        this.#ping();
-        this.pingTimer = setInterval(() => this.#ping(), PING_INTERVAL_MS);
-      } else {
+      // Beide Seiten messen per Ping/Pong die Laufzeit (Basis der ±ms-Anzeige);
+      // nur der Gast leitet daraus zusätzlich den Uhren-Offset für den Sync ab.
+      this.#ping();
+      this.pingTimer = setInterval(() => this.#ping(), PING_INTERVAL_MS);
+      if (this.role === 'host') {
         this.clockTimer = setInterval(() => this.#sendClock(), CLOCK_INTERVAL_MS);
         this.transportListener = { onTransport: () => this.#sendClock() };
         transport.addListener(this.transportListener);

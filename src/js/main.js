@@ -3,7 +3,7 @@
  */
 import './ui/knob.js';                       // registriert <x-knob>
 import { engine } from './core/audio-engine.js';
-import { transport } from './core/transport.js';
+import { transport, STEPS_PER_BAR } from './core/transport.js';
 import { automation } from './core/automation.js';
 import { store } from './core/store.js';
 import { serializeProject, loadProject, importMachines } from './core/project.js';
@@ -265,6 +265,7 @@ function wireJamUI(rack) {
   const codeIn = $('#jam-code-in');
   const status = $('#jam-status');
   const prjBtn = $('#btn-projects');
+  const beatLed = $('#jam-beat-led');
 
   const show = (phase) => {
     idle.hidden = phase !== 'idle';
@@ -277,20 +278,62 @@ function wireJamUI(rack) {
     instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
   };
 
+  /* Beat-LED: blinkt auf jeder Viertelnote, Taktanfang in Orange.
+     Beide Geräte nebeneinander → gleichzeitiges Blinken = Sync steht.
+     Geplant auf der Audio-Uhr (gleiche Zeitbasis wie die Noten). */
+  const beatListener = {
+    onStep(step, time) {
+      if (step % 4 !== 0) return;
+      const isBar = step % STEPS_PER_BAR === 0;
+      const delay = Math.max(0, (time - engine.now) * 1000);
+      setTimeout(() => {
+        if (!jamlink.connected) return;
+        beatLed.classList.add('is-on');
+        beatLed.classList.toggle('is-bar', isBar);
+        prjBtn.classList.add('is-beat');
+        setTimeout(() => {
+          beatLed.classList.remove('is-on');
+          prjBtn.classList.remove('is-beat');
+        }, 110);
+      }, delay);
+    },
+  };
+
+  const stopBeatLed = () => {
+    transport.removeListener(beatListener);
+    beatLed.classList.remove('is-on', 'is-bar');
+    prjBtn.classList.remove('is-linked', 'is-beat');
+  };
+
+  const showStatus = () => {
+    const ms = Math.max(1, Math.round(jamlink.rtt / 2));
+    status.textContent = jamlink.role === 'host'
+      ? `Verbunden als Host (±${ms} ms) — dieses Gerät steuert Play/Stop und BPM.`
+      : `Verbunden als Gast (±${ms} ms) — Play/Stop und BPM steuert der Host.`;
+  };
+
   jamlink.onstate = (event) => {
     if (event === 'open') {
       show('active');
       prjBtn.classList.add('is-linked');
+      transport.addListener(beatListener);
       status.textContent = jamlink.role === 'host'
-        ? 'Verbunden als Host — dieses Gerät steuert Play/Stop und BPM.'
+        ? 'Verbunden als Host — messe Laufzeit …'
         : 'Verbunden als Gast — Uhr wird abgeglichen …';
-    } else if (event === 'sync' && jamlink.role === 'guest') {
-      status.textContent =
-        `Verbunden als Gast — synchron zum Host (±${Math.max(1, Math.round(jamlink.rtt / 2))} ms). ` +
-        'Play/Stop und BPM steuert der Host.';
+    } else if (event === 'sync') {
+      showStatus();
+    } else if (event === 'connecting') {
+      instructions.textContent = 'Codes ausgetauscht — Geräte verbinden sich …';
+    } else if (event === 'failed') {
+      instructions.textContent =
+        'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ' +
+        'Am zuverlässigsten klappt es, wenn beide im selben WLAN sind — ' +
+        'oder eines den persönlichen Hotspot des anderen nutzt. Dann neu versuchen.';
+    } else if (event === 'unstable') {
+      status.textContent = 'Verbindung instabil — versuche wiederherzustellen …';
     } else if (event === 'closed') {
       show('idle');
-      prjBtn.classList.remove('is-linked');
+      stopBeatLed();
     }
   };
 
@@ -353,6 +396,7 @@ function wireJamUI(rack) {
   $('#btn-jam-cancel').addEventListener('click', () => {
     jamlink.close();
     show('idle');
+    stopBeatLed();
   });
 
   $('#btn-jam-send').addEventListener('click', () => {
@@ -362,7 +406,7 @@ function wireJamUI(rack) {
   $('#btn-jam-leave').addEventListener('click', () => {
     jamlink.close();
     show('idle');
-    prjBtn.classList.remove('is-linked');
+    stopBeatLed();
   });
 }
 

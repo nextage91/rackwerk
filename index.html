@@ -393,6 +393,35 @@ button {
   color: var(--led-play);
   box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
 }
+/* Beat-Puls auf dem PRJ-Button: Sync-Feedback auch bei geschlossenem Sheet */
+.t-btn--prj.is-linked.is-beat {
+  box-shadow: 0 0 18px rgba(102,224,122,.95), var(--shadow-panel);
+}
+
+/* Beat-LED im Jam-Panel: sichtbarer Sync-Check (blinkt je Viertelnote) */
+.jam-beat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 6px;
+}
+.jam-beat__led {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--led-off);
+  box-shadow: 0 1px 3px rgba(0,0,0,.6) inset;
+}
+.jam-beat__led.is-on {
+  background: var(--led-play);
+  box-shadow: 0 0 14px rgba(102,224,122,.9);
+}
+.jam-beat__led.is-on.is-bar {
+  background: var(--lcd-ink);
+  box-shadow: 0 0 14px rgba(255,184,77,.9);
+}
+.jam-beat__hint { margin: 0; }
 .sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 /* ============================================================
@@ -814,6 +843,12 @@ x-knob.has-auto .knob__dial::after {
       </div>
       <div id="jam-active" hidden>
         <p class="sheet__hint" id="jam-status"></p>
+        <div class="jam-beat">
+          <span class="jam-beat__led" id="jam-beat-led"></span>
+          <span class="sheet__hint jam-beat__hint">Beat-Anzeige — blinkt im Takt,
+            sobald Play läuft. Blinken beide Geräte gleichzeitig, steht der
+            Sync (Taktanfang orange).</span>
+        </div>
         <div class="filerow">
           <button class="m-btn" id="btn-jam-send">Maschinen senden</button>
           <button class="m-btn" id="btn-jam-leave">Trennen</button>
@@ -2110,6 +2145,26 @@ class JamLink {
     });
   }
 
+  /**
+   * Verbindungsphasen an die UI melden. Ohne das bleibt die Oberfläche
+   * nach dem Code-Austausch stumm, wenn sich die Geräte nicht erreichen
+   * (z. B. beide hinter Mobilfunk-NAT und kein TURN-Relay verfügbar).
+   */
+  #wirePC() {
+    const report = () => {
+      const st = this.pc?.connectionState ?? this.pc?.iceConnectionState;
+      if (st === 'connecting' || st === 'checking') {
+        this.onstate?.('connecting');
+      } else if (st === 'failed') {
+        this.onstate?.('failed');
+      } else if (st === 'disconnected' && this.connected) {
+        this.onstate?.('unstable');
+      }
+    };
+    this.pc.onconnectionstatechange = report;
+    this.pc.oniceconnectionstatechange = report;
+  }
+
   /** Wartet auf abgeschlossenes ICE-Gathering (max. 3 s). */
   #gathered() {
     return new Promise((resolve) => {
@@ -2130,6 +2185,7 @@ class JamLink {
     this.close();
     this.role = 'host';
     this.pc = this.#newPeer();
+    this.#wirePC();
     this.dc = this.pc.createDataChannel('jam');
     this.#wireChannel();
     await this.pc.setLocalDescription(await this.pc.createOffer());
@@ -2145,6 +2201,7 @@ class JamLink {
     this.close();
     this.role = 'guest';
     this.pc = this.#newPeer();
+    this.#wirePC();
     this.pc.ondatachannel = (e) => {
       this.dc = e.channel;
       this.#wireChannel();
@@ -2159,10 +2216,11 @@ class JamLink {
   #wireChannel() {
     this.dc.onopen = () => {
       this.connected = true;
-      if (this.role === 'guest') {
-        this.#ping();
-        this.pingTimer = setInterval(() => this.#ping(), PING_INTERVAL_MS);
-      } else {
+      // Beide Seiten messen per Ping/Pong die Laufzeit (Basis der ±ms-Anzeige);
+      // nur der Gast leitet daraus zusätzlich den Uhren-Offset für den Sync ab.
+      this.#ping();
+      this.pingTimer = setInterval(() => this.#ping(), PING_INTERVAL_MS);
+      if (this.role === 'host') {
         this.clockTimer = setInterval(() => this.#sendClock(), CLOCK_INTERVAL_MS);
         this.transportListener = { onTransport: () => this.#sendClock() };
         transport.addListener(this.transportListener);
@@ -3598,6 +3656,7 @@ function wireJamUI(rack) {
   const codeIn = $('#jam-code-in');
   const status = $('#jam-status');
   const prjBtn = $('#btn-projects');
+  const beatLed = $('#jam-beat-led');
 
   const show = (phase) => {
     idle.hidden = phase !== 'idle';
@@ -3610,20 +3669,62 @@ function wireJamUI(rack) {
     instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
   };
 
+  /* Beat-LED: blinkt auf jeder Viertelnote, Taktanfang in Orange.
+     Beide Geräte nebeneinander → gleichzeitiges Blinken = Sync steht.
+     Geplant auf der Audio-Uhr (gleiche Zeitbasis wie die Noten). */
+  const beatListener = {
+    onStep(step, time) {
+      if (step % 4 !== 0) return;
+      const isBar = step % STEPS_PER_BAR === 0;
+      const delay = Math.max(0, (time - engine.now) * 1000);
+      setTimeout(() => {
+        if (!jamlink.connected) return;
+        beatLed.classList.add('is-on');
+        beatLed.classList.toggle('is-bar', isBar);
+        prjBtn.classList.add('is-beat');
+        setTimeout(() => {
+          beatLed.classList.remove('is-on');
+          prjBtn.classList.remove('is-beat');
+        }, 110);
+      }, delay);
+    },
+  };
+
+  const stopBeatLed = () => {
+    transport.removeListener(beatListener);
+    beatLed.classList.remove('is-on', 'is-bar');
+    prjBtn.classList.remove('is-linked', 'is-beat');
+  };
+
+  const showStatus = () => {
+    const ms = Math.max(1, Math.round(jamlink.rtt / 2));
+    status.textContent = jamlink.role === 'host'
+      ? `Verbunden als Host (±${ms} ms) — dieses Gerät steuert Play/Stop und BPM.`
+      : `Verbunden als Gast (±${ms} ms) — Play/Stop und BPM steuert der Host.`;
+  };
+
   jamlink.onstate = (event) => {
     if (event === 'open') {
       show('active');
       prjBtn.classList.add('is-linked');
+      transport.addListener(beatListener);
       status.textContent = jamlink.role === 'host'
-        ? 'Verbunden als Host — dieses Gerät steuert Play/Stop und BPM.'
+        ? 'Verbunden als Host — messe Laufzeit …'
         : 'Verbunden als Gast — Uhr wird abgeglichen …';
-    } else if (event === 'sync' && jamlink.role === 'guest') {
-      status.textContent =
-        `Verbunden als Gast — synchron zum Host (±${Math.max(1, Math.round(jamlink.rtt / 2))} ms). ` +
-        'Play/Stop und BPM steuert der Host.';
+    } else if (event === 'sync') {
+      showStatus();
+    } else if (event === 'connecting') {
+      instructions.textContent = 'Codes ausgetauscht — Geräte verbinden sich …';
+    } else if (event === 'failed') {
+      instructions.textContent =
+        'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ' +
+        'Am zuverlässigsten klappt es, wenn beide im selben WLAN sind — ' +
+        'oder eines den persönlichen Hotspot des anderen nutzt. Dann neu versuchen.';
+    } else if (event === 'unstable') {
+      status.textContent = 'Verbindung instabil — versuche wiederherzustellen …';
     } else if (event === 'closed') {
       show('idle');
-      prjBtn.classList.remove('is-linked');
+      stopBeatLed();
     }
   };
 
@@ -3686,6 +3787,7 @@ function wireJamUI(rack) {
   $('#btn-jam-cancel').addEventListener('click', () => {
     jamlink.close();
     show('idle');
+    stopBeatLed();
   });
 
   $('#btn-jam-send').addEventListener('click', () => {
@@ -3695,7 +3797,7 @@ function wireJamUI(rack) {
   $('#btn-jam-leave').addEventListener('click', () => {
     jamlink.close();
     show('idle');
-    prjBtn.classList.remove('is-linked');
+    stopBeatLed();
   });
 }
 
