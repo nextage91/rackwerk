@@ -22,6 +22,7 @@ MODULES = [
     ("js/core/audio-engine.js", ["engine"]),
     ("js/core/dsp.js",          ["noise", "env", "autoStop", "midiToHz"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR"]),
+    ("js/core/fx.js",           ["masterFX"]),
     ("js/core/automation.js",   ["automation"]),
     ("js/core/recorder.js",     ["recorder"]),
     ("js/core/jamlink.js",      ["jamlink"]),

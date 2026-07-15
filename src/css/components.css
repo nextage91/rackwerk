@@ -329,3 +329,24 @@ x-knob.has-auto .knob__dial::after {
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset,
               0 2px 4px rgba(0,0,0,.4);
 }
+
+/* ===================== FX-Sends (jede Maschine) ===================== */
+.machine__row--sends {
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.sends__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 2px;
+}
+
+/* ===================== Master-FX-Panel (Rack-Ende) ===================== */
+.machine--master .fx__row { align-items: center; }
+.machine--master .seg { margin-bottom: 0; margin-right: 4px; }
+.machine--master .seg__btn { min-width: 44px; }
+.fx__revlabel { margin-right: 6px; }

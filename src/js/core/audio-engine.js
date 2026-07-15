@@ -16,6 +16,10 @@ class AudioEngine {
     this.masterBus = null;
     /** @type {DynamicsCompressorNode|null} */
     this.limiter = null;
+    /** @type {GainNode|null}  Send-Bus zum Master-Delay (fx.js) */
+    this.delayBus = null;
+    /** @type {GainNode|null}  Send-Bus zum Master-Reverb (fx.js) */
+    this.reverbBus = null;
     this.unlocked = false;
   }
 
@@ -58,6 +62,12 @@ class AudioEngine {
 
     this.masterBus.connect(this.limiter);
     this.limiter.connect(ctx.destination);
+
+    // FX-Send-Busse: Maschinen docken hier zusätzlich an (Post-Fader).
+    // Die Effekt-Ketten dahinter baut js/core/fx.js in init() auf und
+    // führt sie zurück in den masterBus (→ läuft mit durch den Limiter).
+    this.delayBus = ctx.createGain();
+    this.reverbBus = ctx.createGain();
   }
 
   /** Aktuelle Audio-Zeit (Sekunden), 0 solange nicht entsperrt. */

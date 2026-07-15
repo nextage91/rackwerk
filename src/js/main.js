@@ -9,6 +9,7 @@ import { store } from './core/store.js';
 import { serializeProject, loadProject, importMachines } from './core/project.js';
 import { recorder } from './core/recorder.js';
 import { jamlink } from './core/jamlink.js';
+import { masterFX } from './core/fx.js';
 import { Rack } from './rack/rack.js';
 import { SubSynth } from './machines/subsynth.js';
 import { BeatBox } from './machines/beatbox.js';
@@ -37,6 +38,10 @@ $('#btn-unlock').addEventListener('click', async () => {
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
   const rack = new Rack($('#rack'), $('#machine-sheet'));
+
+  // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
+  masterFX.init();
+  $('#rack').appendChild(masterFX.render());
 
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
