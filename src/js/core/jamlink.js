@@ -61,13 +61,21 @@ export async function unpackSignal(code) {
   return JSON.parse(await new Response(stream).text());
 }
 
-/** Welche ICE-Kandidaten-Typen stecken im SDP? (Diagnose-Anzeige) */
-function candidateTypes(sdp) {
+/**
+ * Diagnose: Welche ICE-Kandidaten-Typen stecken im SDP, und sind die
+ * lokalen Adressen hinter mDNS-Namen (xyz.local) verdeckt? Verdeckte
+ * Adressen sind der Normalfall ohne Kamera-/Mikro-Freigabe — und genau
+ * deren Auflösung scheitert in vielen Netzen (v. a. Handy-Hotspots).
+ */
+function candidateInfo(sdp) {
   const types = new Set();
   for (const m of (sdp ?? '').matchAll(/a=candidate:\S+ \d+ \S+ \d+ \S+ \d+ typ (\w+)/g)) {
     types.add(m[1]);
   }
-  return [...types];
+  return {
+    types: [...types],
+    mdns: /a=candidate:[^\r\n]*\.local \d+ typ host/.test(sdp ?? ''),
+  };
 }
 
 class JamLink {
@@ -83,9 +91,10 @@ class JamLink {
     this.clockTimer = null;
     this.pingTimer = null;
     this.transportListener = null;
-    /** ICE-Kandidaten-Typen des eigenen Codes ('host','srflx','relay') —
-     *  nur 'host' + Fehlschlag deutet auf Client-Isolation im WLAN hin. */
-    this.localCandidateTypes = [];
+    /** Diagnose-Infos ({types, mdns}) für den eigenen und den
+     *  empfangenen Code — Basis der „Netzwerkwege"-Anzeige. */
+    this.localInfo = { types: [], mdns: false };
+    this.remoteInfo = null;
   }
 
   get supported() {
@@ -157,12 +166,14 @@ class JamLink {
     this.#wireChannel();
     await this.pc.setLocalDescription(await this.pc.createOffer());
     await this.#gathered();
-    this.localCandidateTypes = candidateTypes(this.pc.localDescription?.sdp);
+    this.localInfo = candidateInfo(this.pc.localDescription?.sdp);
     return packSignal(this.pc.localDescription);
   }
 
   async acceptAnswer(code) {
-    await this.pc.setRemoteDescription(await unpackSignal(code));
+    const answer = await unpackSignal(code);
+    this.remoteInfo = candidateInfo(answer.sdp);
+    await this.pc.setRemoteDescription(answer);
   }
 
   async createAnswer(offerCode) {
@@ -174,10 +185,12 @@ class JamLink {
       this.dc = e.channel;
       this.#wireChannel();
     };
-    await this.pc.setRemoteDescription(await unpackSignal(offerCode));
+    const offer = await unpackSignal(offerCode);
+    this.remoteInfo = candidateInfo(offer.sdp);
+    await this.pc.setRemoteDescription(offer);
     await this.pc.setLocalDescription(await this.pc.createAnswer());
     await this.#gathered();
-    this.localCandidateTypes = candidateTypes(this.pc.localDescription?.sdp);
+    this.localInfo = candidateInfo(this.pc.localDescription?.sdp);
     return packSignal(this.pc.localDescription);
   }
 
@@ -282,6 +295,8 @@ class JamLink {
     this.connected = false;
     this.offset = null;
     this.role = null;
+    this.localInfo = { types: [], mdns: false };
+    this.remoteInfo = null;
   }
 }
 

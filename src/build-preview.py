@@ -17,6 +17,7 @@ OUT = ROOT / "rackwerk-preview.html"
 MODULES = [
     ("js/ui/knob.js",           ["XKnob"]),
     ("js/vendor/qrcodegen.js",  ["qrcodegen"]),
+    ("js/vendor/jsqr.js",       ["jsQR"]),
     ("js/ui/qr.js",             ["drawQR"]),
     ("js/ui/step-seq.js",       ["StepSeq", "resizePattern"]),
     ("js/ui/keybed.js",         ["createKeybed"]),

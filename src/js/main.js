@@ -3,6 +3,7 @@
  */
 import './ui/knob.js';                       // registriert <x-knob>
 import { drawQR } from './ui/qr.js';
+import { jsQR } from './vendor/jsqr.js';
 import { engine } from './core/audio-engine.js';
 import { transport, STEPS_PER_BAR } from './core/transport.js';
 import { automation } from './core/automation.js';
@@ -317,24 +318,46 @@ function wireJamUI(rack) {
      der Host IN der App (sein RTCPeerConnection lebt in diesem Tab). */
   const joinURL = (code) => `${location.origin}${location.pathname}#jam=${code}`;
 
+  /* Diagnose: Netzwerkwege beider Seiten (aus den ICE-Kandidaten).
+     „verdeckt (mDNS)" heißt: Der Browser versteckt die lokale IP —
+     deren Auflösung scheitert in vielen Netzen (v. a. Hotspots). */
+  const NET_NAMES = { host: 'lokal', srflx: 'öffentlich (STUN)', relay: 'TURN-Relay' };
+  const netLabel = (info) =>
+    info.types.map((x) => NET_NAMES[x] ?? x).join(', ') +
+    (info.mdns ? ' [Adresse verdeckt/mDNS]' : '');
+  const renderNetInfo = () => {
+    const parts = [];
+    if (jamlink.localInfo?.types.length) parts.push('Eigene Wege: ' + netLabel(jamlink.localInfo));
+    if (jamlink.remoteInfo?.types.length) parts.push('Gegenseite: ' + netLabel(jamlink.remoteInfo));
+    netinfo.textContent = parts.join(' · ');
+    netinfo.hidden = parts.length === 0;
+  };
+
   const showOwnCode = (code) => {
     codeOut.value = code;
     const ok = drawQR(qrCanvas, jamlink.role === 'host' ? joinURL(code) : code);
     qrwrap.hidden = !ok;
     shareBtn.hidden = !navigator.share;
-    // Diagnose: Welche Netzwerkwege stecken im eigenen Code?
-    const t = jamlink.localCandidateTypes;
-    if (t.length) {
-      const names = { host: 'lokal', srflx: 'öffentlich (STUN)', relay: 'TURN-Relay' };
-      netinfo.textContent = 'Netzwerkwege: ' + t.map((x) => names[x] ?? x).join(', ') +
-        (t.includes('srflx') || t.includes('relay') ? '' :
-          ' — nur lokal! Verbindung klappt dann nur im selben WLAN, und nur wenn der Router Geräte untereinander reden lässt.');
-      netinfo.hidden = false;
-    }
+    renderNetInfo();
   };
   const clearOwnCode = () => {
     codeOut.value = '';
     qrwrap.hidden = netinfo.hidden = shareBtn.hidden = true;
+  };
+
+  /* Einmalig Kamera-Freigabe holen, BEVOR Offer/Answer entstehen:
+     Mit erteilter Freigabe schreiben die Browser echte lokale IPs statt
+     verdeckter mDNS-Namen in die Kandidaten — erst damit klappt die
+     Direktverbindung z. B. über den persönlichen Hotspot zuverlässig.
+     Abgelehnt? Dann läuft alles wie bisher weiter (mit mDNS). */
+  let mediaGranted = false;
+  const unlockNetwork = async () => {
+    if (mediaGranted || !navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: true });
+      s.getTracks().forEach((tr) => tr.stop());
+      mediaGranted = true;
+    } catch { /* abgelehnt — Diagnosezeile zeigt dann „verdeckt (mDNS)" */ }
   };
 
   /* ---------- QR-Scanner (BarcodeDetector, mit Einfüge-Fallback) ---------- */
@@ -350,28 +373,49 @@ function wireJamUI(rack) {
     scanBtn.textContent = 'QR scannen';
   };
 
+  // Frame prüfen: BarcodeDetector (Chrome u. a.), sonst jsQR (u. a. iOS Safari)
+  let scanDetector = null;
+  let grabCanvas = null;
+  const detectFrame = async () => {
+    if (scanDetector) {
+      const found = await scanDetector.detect(video);
+      return found[0]?.rawValue ?? null;
+    }
+    if (!video.videoWidth) return null;
+    grabCanvas ??= document.createElement('canvas');
+    const scale = Math.min(1, 640 / video.videoWidth);
+    grabCanvas.width = Math.round(video.videoWidth * scale);
+    grabCanvas.height = Math.round(video.videoHeight * scale);
+    const g = grabCanvas.getContext('2d', { willReadFrequently: true });
+    g.drawImage(video, 0, 0, grabCanvas.width, grabCanvas.height);
+    const img = g.getImageData(0, 0, grabCanvas.width, grabCanvas.height);
+    return jsQR(img.data, img.width, img.height)?.data ?? null;
+  };
+
   scanBtn.addEventListener('click', async () => {
     if (scanStream) { stopScan(); return; }
-    if (typeof BarcodeDetector === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       instructions.textContent =
-        'QR-Scannen kann dieser Browser nicht — Code unten einfügen ' +
-        '(oder den Host-QR mit der Kamera-App scannen).';
+        'Kamera-Zugriff kann dieser Browser nicht — Code unten einfügen.';
+      instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
       return;
     }
     try {
-      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      scanDetector = typeof BarcodeDetector !== 'undefined'
+        ? new BarcodeDetector({ formats: ['qr_code'] })
+        : null; // → jsQR-Fallback
       scanStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       });
+      mediaGranted = true;
       video.srcObject = scanStream;
       await video.play();
       scanBox.hidden = false;
       scanBtn.textContent = 'Scan stoppen';
       scanTimer = setInterval(async () => {
         try {
-          const found = await detector.detect(video);
-          if (found.length) {
-            const text = found[0].rawValue;
+          const text = await detectFrame();
+          if (text) {
             stopScan();
             applyCode(text);
           }
@@ -379,7 +423,9 @@ function wireJamUI(rack) {
       }, 250);
     } catch (err) {
       stopScan();
-      instructions.textContent = 'Kamera nicht verfügbar: ' + (err?.message ?? err);
+      instructions.textContent =
+        'Kamera nicht verfügbar (' + (err?.name ?? err) + ') — Code unten einfügen.';
+      instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
     }
   });
 
@@ -460,6 +506,7 @@ function wireJamUI(rack) {
       '1) Der andere scannt diesen QR mit der Kamera-App (oder du teilst den Link). ' +
       '2) Seinen Antwort-QR hier scannen — oder den Antwort-Code unten einfügen.';
     codeOut.value = 'Erzeuge Code …';
+    await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
     try { showOwnCode(await jamlink.createOffer()); } catch (err) { fail(err); }
   });
 
@@ -486,9 +533,11 @@ function wireJamUI(rack) {
     try {
       if (jamlink.pc && jamlink.role === 'host') {
         await jamlink.acceptAnswer(code);          // Host: Antwort einlesen
+        renderNetInfo();
         instructions.textContent = 'Antwort übernommen — Geräte verbinden sich …';
       } else {
         codeOut.value = 'Erzeuge Antwort-Code …';
+        await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
         showOwnCode(await jamlink.createAnswer(code)); // Gast: Antwort bauen
         instructions.textContent =
           'Diesen Antwort-QR vom Host scannen lassen — oder Code teilen/kopieren.';
