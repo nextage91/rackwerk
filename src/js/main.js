@@ -35,6 +35,16 @@ $('#btn-unlock').addEventListener('click', async () => {
   boot();
 });
 
+/* iOS pausiert den AudioContext beim App-Wechsel (Jam-Codes verschicken!)
+   und weckt ihn nicht selbst wieder auf. Symptom: Gast spielt, Host bleibt
+   stumm. Deshalb: bei Rückkehr in die App und bei jeder Berührung wieder
+   anwerfen — resume() ist idempotent und kostet im Normalfall nichts. */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) engine.resume();
+});
+window.addEventListener('focus', () => engine.resume());
+document.addEventListener('pointerdown', () => engine.resume(), true);
+
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
   const rack = new Rack($('#rack'), $('#machine-sheet'));

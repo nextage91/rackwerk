@@ -1626,6 +1626,19 @@ class AudioEngine {
     this.limiter.connect(this.analyser);
   }
 
+  /**
+   * Einen pausierten Context wiederbeleben. iOS hält den AudioContext an,
+   * wenn die App in den Hintergrund geht (z. B. Jam-Code per Messenger
+   * verschicken) — und startet ihn NICHT von selbst wieder. Zustand ist
+   * dann 'suspended' oder (iOS-eigen) 'interrupted'. Idempotent & billig:
+   * bei laufendem Context passiert nichts.
+   */
+  resume() {
+    if (this.ctx && this.ctx.state !== 'running') {
+      this.ctx.resume().catch(() => { /* nächste Geste versucht es erneut */ });
+    }
+  }
+
   /** Aktuelle Audio-Zeit (Sekunden), 0 solange nicht entsperrt. */
   get now() {
     return this.ctx ? this.ctx.currentTime : 0;
@@ -3951,6 +3964,16 @@ $('#btn-unlock').addEventListener('click', async () => {
   $('#unlock-overlay').hidden = true;
   boot();
 });
+
+/* iOS pausiert den AudioContext beim App-Wechsel (Jam-Codes verschicken!)
+   und weckt ihn nicht selbst wieder auf. Symptom: Gast spielt, Host bleibt
+   stumm. Deshalb: bei Rückkehr in die App und bei jeder Berührung wieder
+   anwerfen — resume() ist idempotent und kostet im Normalfall nichts. */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) engine.resume();
+});
+window.addEventListener('focus', () => engine.resume());
+document.addEventListener('pointerdown', () => engine.resume(), true);
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
