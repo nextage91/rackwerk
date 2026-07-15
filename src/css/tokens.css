@@ -4,38 +4,45 @@
    Alle Maße Touch-first (min. 44px Ziele, Apple/Android HIG).
    ============================================================ */
 :root {
-  /* --- Gehäuse & Flächen --- */
-  --bg-case:        #101216;   /* Rack-Gehäuse */
-  --bg-rail:        #0a0b0e;   /* Schienen zwischen Slots */
-  --bg-panel:       #232830;   /* Maschinen-Faceplate */
-  --bg-panel-deep:  #1a1e25;   /* vertiefte Bereiche (Keybed, Wannen) */
-  --bg-sheet:       #262b34;
+  /* --- Gehäuse & Flächen (warmes Charcoal statt kühlem Blaugrau —
+         Richtung TR-808/Moog-Gehäuse, nicht "Dark Mode") --- */
+  --bg-case:        #16120d;   /* Rack-Gehäuse */
+  --bg-rail:        #0c0a07;   /* Schienen zwischen Slots */
+  --bg-panel:       #292319;   /* Maschinen-Faceplate */
+  --bg-panel-deep:  #1d1812;   /* vertiefte Bereiche (Keybed, Wannen) */
+  --bg-sheet:       #2a241c;
 
   /* --- Linien & Kanten --- */
-  --edge-light:     rgba(255,255,255,.07);  /* obere Lichtkante */
+  --edge-light:     rgba(255,236,190,.08);  /* obere Lichtkante, warm */
   --edge-dark:      rgba(0,0,0,.55);        /* untere Schattenkante */
-  --screw:          #4a505b;
+  --screw:          #5a5140;
 
-  /* --- Text --- */
-  --ink:            #e8eaee;
-  --ink-dim:        #9aa1ad;
-  --ink-faint:      #5b6270;
+  /* --- Text (warmes Elfenbein statt kaltem Weiß) --- */
+  --ink:            #ece4d2;
+  --ink-dim:        #a89d85;
+  --ink-faint:      #6a6150;
 
   /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
   --lcd-bg:         #1c1204;
   --lcd-ink:        #ffb84d;
   --lcd-glow:       rgba(255,184,77,.35);
 
-  /* --- Maschinen-Akzentfarben (eine pro Maschinentyp) --- */
-  --m-subsynth:     #4dc3ff;
-  --m-beatbox:      #ff7a59;
-  --m-bassline:     #9dff4d;
-  --m-master:       #c9a2ff;
+  /* --- Maschinen-Akzentfarben (gedämpfte Vintage-Töne statt Neon) --- */
+  --m-subsynth:     #6fb8d6;
+  --m-beatbox:      #ff8c42;
+  --m-bassline:     #a4c96a;
+  --m-master:       #d8c9a3;
+
+  /* --- 808-Viertelmarkierung im Step-Sequenzer --- */
+  --g-red:          #e5484d;
+  --g-orange:       #ff8c42;
+  --g-yellow:       #f2c14e;
+  --g-cream:        #efe3c4;
 
   /* --- Status --- */
-  --led-off:        #3a2020;
-  --led-on:         #ff4d4d;
-  --led-play:       #66e07a;
+  --led-off:        #3a2a20;
+  --led-on:         #ff4d3d;
+  --led-play:       #7fd97a;
 
   /* --- Typografie (Systemfonts: offline-fähig für Capacitor) --- */
   --font-ui:   -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;

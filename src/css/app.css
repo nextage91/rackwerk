@@ -40,7 +40,7 @@ button {
   align-items: center;
   gap: 12px;
   padding: calc(8px + var(--safe-top)) 12px 8px;
-  background: linear-gradient(#2b313b, #1d222a);
+  background: linear-gradient(#322c23, #211c15);
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light) inset;
 }
@@ -88,7 +88,7 @@ button {
   display: grid;
   place-items: center;
   border-radius: var(--r-ctl);
-  background: linear-gradient(#3a414d, #262b34);
+  background: linear-gradient(#423b2e, #2a251c);
   box-shadow: var(--shadow-panel);
   font-size: 22px;
   color: var(--ink);
@@ -100,15 +100,28 @@ button {
 
 /* ===================== Rack ===================== */
 .rack {
+  --rail-w: 18px;
   flex: 1 1 auto;
   min-height: 0;                  /* erlaubt dem Scroll-Container zu schrumpfen */
   overflow-y: auto;               /* nur das Rack scrollt */
   -webkit-overflow-scrolling: touch;
-  padding: 14px 12px calc(24px + var(--safe-bottom));
+  padding: 14px calc(var(--rail-w) + 6px) calc(24px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 14px;
   background:
+    /* Montagelöcher in den Rack-Schienen (links + rechts) */
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      left top / var(--rail-w) 26px repeat-y,
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      right top / var(--rail-w) 26px repeat-y,
+    /* die Schienen selbst (Metallprofil) */
+    linear-gradient(90deg, #383127, #241f18 55%, #171310)
+      left top / var(--rail-w) 100% no-repeat,
+    linear-gradient(270deg, #383127, #241f18 55%, #171310)
+      right top / var(--rail-w) 100% no-repeat,
     repeating-linear-gradient(
       180deg,
       transparent 0 46px,
@@ -190,7 +203,7 @@ button {
   gap: 8px;
   padding: 28px 44px;
   border-radius: 16px;
-  background: linear-gradient(#3a414d, #262b34);
+  background: linear-gradient(#423b2e, #2a251c);
   box-shadow: var(--shadow-panel);
   font-size: 17px;
   font-weight: 600;

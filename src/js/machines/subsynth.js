@@ -19,7 +19,8 @@ export class SubSynth extends Machine {
     type: 'subsynth',
     name: 'SubSynth',
     desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
-    color: '#4dc3ff',
+    color: '#6fb8d6',
+    model: 'RW-01',
   };
 
   buildAudio() {
@@ -79,6 +80,7 @@ export class SubSynth extends Machine {
    */
   playNote(midi, time, dur) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    this.pulse(time);
     const ctx = engine.ctx;
     const p = this.params;
 
@@ -106,6 +108,7 @@ export class SubSynth extends Machine {
   /* ---------- Stimmenverwaltung ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    this.pulse();
     const ctx = engine.ctx;
     const t = ctx.currentTime;
     const p = this.params;

@@ -105,7 +105,7 @@ export class Machine {
 
   /* ---------- Faceplate ---------- */
   render() {
-    const { name, type, color } = this.constructor.meta;
+    const { name, type, color, model = 'RW-00' } = this.constructor.meta;
 
     const el = document.createElement('section');
     el.className = 'machine';
@@ -115,12 +115,13 @@ export class Machine {
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.08)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
         <div>
           <div class="machine__name">${name}</div>
-          <div class="machine__type">${type} · #${this.id}</div>
+          <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
         </div>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
@@ -188,7 +189,25 @@ export class Machine {
     }
 
     this.el = el;
+    this.ledEl = el.querySelector('[data-led]');
     return el;
+  }
+
+  #ledTimer;
+
+  /**
+   * Aktivitäts-LED kurz aufblitzen lassen — Maschinen rufen das bei jedem
+   * Trigger. `time` ist die geplante Audio-Zeit, damit die LED synchron
+   * zum hörbaren Klang blinkt (nicht zum Planungs-Zeitpunkt).
+   */
+  pulse(time = 0) {
+    if (!this.ledEl) return;
+    const delay = Math.max(0, (time - engine.now) * 1000);
+    setTimeout(() => {
+      this.ledEl.classList.add('is-on');
+      clearTimeout(this.#ledTimer);
+      this.#ledTimer = setTimeout(() => this.ledEl.classList.remove('is-on'), 90);
+    }, delay);
   }
 
   setMuted(muted) {

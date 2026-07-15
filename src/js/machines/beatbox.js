@@ -159,7 +159,8 @@ export class BeatBox extends Machine {
     type: 'beatbox',
     name: 'BeatBox',
     desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
-    color: '#ff7a59',
+    color: '#ff8c42',
+    model: 'RW-02',
   };
 
   buildAudio() {
@@ -227,6 +228,7 @@ export class BeatBox extends Machine {
   }
 
   #trigger(tr, time) {
+    this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime)
     tr.synth(engine.ctx, engine.quantizeTime(time), this.output, tr);

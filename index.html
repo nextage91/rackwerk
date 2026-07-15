@@ -17,38 +17,45 @@
    Alle Maße Touch-first (min. 44px Ziele, Apple/Android HIG).
    ============================================================ */
 :root {
-  /* --- Gehäuse & Flächen --- */
-  --bg-case:        #101216;   /* Rack-Gehäuse */
-  --bg-rail:        #0a0b0e;   /* Schienen zwischen Slots */
-  --bg-panel:       #232830;   /* Maschinen-Faceplate */
-  --bg-panel-deep:  #1a1e25;   /* vertiefte Bereiche (Keybed, Wannen) */
-  --bg-sheet:       #262b34;
+  /* --- Gehäuse & Flächen (warmes Charcoal statt kühlem Blaugrau —
+         Richtung TR-808/Moog-Gehäuse, nicht "Dark Mode") --- */
+  --bg-case:        #16120d;   /* Rack-Gehäuse */
+  --bg-rail:        #0c0a07;   /* Schienen zwischen Slots */
+  --bg-panel:       #292319;   /* Maschinen-Faceplate */
+  --bg-panel-deep:  #1d1812;   /* vertiefte Bereiche (Keybed, Wannen) */
+  --bg-sheet:       #2a241c;
 
   /* --- Linien & Kanten --- */
-  --edge-light:     rgba(255,255,255,.07);  /* obere Lichtkante */
+  --edge-light:     rgba(255,236,190,.08);  /* obere Lichtkante, warm */
   --edge-dark:      rgba(0,0,0,.55);        /* untere Schattenkante */
-  --screw:          #4a505b;
+  --screw:          #5a5140;
 
-  /* --- Text --- */
-  --ink:            #e8eaee;
-  --ink-dim:        #9aa1ad;
-  --ink-faint:      #5b6270;
+  /* --- Text (warmes Elfenbein statt kaltem Weiß) --- */
+  --ink:            #ece4d2;
+  --ink-dim:        #a89d85;
+  --ink-faint:      #6a6150;
 
   /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
   --lcd-bg:         #1c1204;
   --lcd-ink:        #ffb84d;
   --lcd-glow:       rgba(255,184,77,.35);
 
-  /* --- Maschinen-Akzentfarben (eine pro Maschinentyp) --- */
-  --m-subsynth:     #4dc3ff;
-  --m-beatbox:      #ff7a59;
-  --m-bassline:     #9dff4d;
-  --m-master:       #c9a2ff;
+  /* --- Maschinen-Akzentfarben (gedämpfte Vintage-Töne statt Neon) --- */
+  --m-subsynth:     #6fb8d6;
+  --m-beatbox:      #ff8c42;
+  --m-bassline:     #a4c96a;
+  --m-master:       #d8c9a3;
+
+  /* --- 808-Viertelmarkierung im Step-Sequenzer --- */
+  --g-red:          #e5484d;
+  --g-orange:       #ff8c42;
+  --g-yellow:       #f2c14e;
+  --g-cream:        #efe3c4;
 
   /* --- Status --- */
-  --led-off:        #3a2020;
-  --led-on:         #ff4d4d;
-  --led-play:       #66e07a;
+  --led-off:        #3a2a20;
+  --led-on:         #ff4d3d;
+  --led-play:       #7fd97a;
 
   /* --- Typografie (Systemfonts: offline-fähig für Capacitor) --- */
   --font-ui:   -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
@@ -115,7 +122,7 @@ button {
   align-items: center;
   gap: 12px;
   padding: calc(8px + var(--safe-top)) 12px 8px;
-  background: linear-gradient(#2b313b, #1d222a);
+  background: linear-gradient(#322c23, #211c15);
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light) inset;
 }
@@ -163,7 +170,7 @@ button {
   display: grid;
   place-items: center;
   border-radius: var(--r-ctl);
-  background: linear-gradient(#3a414d, #262b34);
+  background: linear-gradient(#423b2e, #2a251c);
   box-shadow: var(--shadow-panel);
   font-size: 22px;
   color: var(--ink);
@@ -175,15 +182,28 @@ button {
 
 /* ===================== Rack ===================== */
 .rack {
+  --rail-w: 18px;
   flex: 1 1 auto;
   min-height: 0;                  /* erlaubt dem Scroll-Container zu schrumpfen */
   overflow-y: auto;               /* nur das Rack scrollt */
   -webkit-overflow-scrolling: touch;
-  padding: 14px 12px calc(24px + var(--safe-bottom));
+  padding: 14px calc(var(--rail-w) + 6px) calc(24px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 14px;
   background:
+    /* Montagelöcher in den Rack-Schienen (links + rechts) */
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      left top / var(--rail-w) 26px repeat-y,
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      right top / var(--rail-w) 26px repeat-y,
+    /* die Schienen selbst (Metallprofil) */
+    linear-gradient(90deg, #383127, #241f18 55%, #171310)
+      left top / var(--rail-w) 100% no-repeat,
+    linear-gradient(270deg, #383127, #241f18 55%, #171310)
+      right top / var(--rail-w) 100% no-repeat,
     repeating-linear-gradient(
       180deg,
       transparent 0 46px,
@@ -265,7 +285,7 @@ button {
   gap: 8px;
   padding: 28px 44px;
   border-radius: 16px;
-  background: linear-gradient(#3a414d, #262b34);
+  background: linear-gradient(#423b2e, #2a251c);
   box-shadow: var(--shadow-panel);
   font-size: 17px;
   font-weight: 600;
@@ -430,32 +450,45 @@ button {
 
 /* ===================== Maschinen-Faceplate ===================== */
 .machine {
-  border-radius: var(--r-panel);
-  background: linear-gradient(#272d36, var(--bg-panel-deep));
+  border-radius: 6px;   /* Rack-Gerät: kantiger als ein Software-Panel */
+  background:
+    /* gebürstetes Metall: feine vertikale Riefen */
+    repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px),
+    /* Faceplate im Farbton der Maschine lackiert */
+    linear-gradient(var(--m-color-tint, transparent), var(--m-color-tint, transparent)),
+    linear-gradient(#2e2921, var(--bg-panel-deep));
   box-shadow: var(--shadow-panel);
   overflow: hidden;
   position: relative;
 }
-/* dekorative Rackschrauben in den Ecken */
-.machine::before, .machine::after {
+/* Rackschrauben in allen vier Ecken (oben via .machine, unten via
+   .machine__body — Pseudo-Elemente positionieren sich am .machine).
+   Jeder Schlitz ist anders gedreht: kein Roboter hat das Rack verschraubt. */
+.machine::before, .machine::after,
+.machine__body::before, .machine__body::after {
   content: "";
   position: absolute;
-  top: 14px;
-  width: 9px; height: 9px;
+  width: 11px; height: 11px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #6a7280, var(--screw) 60%, #20242b);
-  box-shadow: 0 1px 1px rgba(0,0,0,.7);
+  background:
+    var(--screw-slot, linear-gradient(50deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%)),
+    radial-gradient(circle at 35% 30%, #8a8170, var(--screw) 55%, #211c15);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,.7),
+    0 0 0 2px rgba(0,0,0,.35);
   pointer-events: none;
 }
-.machine::before { left: 10px; }
-.machine::after  { right: 10px; }
+.machine::before      { top: 12px; left: 9px; }
+.machine::after       { top: 12px; right: 9px; --screw-slot: linear-gradient(115deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
+.machine__body::before { bottom: 9px; left: 9px; --screw-slot: linear-gradient(20deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
+.machine__body::after  { bottom: 9px; right: 9px; --screw-slot: linear-gradient(160deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
 
 /* Kopfzeile */
 .machine__head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 28px;
+  padding: 8px 24px;
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light);
 }
@@ -468,14 +501,34 @@ button {
 }
 .machine__name {
   font-weight: 700;
-  font-size: 14px;
-  letter-spacing: .08em;
+  font-size: 13px;
+  letter-spacing: .06em;
   text-transform: uppercase;
+  /* graviert: dunkle Kante oben, Lichtkante unten */
+  text-shadow: 0 -1px 0 rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.08);
 }
 .machine__type {
-  font-size: 11px;
+  font-family: var(--font-lcd);   /* Typenschild-Optik */
+  font-size: 10px;
   color: var(--ink-dim);
-  letter-spacing: .04em;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+/* Aktivitäts-LED: blitzt bei jedem Trigger in der Maschinenfarbe */
+.machine__led {
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #1a1610;
+  box-shadow:
+    0 0 3px rgba(0,0,0,.9) inset,
+    0 1px 0 rgba(255,255,255,.06);
+}
+.machine__led.is-on {
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 9px var(--m-color-glow, var(--lcd-glow));
 }
 .machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
 
@@ -484,7 +537,7 @@ button {
   min-height: 36px;
   padding: 0 10px;
   border-radius: 6px;
-  background: linear-gradient(#343b46, #23272f);
+  background: linear-gradient(#3a342b, #272219);
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   font-size: 12px;
   font-weight: 600;
@@ -513,6 +566,10 @@ x-knob {
   width: calc(var(--knob-size) + 12px);
   padding: 4px 0;
   touch-action: none;               /* Drag gehört dem Knob, nicht dem Scroll */
+  /* eigener Stacking-Context: der Metallring (z-index -1 am Dial)
+     bleibt so ÜBER der Faceplate statt hinter ihr zu verschwinden */
+  position: relative;
+  z-index: 0;
 }
 .knob__dial {
   width: var(--knob-size);
@@ -520,11 +577,34 @@ x-knob {
   border-radius: 50%;
   position: relative;
   background:
-    radial-gradient(circle at 30% 28%, #4a525f, #262b33 70%);
+    radial-gradient(circle at 30% 28%, #514a3c, #2a251d 70%);
   box-shadow:
     0 2px 0 var(--edge-light) inset,
     0 -3px 6px rgba(0,0,0,.5) inset,
     0 4px 10px rgba(0,0,0,.55);
+}
+/* gedrehter Metallring um den Knob (Hardware-Poti-Fassung) */
+.knob__dial::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  z-index: -1;
+  background: conic-gradient(
+    #665e4d, #2a251e 18%, #524b3c 33%, #231e17 52%,
+    #5f5745 68%, #26211a 85%, #665e4d);
+  box-shadow: 0 2px 4px rgba(0,0,0,.6);
+}
+/* Mittelkappe wie eine Poti-Achse */
+.knob__dial::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 16px; height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #645c4a, #302a21 65%, #201b14);
+  box-shadow: 0 1px 2px rgba(0,0,0,.65);
 }
 .knob__pointer {
   position: absolute;
@@ -532,15 +612,19 @@ x-knob {
   width: 4px; height: 40%;
   margin-left: -2px;
   border-radius: 2px;
-  background: var(--m-color, var(--lcd-ink));
+  /* Creme-Zeiger wie auf alten Moog/808-Potis — die Maschinenfarbe
+     bleibt Stripe, LED und Grid vorbehalten */
+  background: #f0e6cf;
   transform-origin: 50% calc(var(--knob-size) / 2 - 6px);
-  box-shadow: 0 0 6px var(--m-color-glow, var(--lcd-glow));
+  box-shadow: 0 0 5px rgba(240,230,207,.3);
 }
 .knob__label {
   font-size: 10px;
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--ink-dim);
+  /* Siebdruck auf Metall: feine Lichtkante unter der Schrift */
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 .knob__value {
   font-family: var(--font-lcd);
@@ -565,13 +649,13 @@ x-knob {
 .key {
   flex: 1 1 0;
   border-radius: 5px;
-  background: linear-gradient(#f0f1f3, #c9ccd2);
+  background: linear-gradient(#f3efe2, #d1cbbb);
   box-shadow: 0 -3px 0 rgba(0,0,0,.25) inset;
   position: relative;
 }
 .key--black {
   flex: .7 1 0;
-  background: linear-gradient(#3a3f48, #14161a);
+  background: linear-gradient(#363028, #151210);
   box-shadow: 0 -3px 0 rgba(0,0,0,.6) inset;
 }
 .key.is-down {
@@ -609,7 +693,7 @@ x-knob {
 .cell {
   min-height: 52px;
   border-radius: 6px;
-  background: #2b313b;                   /* deutlich heller als die Wanne */
+  background: #332d23;                   /* deutlich heller als die Wanne */
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   display: grid;
   place-items: center;
@@ -628,6 +712,21 @@ x-knob {
   border-radius: 50%;
   background: var(--ink-faint);
 }
+/* 808-Viertelmarkierung: Rot / Orange / Gelb / Creme je Beat-Gruppe —
+   Hommage an die TR-808-Lauflicht-Reihe, hilft nebenbei der Orientierung */
+.cell::after {
+  content: "";
+  position: absolute;
+  left: 8px; right: 8px; bottom: 5px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--g-col, transparent);
+  opacity: .75;
+}
+.cell:nth-child(-n+4)                 { --g-col: var(--g-red); }
+.cell:nth-child(n+5):nth-child(-n+8)  { --g-col: var(--g-orange); }
+.cell:nth-child(n+9):nth-child(-n+12) { --g-col: var(--g-yellow); }
+.cell:nth-child(n+13)                 { --g-col: var(--g-cream); }
 .cell.is-on {
   background: var(--m-color-dim, rgba(77,195,255,.22));
   color: var(--m-color, var(--m-subsynth));
@@ -651,7 +750,7 @@ x-knob {
 .pad {
   min-height: 56px;
   border-radius: 8px;
-  background: linear-gradient(#333a45, #22262e);
+  background: linear-gradient(#3b342a, #262017);
   box-shadow: var(--shadow-panel);
   font-size: 12px;
   font-weight: 600;
@@ -736,12 +835,13 @@ x-knob.has-auto .knob__dial::after {
   text-transform: uppercase;
   color: var(--ink-dim);
   margin-right: 4px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 .seg__btn {
   min-width: 52px;
   min-height: 40px;
   border-radius: 6px;
-  background: linear-gradient(#343b46, #23272f);
+  background: linear-gradient(#3a342b, #272219);
   color: var(--ink-dim);
   font-size: 12px;
   font-weight: 700;
@@ -769,6 +869,7 @@ x-knob.has-auto .knob__dial::after {
   text-transform: uppercase;
   color: var(--ink-dim);
   margin-right: 2px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */
@@ -1901,17 +2002,18 @@ class MasterFX {
     const el = document.createElement('section');
     el.className = 'machine machine--master';
     el.id = 'master-fx';
-    const color = '#8fd3ff';
+    const color = '#d8c9a3';
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.08)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
         <div>
           <div class="machine__name">Master FX</div>
-          <div class="machine__type">delay + reverb · sends</div>
+          <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
       </header>
       <div class="machine__body">
@@ -2696,7 +2798,7 @@ class Machine {
 
   /* ---------- Faceplate ---------- */
   render() {
-    const { name, type, color } = this.constructor.meta;
+    const { name, type, color, model = 'RW-00' } = this.constructor.meta;
 
     const el = document.createElement('section');
     el.className = 'machine';
@@ -2706,12 +2808,13 @@ class Machine {
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.08)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
         <div>
           <div class="machine__name">${name}</div>
-          <div class="machine__type">${type} · #${this.id}</div>
+          <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
         </div>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
@@ -2779,7 +2882,25 @@ class Machine {
     }
 
     this.el = el;
+    this.ledEl = el.querySelector('[data-led]');
     return el;
+  }
+
+  #ledTimer;
+
+  /**
+   * Aktivitäts-LED kurz aufblitzen lassen — Maschinen rufen das bei jedem
+   * Trigger. `time` ist die geplante Audio-Zeit, damit die LED synchron
+   * zum hörbaren Klang blinkt (nicht zum Planungs-Zeitpunkt).
+   */
+  pulse(time = 0) {
+    if (!this.ledEl) return;
+    const delay = Math.max(0, (time - engine.now) * 1000);
+    setTimeout(() => {
+      this.ledEl.classList.add('is-on');
+      clearTimeout(this.#ledTimer);
+      this.#ledTimer = setTimeout(() => this.ledEl.classList.remove('is-on'), 90);
+    }, delay);
   }
 
   setMuted(muted) {
@@ -2832,7 +2953,8 @@ class SubSynth extends Machine {
     type: 'subsynth',
     name: 'SubSynth',
     desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
-    color: '#4dc3ff',
+    color: '#6fb8d6',
+    model: 'RW-01',
   };
 
   buildAudio() {
@@ -2892,6 +3014,7 @@ class SubSynth extends Machine {
    */
   playNote(midi, time, dur) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    this.pulse(time);
     const ctx = engine.ctx;
     const p = this.params;
 
@@ -2919,6 +3042,7 @@ class SubSynth extends Machine {
   /* ---------- Stimmenverwaltung ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    this.pulse();
     const ctx = engine.ctx;
     const t = ctx.currentTime;
     const p = this.params;
@@ -3203,7 +3327,8 @@ class BeatBox extends Machine {
     type: 'beatbox',
     name: 'BeatBox',
     desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
-    color: '#ff7a59',
+    color: '#ff8c42',
+    model: 'RW-02',
   };
 
   buildAudio() {
@@ -3271,6 +3396,7 @@ class BeatBox extends Machine {
   }
 
   #trigger(tr, time) {
+    this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime)
     tr.synth(engine.ctx, engine.quantizeTime(time), this.output, tr);
@@ -3429,7 +3555,8 @@ class PercSynth extends Machine {
     type: 'percsynth',
     name: 'PercSynth',
     desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
-    color: '#ffd24d',
+    color: '#e3bf5a',
+    model: 'RW-03',
   };
 
   buildAudio() {
@@ -3482,6 +3609,7 @@ class PercSynth extends Machine {
   /* ---------- Stimme (fire-and-forget) ---------- */
   playNote(midi, time) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    this.pulse(time);
     const ctx = engine.ctx;
     const p = this.params;
     const f = midiToHz(midi);
