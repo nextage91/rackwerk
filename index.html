@@ -15507,10 +15507,18 @@ function wireJamUI(rack) {
     } else if (event === 'connecting') {
       instructions.textContent = 'Codes ausgetauscht — Geräte verbinden sich …';
     } else if (event === 'failed') {
-      instructions.textContent =
-        'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ' +
-        'Am zuverlässigsten klappt es, wenn beide im selben WLAN sind — ' +
-        'oder eines den persönlichen Hotspot des anderen nutzt. Dann neu versuchen.';
+      let msg = 'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ';
+      if (jamlink.remoteInfo?.mdns) {
+        msg += 'Die Gegenseite hat verdeckte Adressen [mDNS] — dort beim ' +
+          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+      } else if (jamlink.localInfo?.mdns) {
+        msg += 'Dieses Gerät hat verdeckte Adressen [mDNS] — beim Erstellen/' +
+          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+      } else {
+        msg += 'Am zuverlässigsten: beide im selben WLAN, oder einer im ' +
+          'persönlichen Hotspot des anderen. Dann neu versuchen. ';
+      }
+      instructions.textContent = msg;
     } else if (event === 'unstable') {
       status.textContent = 'Verbindung instabil — versuche wiederherzustellen …';
     } else if (event === 'closed') {
@@ -15579,13 +15587,21 @@ function wireJamUI(rack) {
 
   $('#btn-jam-apply').addEventListener('click', () => applyCode(codeIn.value));
 
-  /** Auto-Beitritt, wenn die App über eine #jam=…-URL geöffnet wurde. */
-  const joinWithCode = async (code) => {
+  /**
+   * Beitritt über eine #jam=…-URL (Kamera-Scan/geteilter Link).
+   * Bewusst NICHT vollautomatisch: Der Tipp auf »Übernehmen« ist eine
+   * echte Nutzergeste — nur dann zeigt der Browser die Kamera-Abfrage
+   * zuverlässig an, die die verdeckten mDNS-Adressen durch echte IPs
+   * ersetzt (ohne die scheitert die Direktverbindung, s. Hotspot-Test).
+   */
+  const joinWithCode = (code) => {
     show('setup');
     codeOut.hidden = codeIn.hidden = false;
     clearOwnCode();
-    instructions.textContent = 'Jam-Code erkannt — erstelle Antwort …';
-    await applyCode(code);
+    codeIn.value = code;
+    instructions.textContent =
+      'Jam-Einladung erkannt! Tippe auf »Übernehmen« — und erlaube danach ' +
+      'die Kamera-Abfrage: Sie schaltet die direkte Geräteverbindung frei.';
   };
 
   shareBtn.addEventListener('click', () => {
