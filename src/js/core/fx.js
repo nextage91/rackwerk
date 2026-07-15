@@ -172,12 +172,13 @@ class MasterFX {
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.05)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
         <div>
           <div class="machine__name">Master FX</div>
-          <div class="machine__type">delay + reverb · sends</div>
+          <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
       </header>
       <div class="machine__body">

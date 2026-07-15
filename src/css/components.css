@@ -4,32 +4,45 @@
 
 /* ===================== Maschinen-Faceplate ===================== */
 .machine {
-  border-radius: var(--r-panel);
-  background: linear-gradient(#272d36, var(--bg-panel-deep));
+  border-radius: 6px;   /* Rack-Gerät: kantiger als ein Software-Panel */
+  background:
+    /* gebürstetes Metall: feine vertikale Riefen */
+    repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px),
+    /* Faceplate im Farbton der Maschine lackiert */
+    linear-gradient(var(--m-color-tint, transparent), var(--m-color-tint, transparent)),
+    linear-gradient(#272d36, var(--bg-panel-deep));
   box-shadow: var(--shadow-panel);
   overflow: hidden;
   position: relative;
 }
-/* dekorative Rackschrauben in den Ecken */
-.machine::before, .machine::after {
+/* Rackschrauben in allen vier Ecken (oben via .machine, unten via
+   .machine__body — Pseudo-Elemente positionieren sich am .machine).
+   Jeder Schlitz ist anders gedreht: kein Roboter hat das Rack verschraubt. */
+.machine::before, .machine::after,
+.machine__body::before, .machine__body::after {
   content: "";
   position: absolute;
-  top: 14px;
-  width: 9px; height: 9px;
+  width: 11px; height: 11px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #6a7280, var(--screw) 60%, #20242b);
-  box-shadow: 0 1px 1px rgba(0,0,0,.7);
+  background:
+    var(--screw-slot, linear-gradient(50deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%)),
+    radial-gradient(circle at 35% 30%, #737d8b, var(--screw) 55%, #1c2026);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,.7),
+    0 0 0 2px rgba(0,0,0,.35);
   pointer-events: none;
 }
-.machine::before { left: 10px; }
-.machine::after  { right: 10px; }
+.machine::before      { top: 12px; left: 9px; }
+.machine::after       { top: 12px; right: 9px; --screw-slot: linear-gradient(115deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
+.machine__body::before { bottom: 9px; left: 9px; --screw-slot: linear-gradient(20deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
+.machine__body::after  { bottom: 9px; right: 9px; --screw-slot: linear-gradient(160deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%); }
 
 /* Kopfzeile */
 .machine__head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 28px;
+  padding: 8px 24px;
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light);
 }
@@ -42,14 +55,34 @@
 }
 .machine__name {
   font-weight: 700;
-  font-size: 14px;
-  letter-spacing: .08em;
+  font-size: 13px;
+  letter-spacing: .06em;
   text-transform: uppercase;
+  /* graviert: dunkle Kante oben, Lichtkante unten */
+  text-shadow: 0 -1px 0 rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.08);
 }
 .machine__type {
-  font-size: 11px;
+  font-family: var(--font-lcd);   /* Typenschild-Optik */
+  font-size: 10px;
   color: var(--ink-dim);
-  letter-spacing: .04em;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+/* Aktivitäts-LED: blitzt bei jedem Trigger in der Maschinenfarbe */
+.machine__led {
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #16191e;
+  box-shadow:
+    0 0 3px rgba(0,0,0,.9) inset,
+    0 1px 0 rgba(255,255,255,.06);
+}
+.machine__led.is-on {
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 9px var(--m-color-glow, var(--lcd-glow));
 }
 .machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
 
@@ -87,6 +120,10 @@ x-knob {
   width: calc(var(--knob-size) + 12px);
   padding: 4px 0;
   touch-action: none;               /* Drag gehört dem Knob, nicht dem Scroll */
+  /* eigener Stacking-Context: der Metallring (z-index -1 am Dial)
+     bleibt so ÜBER der Faceplate statt hinter ihr zu verschwinden */
+  position: relative;
+  z-index: 0;
 }
 .knob__dial {
   width: var(--knob-size);
@@ -99,6 +136,29 @@ x-knob {
     0 2px 0 var(--edge-light) inset,
     0 -3px 6px rgba(0,0,0,.5) inset,
     0 4px 10px rgba(0,0,0,.55);
+}
+/* gedrehter Metallring um den Knob (Hardware-Poti-Fassung) */
+.knob__dial::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  z-index: -1;
+  background: conic-gradient(
+    #5b6470, #262b32 18%, #4a525e 33%, #20242b 52%,
+    #565f6b 68%, #23272e 85%, #5b6470);
+  box-shadow: 0 2px 4px rgba(0,0,0,.6);
+}
+/* Mittelkappe wie eine Poti-Achse */
+.knob__dial::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 16px; height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #5b646f, #2b3038 65%, #1d2127);
+  box-shadow: 0 1px 2px rgba(0,0,0,.65);
 }
 .knob__pointer {
   position: absolute;
@@ -115,6 +175,8 @@ x-knob {
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--ink-dim);
+  /* Siebdruck auf Metall: feine Lichtkante unter der Schrift */
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 .knob__value {
   font-family: var(--font-lcd);
@@ -310,6 +372,7 @@ x-knob.has-auto .knob__dial::after {
   text-transform: uppercase;
   color: var(--ink-dim);
   margin-right: 4px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 .seg__btn {
   min-width: 52px;
@@ -343,6 +406,7 @@ x-knob.has-auto .knob__dial::after {
   text-transform: uppercase;
   color: var(--ink-dim);
   margin-right: 2px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */

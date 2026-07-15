@@ -100,15 +100,28 @@ button {
 
 /* ===================== Rack ===================== */
 .rack {
+  --rail-w: 18px;
   flex: 1 1 auto;
   min-height: 0;                  /* erlaubt dem Scroll-Container zu schrumpfen */
   overflow-y: auto;               /* nur das Rack scrollt */
   -webkit-overflow-scrolling: touch;
-  padding: 14px 12px calc(24px + var(--safe-bottom));
+  padding: 14px calc(var(--rail-w) + 6px) calc(24px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 14px;
   background:
+    /* Montagelöcher in den Rack-Schienen (links + rechts) */
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      left top / var(--rail-w) 26px repeat-y,
+    radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.65) 2.5px, rgba(255,255,255,.05) 3px, transparent 4.5px)
+      right top / var(--rail-w) 26px repeat-y,
+    /* die Schienen selbst (Metallprofil) */
+    linear-gradient(90deg, #2c323c, #1e232b 55%, #14181e)
+      left top / var(--rail-w) 100% no-repeat,
+    linear-gradient(270deg, #2c323c, #1e232b 55%, #14181e)
+      right top / var(--rail-w) 100% no-repeat,
     repeating-linear-gradient(
       180deg,
       transparent 0 46px,

@@ -28,6 +28,7 @@ export class PercSynth extends Machine {
     name: 'PercSynth',
     desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
     color: '#ffd24d',
+    model: 'RW-03',
   };
 
   buildAudio() {
@@ -80,6 +81,7 @@ export class PercSynth extends Machine {
   /* ---------- Stimme (fire-and-forget) ---------- */
   playNote(midi, time) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    this.pulse(time);
     const ctx = engine.ctx;
     const p = this.params;
     const f = midiToHz(midi);
