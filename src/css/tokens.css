@@ -1,0 +1,61 @@
+/* ============================================================
+   RackWerk — Design-Tokens
+   Look: dunkles Hardware-Rack, lackierte Faceplates, Amber-LCD.
+   Alle Maße Touch-first (min. 44px Ziele, Apple/Android HIG).
+   ============================================================ */
+:root {
+  /* --- Gehäuse & Flächen --- */
+  --bg-case:        #101216;   /* Rack-Gehäuse */
+  --bg-rail:        #0a0b0e;   /* Schienen zwischen Slots */
+  --bg-panel:       #232830;   /* Maschinen-Faceplate */
+  --bg-panel-deep:  #1a1e25;   /* vertiefte Bereiche (Keybed, Wannen) */
+  --bg-sheet:       #262b34;
+
+  /* --- Linien & Kanten --- */
+  --edge-light:     rgba(255,255,255,.07);  /* obere Lichtkante */
+  --edge-dark:      rgba(0,0,0,.55);        /* untere Schattenkante */
+  --screw:          #4a505b;
+
+  /* --- Text --- */
+  --ink:            #e8eaee;
+  --ink-dim:        #9aa1ad;
+  --ink-faint:      #5b6270;
+
+  /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
+  --lcd-bg:         #1c1204;
+  --lcd-ink:        #ffb84d;
+  --lcd-glow:       rgba(255,184,77,.35);
+
+  /* --- Maschinen-Akzentfarben (eine pro Maschinentyp) --- */
+  --m-subsynth:     #4dc3ff;
+  --m-beatbox:      #ff7a59;
+  --m-bassline:     #9dff4d;
+  --m-master:       #c9a2ff;
+
+  /* --- Status --- */
+  --led-off:        #3a2020;
+  --led-on:         #ff4d4d;
+  --led-play:       #66e07a;
+
+  /* --- Typografie (Systemfonts: offline-fähig für Capacitor) --- */
+  --font-ui:   -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-lcd:  "SF Mono", "Roboto Mono", "Cascadia Mono", ui-monospace, monospace;
+
+  /* --- Touch-Maße --- */
+  --tap-min:    44px;   /* kleinste Zielgröße */
+  --knob-size:  64px;
+  --key-h:      120px;
+
+  /* --- Radien & Schatten --- */
+  --r-panel:  10px;
+  --r-ctl:    8px;
+  --shadow-panel: 0 1px 0 var(--edge-light) inset,
+                  0 -1px 0 var(--edge-dark) inset,
+                  0 4px 14px rgba(0,0,0,.45);
+
+  /* --- Safe-Areas (Notch/Home-Indicator im Capacitor-WebView) --- */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+}

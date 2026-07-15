@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <!-- Capacitor-ready: kein Zoom, App-artiges Verhalten, Safe-Areas via viewport-fit -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#101216">
+  <!-- Als Home-Bildschirm-App: Vollbild ohne Safari-Leisten -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RackWerk">
+  <title>RackWerk — Groovebox</title>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+
+  <!-- ===== Transport-Leiste (fixiert oben) ===== -->
+  <header class="transport" id="transport">
+    <div class="transport__brand">
+      <span class="brand__mark">▦</span>
+      <span class="brand__name">RackWerk</span>
+    </div>
+    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projekte">PRJ</button>
+
+    <div class="transport__lcd" id="lcd">
+      <span class="lcd__bpm" id="lcd-bpm">120.0</span>
+      <span class="lcd__label">BPM</span>
+      <span class="lcd__pos" id="lcd-pos">1.1</span>
+    </div>
+
+    <div class="transport__controls">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Automation aufnehmen">●</button>
+      <button class="t-btn" id="btn-bpm-down" aria-label="Tempo verringern">−</button>
+      <button class="t-btn" id="btn-bpm-up" aria-label="Tempo erhöhen">+</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Wiedergabe starten">
+        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
+        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== Das Rack ===== -->
+  <main class="rack" id="rack">
+    <!-- Maschinen-Slots werden hier von js/rack/rack.js gerendert -->
+  </main>
+
+  <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
+  <div class="sheet" id="machine-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Maschine hinzufügen">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Maschine hinzufügen</h2>
+      <div class="sheet__list" id="machine-list">
+        <!-- Einträge kommen aus der Machine-Registry -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Projekte (Bottom Sheet) ===== -->
+  <div class="sheet" id="project-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Projekte">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Projekte</h2>
+      <div class="saverow">
+        <input class="saverow__input" id="project-name" placeholder="Projektname" maxlength="40">
+        <button class="m-btn saverow__btn" id="btn-save-project">Speichern</button>
+      </div>
+      <div class="sheet__list" id="project-list"></div>
+
+      <h3 class="sheet__sub">Datei</h3>
+      <div class="filerow">
+        <button class="m-btn" id="btn-export">Exportieren</button>
+        <button class="m-btn" id="btn-import-replace">Datei laden</button>
+        <button class="m-btn" id="btn-import-merge">Dazuladen</button>
+        <input type="file" id="file-input" accept="application/json,.json" hidden>
+      </div>
+
+      <h3 class="sheet__sub">Jam-Session (2 Geräte)</h3>
+      <div id="jam-idle">
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-host">Session erstellen</button>
+          <button class="m-btn" id="btn-jam-join">Beitreten</button>
+        </div>
+      </div>
+      <div id="jam-setup" hidden>
+        <p class="sheet__hint" id="jam-instructions"></p>
+        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Eigener Code erscheint hier …"></textarea>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-copy">Code kopieren</button>
+          <button class="m-btn" id="btn-jam-cancel">Abbrechen</button>
+        </div>
+        <textarea class="jam-code" id="jam-code-in" placeholder="Code des anderen Geräts hier einfügen …"></textarea>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-apply">Übernehmen</button>
+        </div>
+      </div>
+      <div id="jam-active" hidden>
+        <p class="sheet__hint" id="jam-status"></p>
+        <div class="filerow">
+          <button class="m-btn" id="btn-jam-send">Maschinen senden</button>
+          <button class="m-btn" id="btn-jam-leave">Trennen</button>
+        </div>
+      </div>
+
+      <h3 class="sheet__sub">Master-Aufnahme</h3>
+      <div class="recrow">
+        <button class="m-btn" id="btn-audio-rec">● Aufnahme starten</button>
+        <span class="recrow__time" id="rec-time" hidden>0:00</span>
+      </div>
+      <div id="rec-result"></div>
+
+      <p class="sheet__hint" id="project-hint" hidden>
+        ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
+      </p>
+    </div>
+  </div>
+
+  <!-- Audio-Freischaltung: mobile Browser & WebViews verlangen eine Nutzergeste -->
+  <div class="unlock" id="unlock-overlay">
+    <button class="unlock__btn" id="btn-unlock">
+      <span class="unlock__icon">▶</span>
+      <span>Tippen zum Starten</span>
+      <small>Audio wird aktiviert</small>
+    </button>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

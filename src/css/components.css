@@ -1,0 +1,331 @@
+/* ============================================================
+   RackWerk — Komponenten (Maschine, Knob, Keybed)
+   ============================================================ */
+
+/* ===================== Maschinen-Faceplate ===================== */
+.machine {
+  border-radius: var(--r-panel);
+  background: linear-gradient(#272d36, var(--bg-panel-deep));
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  position: relative;
+}
+/* dekorative Rackschrauben in den Ecken */
+.machine::before, .machine::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #6a7280, var(--screw) 60%, #20242b);
+  box-shadow: 0 1px 1px rgba(0,0,0,.7);
+  pointer-events: none;
+}
+.machine::before { left: 10px; }
+.machine::after  { right: 10px; }
+
+/* Kopfzeile */
+.machine__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--edge-dark);
+  box-shadow: 0 1px 0 var(--edge-light);
+}
+.machine__stripe {
+  width: 5px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 8px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.machine__name {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.machine__type {
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: .04em;
+}
+.machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.m-btn {
+  min-width: var(--tap-min);
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: linear-gradient(#343b46, #23272f);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  color: var(--ink-dim);
+  touch-action: manipulation;
+}
+.m-btn:active { transform: translateY(1px); }
+.m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
+.m-btn--remove { color: var(--ink-faint); }
+
+/* Bedienfeld der Maschine */
+.machine__body { padding: 14px 12px; }
+.machine__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 6px;
+  justify-content: flex-start;
+}
+
+/* ===================== Knob (x-knob) ===================== */
+x-knob {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: calc(var(--knob-size) + 12px);
+  padding: 4px 0;
+  touch-action: none;               /* Drag gehört dem Knob, nicht dem Scroll */
+}
+.knob__dial {
+  width: var(--knob-size);
+  height: var(--knob-size);
+  border-radius: 50%;
+  position: relative;
+  background:
+    radial-gradient(circle at 30% 28%, #4a525f, #262b33 70%);
+  box-shadow:
+    0 2px 0 var(--edge-light) inset,
+    0 -3px 6px rgba(0,0,0,.5) inset,
+    0 4px 10px rgba(0,0,0,.55);
+}
+.knob__pointer {
+  position: absolute;
+  left: 50%; top: 6px;
+  width: 4px; height: 40%;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--m-color, var(--lcd-ink));
+  transform-origin: 50% calc(var(--knob-size) / 2 - 6px);
+  box-shadow: 0 0 6px var(--m-color-glow, var(--lcd-glow));
+}
+.knob__label {
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.knob__value {
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  color: var(--lcd-ink);
+  min-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===================== Keybed (Test-Tastatur) ===================== */
+.keybed {
+  margin-top: 12px;
+  display: flex;
+  height: var(--key-h);
+  background: var(--bg-panel-deep);
+  border-radius: 8px;
+  padding: 6px;
+  gap: 3px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
+  touch-action: none;               /* Glissando statt Scroll */
+}
+.key {
+  flex: 1 1 0;
+  border-radius: 5px;
+  background: linear-gradient(#f0f1f3, #c9ccd2);
+  box-shadow: 0 -3px 0 rgba(0,0,0,.25) inset;
+  position: relative;
+}
+.key--black {
+  flex: .7 1 0;
+  background: linear-gradient(#3a3f48, #14161a);
+  box-shadow: 0 -3px 0 rgba(0,0,0,.6) inset;
+}
+.key.is-down {
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+
+/* ===================== Step-Sequenzer ===================== */
+.stepseq { margin-top: 12px; }
+
+.stepseq__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.stepseq__title {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.stepseq__grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr); /* 2 Reihen à 8 — auf Phones groß genug */
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0,0,0,.3);            /* vertiefte Wanne wie das Keybed */
+  box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
+  touch-action: none;                    /* Pitch-Drag statt Scroll */
+}
+
+.cell {
+  min-height: 52px;
+  border-radius: 6px;
+  background: #2b313b;                   /* deutlich heller als die Wanne */
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  color: var(--ink-faint);
+  position: relative;
+}
+/* Beat-Markierung (Step 1, 5, 9, 13) */
+.cell--beat::before {
+  content: "";
+  position: absolute;
+  top: 5px; left: 50%;
+  width: 5px; height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.cell.is-on {
+  background: var(--m-color-dim, rgba(77,195,255,.22));
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+.cell.is-on::before { background: currentColor; }
+.cell.is-play {
+  outline: 2px solid var(--lcd-ink);
+  outline-offset: -2px;
+}
+
+/* ===================== BeatBox-Pads ===================== */
+.pads {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  touch-action: manipulation;
+}
+.pad {
+  min-height: 56px;
+  border-radius: 8px;
+  background: linear-gradient(#333a45, #22262e);
+  box-shadow: var(--shadow-panel);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--ink-dim);
+}
+.pad:active {
+  filter: brightness(1.3);
+  transform: translateY(1px);
+}
+.pad.is-selected {
+  color: var(--m-color, var(--m-beatbox));
+  box-shadow: 0 0 0 2px var(--m-color, var(--m-beatbox)) inset,
+              var(--shadow-panel);
+}
+
+/* Knob mit aufgezeichneter Automation: rote LED am Reglerrand */
+x-knob.has-auto .knob__dial::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--led-on);
+  box-shadow: 0 0 6px var(--led-on);
+}
+
+/* Lösch-Chip für Automation (erscheint bei Long-Press auf einen Knob) */
+.auto-chip {
+  position: fixed;
+  z-index: 60;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  background: linear-gradient(#4a2222, #351717);
+  color: #ff8a8a;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+}
+@keyframes chip-in { from { transform: translateY(6px); opacity: 0; } }
+
+/* Solo-Zustände */
+.m-btn--solo.is-active {
+  color: #0f130f;
+  background: linear-gradient(#7fe28e, #4faf5f);
+}
+.pad.is-solo {
+  box-shadow: 0 0 0 2px var(--led-play) inset, var(--shadow-panel);
+}
+
+/* Hinweis bei neu aufgezeichneter Automation */
+.auto-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: linear-gradient(#4a2222, #351717);
+  color: #ff8a8a;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6);
+  animation: chip-in .15s ease-out;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
+.seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.seg__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 4px;
+}
+.seg__btn {
+  min-width: 52px;
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#343b46, #23272f);
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.seg__btn:active { transform: translateY(1px); }
+.seg__btn.is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 2px 4px rgba(0,0,0,.4);
+}
