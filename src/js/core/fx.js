@@ -167,12 +167,12 @@ class MasterFX {
     const el = document.createElement('section');
     el.className = 'machine machine--master';
     el.id = 'master-fx';
-    const color = '#8fd3ff';
+    const color = '#d8c9a3';
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
-    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.05)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.08)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>

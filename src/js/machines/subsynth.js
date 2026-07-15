@@ -19,7 +19,7 @@ export class SubSynth extends Machine {
     type: 'subsynth',
     name: 'SubSynth',
     desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
-    color: '#4dc3ff',
+    color: '#6fb8d6',
     model: 'RW-01',
   };
 

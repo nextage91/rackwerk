@@ -10,7 +10,7 @@
     repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px),
     /* Faceplate im Farbton der Maschine lackiert */
     linear-gradient(var(--m-color-tint, transparent), var(--m-color-tint, transparent)),
-    linear-gradient(#272d36, var(--bg-panel-deep));
+    linear-gradient(#2e2921, var(--bg-panel-deep));
   box-shadow: var(--shadow-panel);
   overflow: hidden;
   position: relative;
@@ -26,7 +26,7 @@
   border-radius: 50%;
   background:
     var(--screw-slot, linear-gradient(50deg, transparent 42%, rgba(8,10,13,.85) 45% 55%, transparent 58%)),
-    radial-gradient(circle at 35% 30%, #737d8b, var(--screw) 55%, #1c2026);
+    radial-gradient(circle at 35% 30%, #8a8170, var(--screw) 55%, #211c15);
   box-shadow:
     0 1px 2px rgba(0,0,0,.7),
     0 0 0 2px rgba(0,0,0,.35);
@@ -75,7 +75,7 @@
   margin-left: 6px;
   vertical-align: middle;
   border-radius: 50%;
-  background: #16191e;
+  background: #1a1610;
   box-shadow:
     0 0 3px rgba(0,0,0,.9) inset,
     0 1px 0 rgba(255,255,255,.06);
@@ -91,7 +91,7 @@
   min-height: 36px;
   padding: 0 10px;
   border-radius: 6px;
-  background: linear-gradient(#343b46, #23272f);
+  background: linear-gradient(#3a342b, #272219);
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   font-size: 12px;
   font-weight: 600;
@@ -131,7 +131,7 @@ x-knob {
   border-radius: 50%;
   position: relative;
   background:
-    radial-gradient(circle at 30% 28%, #4a525f, #262b33 70%);
+    radial-gradient(circle at 30% 28%, #514a3c, #2a251d 70%);
   box-shadow:
     0 2px 0 var(--edge-light) inset,
     0 -3px 6px rgba(0,0,0,.5) inset,
@@ -145,8 +145,8 @@ x-knob {
   border-radius: 50%;
   z-index: -1;
   background: conic-gradient(
-    #5b6470, #262b32 18%, #4a525e 33%, #20242b 52%,
-    #565f6b 68%, #23272e 85%, #5b6470);
+    #665e4d, #2a251e 18%, #524b3c 33%, #231e17 52%,
+    #5f5745 68%, #26211a 85%, #665e4d);
   box-shadow: 0 2px 4px rgba(0,0,0,.6);
 }
 /* Mittelkappe wie eine Poti-Achse */
@@ -157,7 +157,7 @@ x-knob {
   width: 16px; height: 16px;
   margin: -8px 0 0 -8px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #5b646f, #2b3038 65%, #1d2127);
+  background: radial-gradient(circle at 35% 30%, #645c4a, #302a21 65%, #201b14);
   box-shadow: 0 1px 2px rgba(0,0,0,.65);
 }
 .knob__pointer {
@@ -166,9 +166,11 @@ x-knob {
   width: 4px; height: 40%;
   margin-left: -2px;
   border-radius: 2px;
-  background: var(--m-color, var(--lcd-ink));
+  /* Creme-Zeiger wie auf alten Moog/808-Potis — die Maschinenfarbe
+     bleibt Stripe, LED und Grid vorbehalten */
+  background: #f0e6cf;
   transform-origin: 50% calc(var(--knob-size) / 2 - 6px);
-  box-shadow: 0 0 6px var(--m-color-glow, var(--lcd-glow));
+  box-shadow: 0 0 5px rgba(240,230,207,.3);
 }
 .knob__label {
   font-size: 10px;
@@ -201,13 +203,13 @@ x-knob {
 .key {
   flex: 1 1 0;
   border-radius: 5px;
-  background: linear-gradient(#f0f1f3, #c9ccd2);
+  background: linear-gradient(#f3efe2, #d1cbbb);
   box-shadow: 0 -3px 0 rgba(0,0,0,.25) inset;
   position: relative;
 }
 .key--black {
   flex: .7 1 0;
-  background: linear-gradient(#3a3f48, #14161a);
+  background: linear-gradient(#363028, #151210);
   box-shadow: 0 -3px 0 rgba(0,0,0,.6) inset;
 }
 .key.is-down {
@@ -245,7 +247,7 @@ x-knob {
 .cell {
   min-height: 52px;
   border-radius: 6px;
-  background: #2b313b;                   /* deutlich heller als die Wanne */
+  background: #332d23;                   /* deutlich heller als die Wanne */
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   display: grid;
   place-items: center;
@@ -264,6 +266,21 @@ x-knob {
   border-radius: 50%;
   background: var(--ink-faint);
 }
+/* 808-Viertelmarkierung: Rot / Orange / Gelb / Creme je Beat-Gruppe —
+   Hommage an die TR-808-Lauflicht-Reihe, hilft nebenbei der Orientierung */
+.cell::after {
+  content: "";
+  position: absolute;
+  left: 8px; right: 8px; bottom: 5px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--g-col, transparent);
+  opacity: .75;
+}
+.cell:nth-child(-n+4)                 { --g-col: var(--g-red); }
+.cell:nth-child(n+5):nth-child(-n+8)  { --g-col: var(--g-orange); }
+.cell:nth-child(n+9):nth-child(-n+12) { --g-col: var(--g-yellow); }
+.cell:nth-child(n+13)                 { --g-col: var(--g-cream); }
 .cell.is-on {
   background: var(--m-color-dim, rgba(77,195,255,.22));
   color: var(--m-color, var(--m-subsynth));
@@ -287,7 +304,7 @@ x-knob {
 .pad {
   min-height: 56px;
   border-radius: 8px;
-  background: linear-gradient(#333a45, #22262e);
+  background: linear-gradient(#3b342a, #262017);
   box-shadow: var(--shadow-panel);
   font-size: 12px;
   font-weight: 600;
@@ -378,7 +395,7 @@ x-knob.has-auto .knob__dial::after {
   min-width: 52px;
   min-height: 40px;
   border-radius: 6px;
-  background: linear-gradient(#343b46, #23272f);
+  background: linear-gradient(#3a342b, #272219);
   color: var(--ink-dim);
   font-size: 12px;
   font-weight: 700;

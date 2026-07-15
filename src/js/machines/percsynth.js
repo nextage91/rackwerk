@@ -27,7 +27,7 @@ export class PercSynth extends Machine {
     type: 'percsynth',
     name: 'PercSynth',
     desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
-    color: '#ffd24d',
+    color: '#e3bf5a',
     model: 'RW-03',
   };
 

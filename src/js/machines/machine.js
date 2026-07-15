@@ -115,7 +115,7 @@ export class Machine {
     el.style.setProperty('--m-color', color);
     el.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.22)`);
     el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
-    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.05)`);
+    el.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.08)`);
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>

@@ -159,7 +159,7 @@ export class BeatBox extends Machine {
     type: 'beatbox',
     name: 'BeatBox',
     desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
-    color: '#ff7a59',
+    color: '#ff8c42',
     model: 'RW-02',
   };
 
