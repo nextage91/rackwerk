@@ -32,6 +32,7 @@ js/
     recorder.js       Master-Summe als Audiodatei mitschneiden
     jamlink.js        2-Geräte-Sync: WebRTC-Clock (NTP-Abgleich, sanftes Nachziehen)
     transport.js      Lookahead-Scheduler (sample-genau), BPM, Steps, Loop-Phase
+    fx.js             Master-Effekte: Tempo-Delay + Faltungs-Reverb als Sends
     automation.js     Parameterfahrten aufnehmen (REC) und im Loop abspielen
   rack/
     rack.js           Maschinen-Registry, Slots, Hinzufügen/Entfernen

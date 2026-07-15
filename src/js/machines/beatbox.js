@@ -150,7 +150,9 @@ const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
 
 export class BeatBox extends Machine {
   getParamForKnob(key) {
-    return key === 'volume' ? this.volume : undefined;
+    // volume liegt hier nicht in params — alles andere (z. B. die
+    // FX-Sends) beantwortet die Basisklasse
+    return key === 'volume' ? this.volume : super.getParamForKnob(key);
   }
 
   static meta = {

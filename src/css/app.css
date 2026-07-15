@@ -318,4 +318,33 @@ button {
   color: var(--led-play);
   box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
 }
+/* Beat-Puls auf dem PRJ-Button: Sync-Feedback auch bei geschlossenem Sheet */
+.t-btn--prj.is-linked.is-beat {
+  box-shadow: 0 0 18px rgba(102,224,122,.95), var(--shadow-panel);
+}
+
+/* Beat-LED im Jam-Panel: sichtbarer Sync-Check (blinkt je Viertelnote) */
+.jam-beat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 6px;
+}
+.jam-beat__led {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--led-off);
+  box-shadow: 0 1px 3px rgba(0,0,0,.6) inset;
+}
+.jam-beat__led.is-on {
+  background: var(--led-play);
+  box-shadow: 0 0 14px rgba(102,224,122,.9);
+}
+.jam-beat__led.is-on.is-bar {
+  background: var(--lcd-ink);
+  box-shadow: 0 0 14px rgba(255,184,77,.9);
+}
+.jam-beat__hint { margin: 0; }
 .sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }

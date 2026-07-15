@@ -50,6 +50,19 @@ export class Machine {
     this.gate = engine.ctx.createGain();
     this.output.connect(this.gate);
     this.gate.connect(engine.masterBus);
+
+    /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
+     *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
+    this.sends = { delay: 0, reverb: 0 };
+    this.sendDelay = engine.ctx.createGain();
+    this.sendDelay.gain.value = 0;
+    this.sendReverb = engine.ctx.createGain();
+    this.sendReverb.gain.value = 0;
+    this.gate.connect(this.sendDelay);
+    this.sendDelay.connect(engine.delayBus);
+    this.gate.connect(this.sendReverb);
+    this.sendReverb.connect(engine.reverbBus);
+
     machines.add(this);
 
     /** @type {HTMLElement|null} */
@@ -65,8 +78,30 @@ export class Machine {
   disposeAudio() {}
   serialize() { return {}; }
   deserialize(_state) {}
-  /** Wert für einen Knob (data-p) — Basis: aus this.params. */
-  getParamForKnob(key) { return this.params?.[key]; }
+  /** Wert für einen Knob (data-p) — Basis: Sends, sonst aus this.params. */
+  getParamForKnob(key) {
+    if (key === 'sendDelay') return this.sends.delay;
+    if (key === 'sendReverb') return this.sends.reverb;
+    return this.params?.[key];
+  }
+
+  /* ---------- Master-FX-Sends ---------- */
+  setSend(which, value) {
+    this.sends[which] = value;
+    const node = which === 'delay' ? this.sendDelay : this.sendReverb;
+    node.gain.setTargetAtTime(value, engine.now, 0.01);
+  }
+
+  /** Beim Projekt-Laden: Werte setzen UND Knob-Stellungen nachziehen
+   *  (das Laden passiert nach render, der Sync-Lauf dort ist schon durch). */
+  setSends({ delay = 0, reverb = 0 } = {}) {
+    this.setSend('delay', delay);
+    this.setSend('reverb', reverb);
+    const dk = this.el?.querySelector('x-knob[data-p="sendDelay"]');
+    const rk = this.el?.querySelector('x-knob[data-p="sendReverb"]');
+    if (dk) dk.value = delay;
+    if (rk) rk.value = reverb;
+  }
 
   /* ---------- Faceplate ---------- */
   render() {
@@ -116,6 +151,21 @@ export class Machine {
 
     this.buildControls(el.querySelector('.machine__body'));
 
+    // Send-Regler zu den Master-Effekten — einheitlich unter jeder Maschine
+    const sendsRow = document.createElement('div');
+    sendsRow.className = 'machine__row machine__row--sends';
+    sendsRow.innerHTML = `
+      <span class="sends__label">FX</span>
+      <x-knob label="Delay" min="0" max="1" value="0" data-p="sendDelay" data-auto></x-knob>
+      <x-knob label="Reverb" min="0" max="1" value="0" data-p="sendReverb" data-auto></x-knob>
+    `;
+    sendsRow.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (key === 'sendDelay') this.setSend('delay', e.detail.value);
+      else if (key === 'sendReverb') this.setSend('reverb', e.detail.value);
+    });
+    el.querySelector('.machine__body').appendChild(sendsRow);
+
     // Knob-Stellungen mit dem (ggf. geladenen) Zustand synchronisieren —
     // die value-Attribute im Markup sind nur die Werks-Defaults
     for (const knob of el.querySelectorAll('x-knob[data-p]')) {
@@ -161,7 +211,12 @@ export class Machine {
     // Fade-out, dann trennen — vermeidet Klicks beim Entfernen
     const t = engine.now;
     this.gate.gain.setTargetAtTime(0, t, 0.02);
-    setTimeout(() => { this.output.disconnect(); this.gate.disconnect(); }, 120);
+    setTimeout(() => {
+      this.output.disconnect();
+      this.gate.disconnect();
+      this.sendDelay.disconnect();
+      this.sendReverb.disconnect();
+    }, 120);
     this.el?.remove();
   }
 }
