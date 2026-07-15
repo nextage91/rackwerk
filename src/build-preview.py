@@ -16,6 +16,8 @@ OUT = ROOT / "rackwerk-preview.html"
 # Reihenfolge = Abhängigkeitsreihenfolge; Werte = exportierte Namen
 MODULES = [
     ("js/ui/knob.js",           ["XKnob"]),
+    ("js/vendor/qrcodegen.js",  ["qrcodegen"]),
+    ("js/ui/qr.js",             ["drawQR"]),
     ("js/ui/step-seq.js",       ["StepSeq", "resizePattern"]),
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/store.js",        ["store"]),
@@ -25,7 +27,7 @@ MODULES = [
     ("js/core/fx.js",           ["masterFX"]),
     ("js/core/automation.js",   ["automation"]),
     ("js/core/recorder.js",     ["recorder"]),
-    ("js/core/jamlink.js",      ["jamlink"]),
+    ("js/core/jamlink.js",      ["jamlink", "packSignal", "unpackSignal"]),
     ("js/machines/machine.js",  ["Machine"]),
     ("js/machines/subsynth.js", ["SubSynth"]),
     ("js/machines/beatbox.js",  ["BeatBox"]),

@@ -2,6 +2,7 @@
  * main.js — verdrahtet Engine, Transport, Rack und die Transport-Leiste.
  */
 import './ui/knob.js';                       // registriert <x-knob>
+import { drawQR } from './ui/qr.js';
 import { engine } from './core/audio-engine.js';
 import { transport, STEPS_PER_BAR } from './core/transport.js';
 import { automation } from './core/automation.js';
@@ -71,7 +72,16 @@ function boot() {
 
   wireTransportUI();
   wireProjectUI(rack);
-  wireJamUI(rack);
+  const jam = wireJamUI(rack);
+
+  // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
+  // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
+  const jamCode = location.hash.match(/#jam=(.+)$/);
+  if (jamCode) {
+    history.replaceState(null, '', location.pathname + location.search);
+    $('#project-sheet').hidden = false;
+    jam.joinWithCode(jamCode[1]);
+  }
 
   // Autosave: alle 3 s den kompletten Zustand sichern
   setInterval(() => {
@@ -281,6 +291,13 @@ function wireJamUI(rack) {
   const status = $('#jam-status');
   const prjBtn = $('#btn-projects');
   const beatLed = $('#jam-beat-led');
+  const qrwrap = $('#jam-qrwrap');
+  const qrCanvas = $('#jam-qr');
+  const netinfo = $('#jam-netinfo');
+  const shareBtn = $('#btn-jam-share');
+  const scanBtn = $('#btn-jam-scan');
+  const scanBox = $('#jam-scan');
+  const video = $('#jam-video');
 
   const show = (phase) => {
     idle.hidden = phase !== 'idle';
@@ -292,6 +309,79 @@ function wireJamUI(rack) {
     console.error('Jam-Fehler:', err);
     instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
   };
+
+  /* ---------- QR-Austausch ----------
+     Host-QR enthält eine App-URL (#jam=Code): Der Gast scannt mit der
+     normalen Kamera-App, Safari öffnet RackWerk und tritt automatisch
+     bei. Der Antwort-QR des Gasts enthält den rohen Code — den scannt
+     der Host IN der App (sein RTCPeerConnection lebt in diesem Tab). */
+  const joinURL = (code) => `${location.origin}${location.pathname}#jam=${code}`;
+
+  const showOwnCode = (code) => {
+    codeOut.value = code;
+    const ok = drawQR(qrCanvas, jamlink.role === 'host' ? joinURL(code) : code);
+    qrwrap.hidden = !ok;
+    shareBtn.hidden = !navigator.share;
+    // Diagnose: Welche Netzwerkwege stecken im eigenen Code?
+    const t = jamlink.localCandidateTypes;
+    if (t.length) {
+      const names = { host: 'lokal', srflx: 'öffentlich (STUN)', relay: 'TURN-Relay' };
+      netinfo.textContent = 'Netzwerkwege: ' + t.map((x) => names[x] ?? x).join(', ') +
+        (t.includes('srflx') || t.includes('relay') ? '' :
+          ' — nur lokal! Verbindung klappt dann nur im selben WLAN, und nur wenn der Router Geräte untereinander reden lässt.');
+      netinfo.hidden = false;
+    }
+  };
+  const clearOwnCode = () => {
+    codeOut.value = '';
+    qrwrap.hidden = netinfo.hidden = shareBtn.hidden = true;
+  };
+
+  /* ---------- QR-Scanner (BarcodeDetector, mit Einfüge-Fallback) ---------- */
+  let scanStream = null;
+  let scanTimer = null;
+
+  const stopScan = () => {
+    clearInterval(scanTimer);
+    scanTimer = null;
+    scanStream?.getTracks().forEach((tr) => tr.stop());
+    scanStream = null;
+    scanBox.hidden = true;
+    scanBtn.textContent = 'QR scannen';
+  };
+
+  scanBtn.addEventListener('click', async () => {
+    if (scanStream) { stopScan(); return; }
+    if (typeof BarcodeDetector === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      instructions.textContent =
+        'QR-Scannen kann dieser Browser nicht — Code unten einfügen ' +
+        '(oder den Host-QR mit der Kamera-App scannen).';
+      return;
+    }
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      scanStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      video.srcObject = scanStream;
+      await video.play();
+      scanBox.hidden = false;
+      scanBtn.textContent = 'Scan stoppen';
+      scanTimer = setInterval(async () => {
+        try {
+          const found = await detector.detect(video);
+          if (found.length) {
+            const text = found[0].rawValue;
+            stopScan();
+            applyCode(text);
+          }
+        } catch { /* Frame nicht lesbar — weiter versuchen */ }
+      }, 250);
+    } catch (err) {
+      stopScan();
+      instructions.textContent = 'Kamera nicht verfügbar: ' + (err?.message ?? err);
+    }
+  });
 
   /* Beat-LED: blinkt auf jeder Viertelnote, Taktanfang in Orange.
      Beide Geräte nebeneinander → gleichzeitiges Blinken = Sync steht.
@@ -365,11 +455,12 @@ function wireJamUI(rack) {
     }
     show('setup');
     codeOut.hidden = codeIn.hidden = false;
+    clearOwnCode();
     instructions.textContent =
-      '1) Diesen Code ans andere Gerät schicken (dort: Beitreten → einfügen → Übernehmen). ' +
-      '2) Dessen Antwort-Code unten einfügen und Übernehmen.';
+      '1) Der andere scannt diesen QR mit der Kamera-App (oder du teilst den Link). ' +
+      '2) Seinen Antwort-QR hier scannen — oder den Antwort-Code unten einfügen.';
     codeOut.value = 'Erzeuge Code …';
-    try { codeOut.value = await jamlink.createOffer(); } catch (err) { fail(err); }
+    try { showOwnCode(await jamlink.createOffer()); } catch (err) { fail(err); }
   });
 
   $('#btn-jam-join').addEventListener('click', () => {
@@ -381,24 +472,49 @@ function wireJamUI(rack) {
     }
     show('setup');
     codeOut.hidden = codeIn.hidden = false;
+    clearOwnCode();
     instructions.textContent =
-      '1) Code des Hosts unten einfügen und Übernehmen. ' +
-      '2) Den hier erscheinenden Antwort-Code zurück an den Host schicken.';
-    codeOut.value = '';
+      '1) QR des Hosts scannen — oder seinen Code unten einfügen und Übernehmen. ' +
+      '2) Den Antwort-QR vom Host scannen lassen (oder Antwort-Code zurückschicken).';
   });
 
-  $('#btn-jam-apply').addEventListener('click', async () => {
-    const code = codeIn.value.trim();
+  const applyCode = async (raw) => {
+    let code = raw.trim();
+    // gescannte/geteilte App-URL → den eigentlichen Code herausziehen
+    if (code.includes('#jam=')) code = code.split('#jam=')[1];
     if (!code) return;
     try {
       if (jamlink.pc && jamlink.role === 'host') {
         await jamlink.acceptAnswer(code);          // Host: Antwort einlesen
+        instructions.textContent = 'Antwort übernommen — Geräte verbinden sich …';
       } else {
         codeOut.value = 'Erzeuge Antwort-Code …';
-        codeOut.value = await jamlink.createAnswer(code); // Gast: Antwort bauen
+        showOwnCode(await jamlink.createAnswer(code)); // Gast: Antwort bauen
+        instructions.textContent =
+          'Diesen Antwort-QR vom Host scannen lassen — oder Code teilen/kopieren.';
       }
       codeIn.value = '';
     } catch (err) { fail(err); }
+  };
+
+  $('#btn-jam-apply').addEventListener('click', () => applyCode(codeIn.value));
+
+  /** Auto-Beitritt, wenn die App über eine #jam=…-URL geöffnet wurde. */
+  const joinWithCode = async (code) => {
+    show('setup');
+    codeOut.hidden = codeIn.hidden = false;
+    clearOwnCode();
+    instructions.textContent = 'Jam-Code erkannt — erstelle Antwort …';
+    await applyCode(code);
+  };
+
+  shareBtn.addEventListener('click', () => {
+    const code = codeOut.value;
+    if (!code || !navigator.share) return;
+    const payload = jamlink.role === 'host'
+      ? { title: 'RackWerk Jam', url: joinURL(code) }
+      : { title: 'RackWerk Jam — Antwort-Code', text: code };
+    navigator.share(payload).catch(() => { /* Nutzer hat abgebrochen */ });
   });
 
   $('#btn-jam-copy').addEventListener('click', () => {
@@ -410,6 +526,8 @@ function wireJamUI(rack) {
 
   $('#btn-jam-cancel').addEventListener('click', () => {
     jamlink.close();
+    stopScan();
+    clearOwnCode();
     show('idle');
     stopBeatLed();
   });
@@ -420,9 +538,13 @@ function wireJamUI(rack) {
 
   $('#btn-jam-leave').addEventListener('click', () => {
     jamlink.close();
+    stopScan();
+    clearOwnCode();
     show('idle');
     stopBeatLed();
   });
+
+  return { joinWithCode };
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

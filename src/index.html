@@ -88,13 +88,22 @@
       </div>
       <div id="jam-setup" hidden>
         <p class="sheet__hint" id="jam-instructions"></p>
+        <div class="jam-qrwrap" id="jam-qrwrap" hidden>
+          <canvas class="jam-qr" id="jam-qr"></canvas>
+        </div>
+        <p class="sheet__hint jam-netinfo" id="jam-netinfo" hidden></p>
         <textarea class="jam-code" id="jam-code-out" readonly placeholder="Eigener Code erscheint hier …"></textarea>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-copy">Code kopieren</button>
+          <button class="m-btn" id="btn-jam-share" hidden>Teilen</button>
+          <button class="m-btn" id="btn-jam-copy">Kopieren</button>
           <button class="m-btn" id="btn-jam-cancel">Abbrechen</button>
+        </div>
+        <div id="jam-scan" hidden>
+          <video class="jam-video" id="jam-video" playsinline muted></video>
         </div>
         <textarea class="jam-code" id="jam-code-in" placeholder="Code des anderen Geräts hier einfügen …"></textarea>
         <div class="filerow">
+          <button class="m-btn" id="btn-jam-scan">QR scannen</button>
           <button class="m-btn" id="btn-jam-apply">Übernehmen</button>
         </div>
       </div>

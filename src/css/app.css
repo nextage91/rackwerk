@@ -311,6 +311,27 @@ button {
 .rec-share { margin: 10px 10px 0 0; min-height: 44px; padding: 0 14px; color: var(--led-play); }
 
 /* Jam-Session */
+/* QR-Austausch */
+.jam-qrwrap {
+  display: grid;
+  place-items: center;
+  padding: 10px 0 4px;
+}
+.jam-qr {
+  width: min(62vw, 260px);
+  height: auto;
+  image-rendering: pixelated;      /* scharfe Module statt Weichzeichner */
+  border-radius: 8px;
+}
+.jam-netinfo { margin: 4px 0 6px; }
+.jam-video {
+  width: 100%;
+  max-height: 46vh;
+  border-radius: var(--r-ctl);
+  background: #000;
+  margin: 8px 0;
+}
+
 .jam-code {
   width: 100%;
   min-height: 76px;
