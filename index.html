@@ -872,6 +872,31 @@ x-knob.has-auto .knob__dial::after {
   text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 
+/* ===================== VU-Meter (LED-Kette im Master-Header) ===================== */
+.vu {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(0,0,0,.4);           /* vertiefte Wanne */
+  box-shadow: 0 2px 4px rgba(0,0,0,.55) inset;
+}
+.vu__seg {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: #241f17;                  /* LED aus */
+  box-shadow: 0 1px 0 rgba(255,255,255,.04);
+}
+/* Farbstaffelung wie am Pult: 8× grün, 2× gelb, 2× rot */
+.vu__seg.is-lit                    { background: var(--led-play); box-shadow: 0 0 6px rgba(127,217,122,.55); }
+.vu__seg:nth-child(9).is-lit,
+.vu__seg:nth-child(10).is-lit      { background: var(--g-yellow); box-shadow: 0 0 6px rgba(242,193,78,.55); }
+.vu__seg:nth-child(11).is-lit,
+.vu__seg:nth-child(12).is-lit      { background: var(--led-on); box-shadow: 0 0 7px rgba(255,77,61,.6); }
+
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */
 .machine--master .fx__row { align-items: center; }
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
@@ -1543,6 +1568,8 @@ class AudioEngine {
     this.delayBus = null;
     /** @type {GainNode|null}  Send-Bus zum Master-Reverb (fx.js) */
     this.reverbBus = null;
+    /** @type {AnalyserNode|null}  Master-Abgriff fürs VU-Meter */
+    this.analyser = null;
     this.unlocked = false;
   }
 
@@ -1591,6 +1618,12 @@ class AudioEngine {
     // führt sie zurück in den masterBus (→ läuft mit durch den Limiter).
     this.delayBus = ctx.createGain();
     this.reverbBus = ctx.createGain();
+
+    // Abgriff für das VU-Meter — NACH dem Limiter, zeigt also das
+    // tatsächliche Ausgangssignal (reiner Tap, geht nirgendwo hin)
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 2048;
+    this.limiter.connect(this.analyser);
   }
 
   /** Aktuelle Audio-Zeit (Sekunden), 0 solange nicht entsperrt. */
@@ -2015,6 +2048,9 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
+        <div class="vu" data-vu aria-label="Master-Pegel">
+          ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
+        </div>
       </header>
       <div class="machine__body">
         <div class="machine__row fx__row">
@@ -2049,7 +2085,36 @@ class MasterFX {
 
     this.el = el;
     this.#syncUI();
+    this.#startVU();
     return el;
+  }
+
+  /* ---------- VU-Meter (LED-Kette am Limiter-Ausgang) ---------- */
+  #vuBuf;
+  #vuLit = -1;
+
+  #startVU() {
+    const analyser = engine.analyser;
+    const segs = this.el?.querySelectorAll('.vu__seg');
+    if (!analyser || !segs?.length || typeof analyser.getFloatTimeDomainData !== 'function') return;
+    this.#vuBuf = new Float32Array(analyser.fftSize);
+
+    const FLOOR_DB = -45; // Anzeigebereich: −45 dB … 0 dB
+    const tick = () => {
+      analyser.getFloatTimeDomainData(this.#vuBuf);
+      let sum = 0;
+      for (let i = 0; i < this.#vuBuf.length; i++) sum += this.#vuBuf[i] ** 2;
+      const rms = Math.sqrt(sum / this.#vuBuf.length);
+      const db = 20 * Math.log10(Math.max(1e-6, rms));
+      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * segs.length);
+
+      if (lit !== this.#vuLit) { // DOM nur anfassen, wenn sich etwas ändert
+        segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+        this.#vuLit = lit;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   }
 
   /** Regler und Notenwert-Buttons auf this.params stellen. */

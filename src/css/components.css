@@ -426,6 +426,31 @@ x-knob.has-auto .knob__dial::after {
   text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 
+/* ===================== VU-Meter (LED-Kette im Master-Header) ===================== */
+.vu {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(0,0,0,.4);           /* vertiefte Wanne */
+  box-shadow: 0 2px 4px rgba(0,0,0,.55) inset;
+}
+.vu__seg {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: #241f17;                  /* LED aus */
+  box-shadow: 0 1px 0 rgba(255,255,255,.04);
+}
+/* Farbstaffelung wie am Pult: 8× grün, 2× gelb, 2× rot */
+.vu__seg.is-lit                    { background: var(--led-play); box-shadow: 0 0 6px rgba(127,217,122,.55); }
+.vu__seg:nth-child(9).is-lit,
+.vu__seg:nth-child(10).is-lit      { background: var(--g-yellow); box-shadow: 0 0 6px rgba(242,193,78,.55); }
+.vu__seg:nth-child(11).is-lit,
+.vu__seg:nth-child(12).is-lit      { background: var(--led-on); box-shadow: 0 0 7px rgba(255,77,61,.6); }
+
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */
 .machine--master .fx__row { align-items: center; }
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
