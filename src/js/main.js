@@ -55,6 +55,17 @@ function boot() {
   masterFX.init();
   $('#rack').appendChild(masterFX.render());
 
+  // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
+  // ohne den Umweg über das Projekte-Sheet.
+  $('#rack').appendChild(buildRackShortcut({
+    icon: '🎚️', label: 'Mixer', color: '#7fd6a0',
+    onOpen: () => $('#btn-open-mixer').click(),
+  }));
+  $('#rack').appendChild(buildRackShortcut({
+    icon: '🎬', label: 'Song-Timeline', color: '#ff4d3d',
+    onOpen: () => $('#btn-open-song').click(),
+  }));
+
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
   const autosave = store.get('autosave');
@@ -93,6 +104,26 @@ function boot() {
       console.warn('Autosave fehlgeschlagen:', err);
     }
   }, 3000);
+}
+
+/** Kompaktes Rack-Modul, das nur einen bestehenden Öffnen-Mechanismus
+ *  antriggert (Mixer-/Song-Sheet) — dupliziert keine Logik, ruft nur
+ *  den Klick auf den jeweils schon verdrahteten Sheet-Öffner-Button. */
+function buildRackShortcut({ icon, label, color, onOpen }) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'machine rack-shortcut';
+  el.style.setProperty('--m-color', color);
+  el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+  el.innerHTML = `
+    <span class="machine__stripe"></span>
+    <span class="rack-shortcut__icon">${icon}</span>
+    <span class="rack-shortcut__label">${label}</span>
+    <span class="rack-shortcut__chev">›</span>
+  `;
+  el.addEventListener('click', onOpen);
+  return el;
 }
 
 /* ---------- Projekte-Sheet ---------- */
