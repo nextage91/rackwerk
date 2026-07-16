@@ -14,6 +14,7 @@ import { recorder } from './core/recorder.js';
 import { jamlink } from './core/jamlink.js';
 import { masterFX } from './core/fx.js';
 import { song } from './core/song.js';
+import { undo } from './core/undo.js';
 import { Rack } from './rack/rack.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -99,6 +100,7 @@ function boot() {
   const jam = wireJamUI(rack);
   wireSongUI(rack);
   wireMixerUI(rack);
+  wireUndoUI();
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -968,4 +970,32 @@ function wireTransportUI() {
   }, 120);
 
   lcdBpm.textContent = transport.bpm.toFixed(1);
+}
+
+/* ---------- Undo-Toast ---------- */
+/** Zeigt nach jeder destruktiven Aktion (Maschine entfernt, Pattern
+ *  geleert, …) kurz einen Toast mit Rückgängig-Button — behebt versehent-
+ *  liche Löschungen, ohne für jede Aktion eine Rückfrage einzubauen. */
+function wireUndoUI() {
+  let toastEl = null;
+  let hideTimer = null;
+
+  const hide = () => {
+    clearTimeout(hideTimer);
+    toastEl?.remove();
+    toastEl = null;
+  };
+
+  undo.onChange((entry) => {
+    hide();
+    if (!entry) return;
+    const el = document.createElement('div');
+    el.className = 'undo-toast';
+    el.innerHTML = `<span>${entry.label}</span>
+      <button type="button" class="undo-toast__btn" data-undo>Undo</button>`;
+    el.querySelector('[data-undo]').addEventListener('click', () => undo.trigger());
+    document.body.appendChild(el);
+    toastEl = el;
+    hideTimer = setTimeout(hide, 8000);
+  });
 }

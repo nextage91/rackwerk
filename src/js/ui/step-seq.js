@@ -11,6 +11,8 @@
  * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
  * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
  */
+import { undo } from '../core/undo.js';
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const noteLabel = (midi) => NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
 
@@ -60,9 +62,16 @@ export class StepSeq {
     }
 
     this.el.querySelector('[data-clear]').addEventListener('click', () => {
+      const snapshot = this.pattern.map((st) => ({ ...st }));
+      if (snapshot.every((st) => !st.on)) return; // schon leer — kein Undo nötig
       for (const st of this.pattern) st.on = false;
       this.#renderAll();
       this.onChange?.();
+      undo.offer('Pattern cleared', () => {
+        snapshot.forEach((st, i) => { if (this.pattern[i]) Object.assign(this.pattern[i], st); });
+        this.#renderAll();
+        this.onChange?.();
+      });
     });
 
     this.el.querySelectorAll('[data-page]').forEach((btn) =>

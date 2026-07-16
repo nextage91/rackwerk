@@ -553,6 +553,38 @@ x-knob.has-auto .knob__dial::after {
   white-space: nowrap;
 }
 
+/* Undo-Toast: erscheint nach destruktiven Aktionen (Maschine entfernt,
+   Pattern geleert, …) mit direktem Rückgängig-Button. */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 22px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+  white-space: nowrap;
+}
+.undo-toast__btn {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  background: linear-gradient(#7fe28e, #4faf5f);
+  color: #0f130f;
+  font-size: 13px;
+  font-weight: 700;
+}
+.undo-toast__btn:active { transform: translateY(1px); }
+
 /* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
 .seg {
   display: flex;
