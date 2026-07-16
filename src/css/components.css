@@ -280,8 +280,36 @@ x-fader {
 }
 
 /* ===================== Keybed (Test-Tastatur) ===================== */
+.keybed-wrap { margin-top: 12px; }
+.keybed__oct {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.keybed__oct-btn {
+  min-width: var(--tap-min);
+  min-height: 36px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--ink-dim);
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.keybed__oct-btn:active { transform: translateY(1px); }
+.keybed__oct-btn:disabled { opacity: .35; }
+.keybed__oct-label {
+  min-width: 34px;
+  text-align: center;
+  font-family: var(--font-lcd);
+  font-size: 13px;
+  color: var(--lcd-ink);
+  font-variant-numeric: tabular-nums;
+}
 .keybed {
-  margin-top: 12px;
   display: flex;
   height: var(--key-h);
   background: var(--bg-panel-deep);
