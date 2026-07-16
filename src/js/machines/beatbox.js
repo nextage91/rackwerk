@@ -180,10 +180,26 @@ export class BeatBox extends Machine {
     // als Multiplikator in der Hüllkurve, siehe Drum-Synthese oben) gibt es
     // für Panorama keine "Stelle im Code", an der man ansetzen könnte, ohne
     // echte Audio-Nodes: jeder Trigger muss durch die Spur-eigene Node.
+    // Jede Spur bekommt zusätzlich ihre eigenen Send-Gains zu Delay/Reverb —
+    // parallel zum trockenen Pfad (panner -> this.output), nicht dahinter.
+    // Dadurch bleiben Spur-Sends unabhängig von Mute/Solo der Maschine
+    // (bewusst: ein gemuteter Kit-Bus soll trotzdem noch in den Effekt
+    // "nachklingen" können, wie bei einem Send-Only-Trick am echten Pult).
     this.tracks = TRACK_DEFS.map((def) => {
       const panner = engine.ctx.createStereoPanner();
       panner.connect(this.output);
-      return { ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner };
+      const sendDelayNode = engine.ctx.createGain();
+      sendDelayNode.gain.value = 0;
+      panner.connect(sendDelayNode);
+      sendDelayNode.connect(engine.delayBus);
+      const sendReverbNode = engine.ctx.createGain();
+      sendReverbNode.gain.value = 0;
+      panner.connect(sendReverbNode);
+      sendReverbNode.connect(engine.reverbBus);
+      return {
+        ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner,
+        sendDelay: 0, sendReverb: 0, sendDelayNode, sendReverbNode,
+      };
     });
 
     // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
@@ -236,6 +252,7 @@ export class BeatBox extends Machine {
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
         tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
+        sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
@@ -255,6 +272,13 @@ export class BeatBox extends Machine {
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
       this.setTrackPan(i, saved.pan ?? 0);
+      // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
+      // buildControls) — direkt an Feld + Gain-Node schreiben statt über
+      // setTrackSend, das erst nach dem Rendern sicher aufrufbar ist.
+      tr.sendDelay = saved.sendDelay ?? 0;
+      tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
+      tr.sendReverb = saved.sendReverb ?? 0;
+      tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
     });
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
@@ -290,6 +314,8 @@ export class BeatBox extends Machine {
     for (const tr of this.tracks) {
       tr.panner.disconnect();
       tr.meterAnalyser?.disconnect();
+      tr.sendDelayNode.disconnect();
+      tr.sendReverbNode.disconnect();
     }
   }
 
@@ -329,6 +355,19 @@ export class BeatBox extends Machine {
     tr.panner.pan.setTargetAtTime(tr.pan, engine.now, 0.01);
   }
 
+  /** which: 'delay' | 'reverb' — eigener Send je Drum-Spur, unabhängig vom
+   *  Kit-weiten Send der Maschine (Machine.setSend). */
+  setTrackSend(i, which, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    v = Math.min(1, Math.max(0, v));
+    const key = which === 'delay' ? 'sendDelay' : 'sendReverb';
+    const node = which === 'delay' ? tr.sendDelayNode : tr.sendReverbNode;
+    tr[key] = v;
+    node.gain.setTargetAtTime(v, engine.now, 0.01);
+    if (i === this.selected) this.knobs[key].value = v;
+  }
+
   /* ---------- UI ---------- */
   buildControls(container) {
     // Spur-Parameter + Maschinen-Volume
@@ -339,6 +378,8 @@ export class BeatBox extends Machine {
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.45"  data-p="snap"></x-knob>
+      <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
+      <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
@@ -347,6 +388,14 @@ export class BeatBox extends Machine {
       const val = e.detail.value;
       if (key === 'volume') {
         this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
+      } else if (key === 'trackSendDelay' || key === 'trackSendReverb') {
+        // eigene Setter (ramp den Send-Gain) statt Rohwert-Zuweisung — sonst
+        // bewegt sich der Regler, aber der Effekt bleibt stumm. Eigener
+        // data-p-Name (nicht "sendDelay"/"sendReverb") -- die Basisklasse
+        // hat unter genau diesen Schlüsseln schon den Kit-weiten FX-Send,
+        // sonst würden sich Panel-Sync-Läufe (Machine.render/getParamForKnob)
+        // gegenseitig überschreiben.
+        this.setTrackSend(this.selected, key === 'trackSendDelay' ? 'delay' : 'reverb', val);
       } else {
         this.tracks[this.selected][key] = val;
       }
@@ -357,6 +406,8 @@ export class BeatBox extends Machine {
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
       snap: row.querySelector('[data-p="snap"]'),
+      sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
+      sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
 
     // Per-Spur-Automation: Der Lane-Schlüssel entsteht beim Anfassen aus
@@ -452,6 +503,8 @@ export class BeatBox extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    this.knobs.sendDelay.value = tr.sendDelay;
+    this.knobs.sendReverb.value = tr.sendReverb;
     for (const param of ['tune', 'decay', 'level', 'snap']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));

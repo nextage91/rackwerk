@@ -546,30 +546,38 @@ button {
   min-height: 0;
   display: flex;
   align-items: stretch;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;    /* Sicherheitsnetz für sehr kurze Landscape-Screens —
+                           lieber ein bisschen Vertikal-Scroll als abgeschnittene
+                           Mute/Solo-Buttons */
   padding: 4px 4px 10px;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
 .mixer-empty { color: var(--ink-dim); font-size: 13px; padding: 16px; }
 
-/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. */
+/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. Pan+Sends
+   bewusst in EINER kompakten Reihe (statt gestapelt), damit der Fader
+   darunter den grössten Teil der Höhe bekommt — das ist der Regler, der
+   beim Mischen am meisten gebraucht wird. */
 .chstrip {
-  flex: 0 0 100px;
+  flex: 0 0 116px;
+  min-height: 0;
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 10px 6px 8px;
+  gap: 6px;
+  padding: 8px 6px 6px;
   border-radius: var(--r-ctl);
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
+/* Unter-Kanalzüge (BeatBox-Spuren) bleiben in der Breite gleich -- sie
+   tragen dieselben drei Regler (Pan+2 Sends) und brauchen denselben Platz,
+   sparen sich aber die Mute/Solo-Reihe. */
 .chstrip--sub {
-  flex-basis: 78px;
   padding-top: 6px;
   background: rgba(0,0,0,.15);
   box-shadow: none;
@@ -600,11 +608,18 @@ button {
   -webkit-box-orient: vertical;
 }
 .chstrip--sub .chstrip__name { font-weight: 500; color: var(--ink-dim); }
-.chstrip--sub x-knob { --knob-size: 42px; }
+
+.chstrip__knobs {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.chstrip__knobs x-knob { --knob-size: 20px; gap: 2px; }
 
 .chstrip__meters {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 40px;
   display: flex;
   align-items: stretch;
   justify-content: center;
@@ -14973,6 +14988,11 @@ class Machine {
     this.sends[which] = value;
     const node = which === 'delay' ? this.sendDelay : this.sendReverb;
     node.gain.setTargetAtTime(value, engine.now, 0.01);
+    // Panel-Knob synchron halten — eine Quelle der Wahrheit, egal ob der
+    // Mixer oder das eigene Maschinen-Panel gerade gezogen wird.
+    const paramKey = which === 'delay' ? 'sendDelay' : 'sendReverb';
+    const knob = this.el?.querySelector(`x-knob[data-p="${paramKey}"]`);
+    if (knob) knob.value = value;
   }
 
   /** Beim Projekt-Laden: Werte setzen UND Knob-Stellungen nachziehen
@@ -15619,10 +15639,26 @@ class BeatBox extends Machine {
     // als Multiplikator in der Hüllkurve, siehe Drum-Synthese oben) gibt es
     // für Panorama keine "Stelle im Code", an der man ansetzen könnte, ohne
     // echte Audio-Nodes: jeder Trigger muss durch die Spur-eigene Node.
+    // Jede Spur bekommt zusätzlich ihre eigenen Send-Gains zu Delay/Reverb —
+    // parallel zum trockenen Pfad (panner -> this.output), nicht dahinter.
+    // Dadurch bleiben Spur-Sends unabhängig von Mute/Solo der Maschine
+    // (bewusst: ein gemuteter Kit-Bus soll trotzdem noch in den Effekt
+    // "nachklingen" können, wie bei einem Send-Only-Trick am echten Pult).
     this.tracks = TRACK_DEFS.map((def) => {
       const panner = engine.ctx.createStereoPanner();
       panner.connect(this.output);
-      return { ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner };
+      const sendDelayNode = engine.ctx.createGain();
+      sendDelayNode.gain.value = 0;
+      panner.connect(sendDelayNode);
+      sendDelayNode.connect(engine.delayBus);
+      const sendReverbNode = engine.ctx.createGain();
+      sendReverbNode.gain.value = 0;
+      panner.connect(sendReverbNode);
+      sendReverbNode.connect(engine.reverbBus);
+      return {
+        ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner,
+        sendDelay: 0, sendReverb: 0, sendDelayNode, sendReverbNode,
+      };
     });
 
     // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
@@ -15675,6 +15711,7 @@ class BeatBox extends Machine {
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
         tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
+        sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
@@ -15694,6 +15731,13 @@ class BeatBox extends Machine {
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
       this.setTrackPan(i, saved.pan ?? 0);
+      // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
+      // buildControls) — direkt an Feld + Gain-Node schreiben statt über
+      // setTrackSend, das erst nach dem Rendern sicher aufrufbar ist.
+      tr.sendDelay = saved.sendDelay ?? 0;
+      tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
+      tr.sendReverb = saved.sendReverb ?? 0;
+      tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
     });
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
@@ -15729,6 +15773,8 @@ class BeatBox extends Machine {
     for (const tr of this.tracks) {
       tr.panner.disconnect();
       tr.meterAnalyser?.disconnect();
+      tr.sendDelayNode.disconnect();
+      tr.sendReverbNode.disconnect();
     }
   }
 
@@ -15768,6 +15814,19 @@ class BeatBox extends Machine {
     tr.panner.pan.setTargetAtTime(tr.pan, engine.now, 0.01);
   }
 
+  /** which: 'delay' | 'reverb' — eigener Send je Drum-Spur, unabhängig vom
+   *  Kit-weiten Send der Maschine (Machine.setSend). */
+  setTrackSend(i, which, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    v = Math.min(1, Math.max(0, v));
+    const key = which === 'delay' ? 'sendDelay' : 'sendReverb';
+    const node = which === 'delay' ? tr.sendDelayNode : tr.sendReverbNode;
+    tr[key] = v;
+    node.gain.setTargetAtTime(v, engine.now, 0.01);
+    if (i === this.selected) this.knobs[key].value = v;
+  }
+
   /* ---------- UI ---------- */
   buildControls(container) {
     // Spur-Parameter + Maschinen-Volume
@@ -15778,6 +15837,8 @@ class BeatBox extends Machine {
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.45"  data-p="snap"></x-knob>
+      <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
+      <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
@@ -15786,6 +15847,14 @@ class BeatBox extends Machine {
       const val = e.detail.value;
       if (key === 'volume') {
         this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
+      } else if (key === 'trackSendDelay' || key === 'trackSendReverb') {
+        // eigene Setter (ramp den Send-Gain) statt Rohwert-Zuweisung — sonst
+        // bewegt sich der Regler, aber der Effekt bleibt stumm. Eigener
+        // data-p-Name (nicht "sendDelay"/"sendReverb") -- die Basisklasse
+        // hat unter genau diesen Schlüsseln schon den Kit-weiten FX-Send,
+        // sonst würden sich Panel-Sync-Läufe (Machine.render/getParamForKnob)
+        // gegenseitig überschreiben.
+        this.setTrackSend(this.selected, key === 'trackSendDelay' ? 'delay' : 'reverb', val);
       } else {
         this.tracks[this.selected][key] = val;
       }
@@ -15796,6 +15865,8 @@ class BeatBox extends Machine {
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
       snap: row.querySelector('[data-p="snap"]'),
+      sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
+      sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
 
     // Per-Spur-Automation: Der Lane-Schlüssel entsteht beim Anfassen aus
@@ -15891,6 +15962,8 @@ class BeatBox extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    this.knobs.sendDelay.value = tr.sendDelay;
+    this.knobs.sendReverb.value = tr.sendReverb;
     for (const param of ['tune', 'decay', 'level', 'snap']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
@@ -17089,9 +17162,9 @@ function wireMixerUI(rack) {
   const startMeters = () => { if (!meterRAF) meterRAF = requestAnimationFrame(meterTick); };
   const stopMeters = () => { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; };
 
-  /** Ein Kanalzug (Fader + VU-Meter + Pan + Mute/Solo) für eine Maschine
-   *  ODER eine einzelne Drum-Spur — beide teilen sich dieselben Setter-
-   *  Namen (setLevel/setPan/level/pan/getMeterAnalyser). */
+  /** Ein Kanalzug (Fader + VU-Meter + Pan + Sends + Mute/Solo) für eine
+   *  Maschine ODER eine einzelne Drum-Spur — beide teilen sich dieselben
+   *  Setter-Namen (setLevel/setPan/setSend/level/pan/sends/getMeterAnalyser). */
   const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
     const strip = document.createElement('div');
     strip.className = 'chstrip' + (compact ? ' chstrip--sub' : '');
@@ -17100,7 +17173,11 @@ function wireMixerUI(rack) {
         <span class="chstrip__stripe"></span>
         <span class="chstrip__name">${name}</span>
       </div>
-      <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      <div class="chstrip__knobs">
+        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+        <x-knob label="Dly" min="0" max="1" value="${target.sends.delay}" data-k="sendDelay"></x-knob>
+        <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>
+      </div>
       <div class="chstrip__meters">
         <div class="chstrip__vu" data-vu>${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}</div>
         <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
@@ -17113,6 +17190,8 @@ function wireMixerUI(rack) {
     `;
     strip.querySelector('[data-k="level"]').addEventListener('input', (e) => target.setLevel(e.detail.value));
     strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => target.setPan(e.detail.value));
+    strip.querySelector('[data-k="sendDelay"]').addEventListener('input', (e) => target.setSend('delay', e.detail.value));
+    strip.querySelector('[data-k="sendReverb"]').addEventListener('input', (e) => target.setSend('reverb', e.detail.value));
     if (withButtons) {
       const muteBtn = strip.querySelector('[data-mute]');
       const soloBtn = strip.querySelector('[data-solo]');
@@ -17168,8 +17247,9 @@ function wireMixerUI(rack) {
         m.tracks.forEach((tr, i) => {
           const sub = buildStrip(
             {
-              level: tr.level, pan: tr.pan,
+              level: tr.level, pan: tr.pan, sends: { delay: tr.sendDelay, reverb: tr.sendReverb },
               setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v),
+              setSend: (which, v) => m.setTrackSend(i, which, v),
               getMeterAnalyser: () => m.getTrackMeterAnalyser(i),
             },
             { name: tr.name, withButtons: false, compact: true },

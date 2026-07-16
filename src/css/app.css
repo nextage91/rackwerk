@@ -459,30 +459,38 @@ button {
   min-height: 0;
   display: flex;
   align-items: stretch;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;    /* Sicherheitsnetz für sehr kurze Landscape-Screens —
+                           lieber ein bisschen Vertikal-Scroll als abgeschnittene
+                           Mute/Solo-Buttons */
   padding: 4px 4px 10px;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
 .mixer-empty { color: var(--ink-dim); font-size: 13px; padding: 16px; }
 
-/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. */
+/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. Pan+Sends
+   bewusst in EINER kompakten Reihe (statt gestapelt), damit der Fader
+   darunter den grössten Teil der Höhe bekommt — das ist der Regler, der
+   beim Mischen am meisten gebraucht wird. */
 .chstrip {
-  flex: 0 0 100px;
+  flex: 0 0 116px;
+  min-height: 0;
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 10px 6px 8px;
+  gap: 6px;
+  padding: 8px 6px 6px;
   border-radius: var(--r-ctl);
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
+/* Unter-Kanalzüge (BeatBox-Spuren) bleiben in der Breite gleich -- sie
+   tragen dieselben drei Regler (Pan+2 Sends) und brauchen denselben Platz,
+   sparen sich aber die Mute/Solo-Reihe. */
 .chstrip--sub {
-  flex-basis: 78px;
   padding-top: 6px;
   background: rgba(0,0,0,.15);
   box-shadow: none;
@@ -513,11 +521,18 @@ button {
   -webkit-box-orient: vertical;
 }
 .chstrip--sub .chstrip__name { font-weight: 500; color: var(--ink-dim); }
-.chstrip--sub x-knob { --knob-size: 42px; }
+
+.chstrip__knobs {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.chstrip__knobs x-knob { --knob-size: 20px; gap: 2px; }
 
 .chstrip__meters {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 40px;
   display: flex;
   align-items: stretch;
   justify-content: center;
