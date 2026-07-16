@@ -36,6 +36,7 @@ MODULES = [
     ("js/machines/subsynth.js", ["SubSynth"]),
     ("js/machines/beatbox.js",  ["BeatBox"]),
     ("js/machines/percsynth.js", ["PercSynth"]),
+    ("js/machines/polysynth.js", ["PolySynth"]),
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),
     ("js/main.js",              []),

@@ -528,6 +528,8 @@ x-knob.has-auto .knob__dial::after {
 /* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
 .seg {
   display: flex;
+  flex-wrap: wrap;      /* mehr Optionen (z. B. Chord-Typ) brechen um statt
+                            über den Rand zu laufen */
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
