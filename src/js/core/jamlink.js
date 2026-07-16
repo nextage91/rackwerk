@@ -54,7 +54,7 @@ export async function unpackSignal(code) {
   code = code.trim();
   if (!code.startsWith(CODE_PREFIX)) return JSON.parse(atob(code)); // Alt-Format
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('Dieses Gerät kann den Code nicht lesen (System zu alt).');
+    throw new Error('This device can\'t read the code (system too old).');
   }
   const stream = new Blob([b64ToBytes(code.slice(CODE_PREFIX.length))]).stream()
     .pipeThrough(new DecompressionStream('deflate-raw'));

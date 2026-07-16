@@ -155,7 +155,7 @@ class Automation {
     this.#toast?.remove();
     const el = document.createElement('div');
     el.className = 'auto-toast';
-    el.textContent = `● Automation aufgenommen: ${label}`;
+    el.textContent = `● Automation recorded: ${label}`;
     document.body.appendChild(el);
     this.#toast = el;
     setTimeout(() => {
@@ -172,7 +172,7 @@ class Automation {
 
     const chip = document.createElement('button');
     chip.className = 'auto-chip';
-    chip.textContent = '✕ Automation löschen';
+    chip.textContent = '✕ Delete automation';
     document.body.appendChild(chip);
 
     // über dem Knob positionieren, am Bildschirmrand einklemmen

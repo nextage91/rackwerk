@@ -52,7 +52,7 @@ export class Rack {
   #buildAddSlot() {
     const btn = document.createElement('button');
     btn.className = 'rack__add';
-    btn.textContent = '+  Maschine hinzufügen';
+    btn.textContent = '+  Add Machine';
     btn.addEventListener('click', () => this.#openSheet());
     this.rackEl.appendChild(btn);
     this.addSlotEl = btn;

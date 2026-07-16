@@ -33,7 +33,7 @@ export class PercSynth extends Machine {
   static meta = {
     type: 'percsynth',
     name: 'PercSynth',
-    desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
+    desc: 'FM percussion: zaps, bells, congas, lasers',
     color: '#e3bf5a',
     model: 'RW-03',
   };

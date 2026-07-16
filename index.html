@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <!-- Capacitor-ready: kein Zoom, App-artiges Verhalten, Safe-Areas via viewport-fit -->
@@ -1144,6 +1144,30 @@ x-knob.has-auto .knob__dial::after {
 .machine--master .fx__row { align-items: center; }
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
 .machine--master .seg__btn { min-width: 44px; }
+
+/* ===================== Rack-Kurzwahl (Mixer/Song direkt öffnen) =====================
+   Wiederverwendet die .machine-Faceplate (Blech, obere Schrauben) als
+   kompakter Button — keine .machine__body, darum nur 2 statt 4 Schrauben. */
+.rack-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 24px;
+  touch-action: manipulation;
+}
+.rack-shortcut:active { transform: translateY(1px); filter: brightness(1.08); }
+.rack-shortcut__icon { font-size: 18px; line-height: 1; }
+.rack-shortcut__label {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--m-color, var(--ink));
+  text-shadow: 0 0 6px var(--m-color-glow, transparent);
+}
+.rack-shortcut__chev { margin-left: auto; color: var(--ink-faint); font-size: 16px; }
 .fx__revlabel { margin-right: 6px; }
 
 </style>
@@ -1156,7 +1180,7 @@ x-knob.has-auto .knob__dial::after {
       <span class="brand__mark">▦</span>
       <span class="brand__name">RackWerk</span>
     </div>
-    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projekte">PRJ</button>
+    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projects">PRJ</button>
 
     <div class="transport__lcd" id="lcd">
       <span class="lcd__bpm" id="lcd-bpm">120.0</span>
@@ -1165,10 +1189,10 @@ x-knob.has-auto .knob__dial::after {
     </div>
 
     <div class="transport__controls">
-      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Aufnahme: Automation & Live-Spiel">●</button>
-      <button class="t-btn" id="btn-bpm-down" aria-label="Tempo verringern">−</button>
-      <button class="t-btn" id="btn-bpm-up" aria-label="Tempo erhöhen">+</button>
-      <button class="t-btn t-btn--play" id="btn-play" aria-label="Wiedergabe starten">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
+      <button class="t-btn" id="btn-bpm-down" aria-label="Decrease tempo">−</button>
+      <button class="t-btn" id="btn-bpm-up" aria-label="Increase tempo">+</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
         <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
         <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
       </button>
@@ -1183,9 +1207,9 @@ x-knob.has-auto .knob__dial::after {
   <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
   <div class="sheet" id="machine-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Maschine hinzufügen">
+    <div class="sheet__panel" role="dialog" aria-label="Add machine">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Maschine hinzufügen</h2>
+      <h2 class="sheet__title">Add machine</h2>
       <div class="sheet__list" id="machine-list">
         <!-- Einträge kommen aus der Machine-Registry -->
       </div>
@@ -1195,33 +1219,33 @@ x-knob.has-auto .knob__dial::after {
   <!-- ===== Projekte (Bottom Sheet) ===== -->
   <div class="sheet" id="project-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Projekte">
+    <div class="sheet__panel" role="dialog" aria-label="Projects">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Projekte</h2>
+      <h2 class="sheet__title">Projects</h2>
       <div class="saverow">
-        <input class="saverow__input" id="project-name" placeholder="Projektname" maxlength="40">
-        <button class="m-btn saverow__btn" id="btn-save-project">Speichern</button>
+        <input class="saverow__input" id="project-name" placeholder="Project name" maxlength="40">
+        <button class="m-btn saverow__btn" id="btn-save-project">Save</button>
       </div>
       <div class="filerow">
-        <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
+        <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song Timeline</button>
         <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
-      <h3 class="sheet__sub">Datei</h3>
+      <h3 class="sheet__sub">File</h3>
       <div class="filerow">
-        <button class="m-btn" id="btn-export">Exportieren</button>
-        <button class="m-btn" id="btn-import-replace">Datei laden</button>
-        <button class="m-btn" id="btn-import-merge">Dazuladen</button>
+        <button class="m-btn" id="btn-export">Export</button>
+        <button class="m-btn" id="btn-import-replace">Load File</button>
+        <button class="m-btn" id="btn-import-merge">Add From File</button>
         <input type="file" id="file-input" accept="application/json,.json" hidden>
       </div>
 
-      <h3 class="sheet__sub">Jam-Session (2 Geräte)</h3>
+      <h3 class="sheet__sub">Jam Session (2 Devices)</h3>
       <div id="jam-idle">
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-host">Session erstellen</button>
-          <button class="m-btn" id="btn-jam-join">Beitreten</button>
+          <button class="m-btn" id="btn-jam-host">Create Session</button>
+          <button class="m-btn" id="btn-jam-join">Join</button>
         </div>
       </div>
       <div id="jam-setup" hidden>
@@ -1230,44 +1254,44 @@ x-knob.has-auto .knob__dial::after {
           <canvas class="jam-qr" id="jam-qr"></canvas>
         </div>
         <p class="sheet__hint jam-netinfo" id="jam-netinfo" hidden></p>
-        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Eigener Code erscheint hier …"></textarea>
+        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Your code will appear here …"></textarea>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-share" hidden>Teilen</button>
-          <button class="m-btn" id="btn-jam-copy">Kopieren</button>
-          <button class="m-btn" id="btn-jam-cancel">Abbrechen</button>
+          <button class="m-btn" id="btn-jam-share" hidden>Share</button>
+          <button class="m-btn" id="btn-jam-copy">Copy</button>
+          <button class="m-btn" id="btn-jam-cancel">Cancel</button>
         </div>
         <div id="jam-scan" hidden>
           <video class="jam-video" id="jam-video" playsinline muted></video>
         </div>
-        <textarea class="jam-code" id="jam-code-in" placeholder="Code des anderen Geräts hier einfügen …"></textarea>
+        <textarea class="jam-code" id="jam-code-in" placeholder="Paste the other device's code here …"></textarea>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-scan">QR scannen</button>
-          <button class="m-btn" id="btn-jam-apply">Übernehmen</button>
+          <button class="m-btn" id="btn-jam-scan">Scan QR</button>
+          <button class="m-btn" id="btn-jam-apply">Apply</button>
         </div>
       </div>
       <div id="jam-active" hidden>
         <p class="sheet__hint" id="jam-status"></p>
         <div class="jam-beat">
           <span class="jam-beat__led" id="jam-beat-led"></span>
-          <span class="sheet__hint jam-beat__hint">Beat-Anzeige — blinkt im Takt,
-            sobald Play läuft. Blinken beide Geräte gleichzeitig, steht der
-            Sync (Taktanfang orange).</span>
+          <span class="sheet__hint jam-beat__hint">Beat indicator — blinks on the beat
+            once playback runs. If both devices blink together, sync is
+            good (downbeat is orange).</span>
         </div>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-send">Maschinen senden</button>
-          <button class="m-btn" id="btn-jam-leave">Trennen</button>
+          <button class="m-btn" id="btn-jam-send">Send Machines</button>
+          <button class="m-btn" id="btn-jam-leave">Disconnect</button>
         </div>
       </div>
 
-      <h3 class="sheet__sub">Master-Aufnahme</h3>
+      <h3 class="sheet__sub">Master Recording</h3>
       <div class="recrow">
-        <button class="m-btn" id="btn-audio-rec">● Aufnahme starten</button>
+        <button class="m-btn" id="btn-audio-rec">● Start Recording</button>
         <span class="recrow__time" id="rec-time" hidden>0:00</span>
       </div>
       <div id="rec-result"></div>
 
       <p class="sheet__hint" id="project-hint" hidden>
-        ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
+        ⚠︎ Persistent storage isn't available here — projects only last for this session.
       </p>
     </div>
   </div>
@@ -1275,19 +1299,19 @@ x-knob.has-auto .knob__dial::after {
   <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
   <div class="sheet" id="song-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Song-Timeline">
+    <div class="sheet__panel" role="dialog" aria-label="Song Timeline">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Song-Timeline</h2>
+      <h2 class="sheet__title">Song Timeline</h2>
       <p class="sheet__hint">
-        <b>Aufnahme</b> schaltet scharf, schließt diese Seite und startet den Transport —
-        schalte dann live die Patterns (A/B/C/D) der Maschinen um, die Wechsel werden
-        mitgeschnitten. Mit dem Stopp oben beendest du die Aufnahme.
-        <b>Song ▶</b> spielt die Aufnahme in Schleife ab.
+        <b>Record</b> arms recording, closes this sheet, and starts the transport —
+        then switch the machines' patterns (A/B/C/D) live, and the switches get
+        captured. Hit Stop above to end the recording.
+        <b>Song ▶</b> plays the recording back in a loop.
       </p>
       <div class="filerow">
-        <button class="m-btn" id="btn-song-arm">● Aufnahme</button>
+        <button class="m-btn" id="btn-song-arm">● Record</button>
         <button class="m-btn" id="btn-song-play">▶ Song</button>
-        <button class="m-btn" id="btn-song-clear">Leeren</button>
+        <button class="m-btn" id="btn-song-clear">Clear</button>
       </div>
       <div class="song-timeline" id="song-timeline"></div>
     </div>
@@ -1307,8 +1331,8 @@ x-knob.has-auto .knob__dial::after {
   <div class="unlock" id="unlock-overlay">
     <button class="unlock__btn" id="btn-unlock">
       <span class="unlock__icon">▶</span>
-      <span>Tippen zum Starten</span>
-      <small>Audio wird aktiviert</small>
+      <span>Tap to Start</span>
+      <small>Enabling audio</small>
     </button>
   </div>
 
@@ -12543,11 +12567,11 @@ class StepSeq {
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
         <span class="stepseq__ctrl">
-          <button class="m-btn" data-page="-1" aria-label="Vorheriger Takt">◀</button>
+          <button class="m-btn" data-page="-1" aria-label="Previous bar">◀</button>
           <span class="stepseq__page" data-pagelabel>1/1</span>
-          <button class="m-btn" data-page="1" aria-label="Nächster Takt">▶</button>
-          <button class="m-btn" data-len aria-label="Pattern-Länge">1T</button>
-          <button class="m-btn" data-clear>Leeren</button>
+          <button class="m-btn" data-page="1" aria-label="Next bar">▶</button>
+          <button class="m-btn" data-len aria-label="Pattern length">1B</button>
+          <button class="m-btn" data-clear>Clear</button>
         </span>
       </div>
       <div class="stepseq__grid"></div>
@@ -12606,7 +12630,7 @@ class StepSeq {
     this.el.querySelector('[data-pagelabel]').textContent = `${this.page + 1}/${this.bars}`;
     this.el.querySelectorAll('[data-page]').forEach((b) => (b.style.display = multi ? '' : 'none'));
     this.el.querySelector('[data-pagelabel]').style.display = multi ? '' : 'none';
-    this.lenBtn.textContent = `${this.bars}T`;
+    this.lenBtn.textContent = `${this.bars}B`;
   }
 
   /** Pattern-Daten austauschen (Spurwechsel, Längenänderung, Laden). */
@@ -12747,7 +12771,7 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'pat-chip__btn';
-    copyBtn.textContent = '⧉ Kopieren';
+    copyBtn.textContent = '⧉ Copy';
     copyBtn.addEventListener('click', () => {
       clipboard.shape = shape;
       clipboard.data = getSlot(i);
@@ -12759,7 +12783,7 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}
     if (clipboard.data && clipboard.shape === shape) {
       const pasteBtn = document.createElement('button');
       pasteBtn.className = 'pat-chip__btn';
-      pasteBtn.textContent = '⇩ Einfügen';
+      pasteBtn.textContent = '⇩ Paste';
       pasteBtn.addEventListener('click', () => {
         putSlot(i, clipboard.data);
         setActive(i);
@@ -12787,7 +12811,7 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}
     const b = document.createElement('button');
     b.className = 'patbank__btn' + (i === index ? ' is-active' : '');
     b.textContent = letter;
-    b.setAttribute('aria-label', `Pattern ${letter} (halten: kopieren/einfügen)`);
+    b.setAttribute('aria-label', `Pattern ${letter} (hold: copy/paste)`);
 
     let holdTimer = null;
     let held = false;
@@ -13497,7 +13521,7 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
-        <div class="vu" data-vu aria-label="Master-Pegel">
+        <div class="vu" data-vu aria-label="Master level">
           ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
         </div>
       </header>
@@ -13509,13 +13533,13 @@ class MasterFX {
               `<button class="seg__btn" data-div="${d.steps}">${d.label}</button>`).join('')}
           </div>
           <x-knob label="Feedb." min="0" max="0.85" value="0.45" data-p="feedback"></x-knob>
-          <x-knob label="Ton" min="500" max="12000" value="4500" curve="log" unit="Hz" data-p="tone"></x-knob>
+          <x-knob label="Tone" min="500" max="12000" value="4500" curve="log" unit="Hz" data-p="tone"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.5" data-p="delayLevel"></x-knob>
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Reverb</span>
-          <x-knob label="Größe" min="0.3" max="6" value="1.8" curve="log" unit="s" data-p="revDecay"></x-knob>
-          <x-knob label="Dämpf." min="0" max="1" value="0.5" data-p="revDamp"></x-knob>
+          <x-knob label="Size" min="0.3" max="6" value="1.8" curve="log" unit="s" data-p="revDecay"></x-knob>
+          <x-knob label="Damp." min="0" max="1" value="0.5" data-p="revDamp"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.4" data-p="revLevel"></x-knob>
         </div>
       </div>
@@ -13744,7 +13768,7 @@ class Automation {
     this.#toast?.remove();
     const el = document.createElement('div');
     el.className = 'auto-toast';
-    el.textContent = `● Automation aufgenommen: ${label}`;
+    el.textContent = `● Automation recorded: ${label}`;
     document.body.appendChild(el);
     this.#toast = el;
     setTimeout(() => {
@@ -13761,7 +13785,7 @@ class Automation {
 
     const chip = document.createElement('button');
     chip.className = 'auto-chip';
-    chip.textContent = '✕ Automation löschen';
+    chip.textContent = '✕ Delete automation';
     document.body.appendChild(chip);
 
     // über dem Knob positionieren, am Bildschirmrand einklemmen
@@ -14241,7 +14265,7 @@ async function unpackSignal(code) {
   code = code.trim();
   if (!code.startsWith(CODE_PREFIX)) return JSON.parse(atob(code)); // Alt-Format
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('Dieses Gerät kann den Code nicht lesen (System zu alt).');
+    throw new Error('This device can\'t read the code (system too old).');
   }
   const stream = new Blob([b64ToBytes(code.slice(CODE_PREFIX.length))]).stream()
     .pipeThrough(new DecompressionStream('deflate-raw'));
@@ -14649,7 +14673,7 @@ class Machine {
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
-          <button class="m-btn m-btn--remove" data-remove aria-label="Maschine entfernen">✕</button>
+          <button class="m-btn m-btn--remove" data-remove aria-label="Remove machine">✕</button>
         </div>
       </header>
       <div class="machine__body"></div>
@@ -14818,7 +14842,7 @@ class SubSynth extends Machine {
   static meta = {
     type: 'subsynth',
     name: 'SubSynth',
-    desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
+    desc: 'Subtractive synth with lowpass filter',
     color: '#6fb8d6',
     model: 'RW-01',
   };
@@ -15241,7 +15265,7 @@ class BeatBox extends Machine {
   static meta = {
     type: 'beatbox',
     name: 'BeatBox',
-    desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
+    desc: '8-track drum machine, synthesized sounds',
     color: '#ff8c42',
     model: 'RW-02',
   };
@@ -15565,7 +15589,7 @@ class PercSynth extends Machine {
   static meta = {
     type: 'percsynth',
     name: 'PercSynth',
-    desc: 'FM-Percussion: Zaps, Bells, Congas, Laser',
+    desc: 'FM percussion: zaps, bells, congas, lasers',
     color: '#e3bf5a',
     model: 'RW-03',
   };
@@ -15807,7 +15831,7 @@ class Rack {
   #buildAddSlot() {
     const btn = document.createElement('button');
     btn.className = 'rack__add';
-    btn.textContent = '+  Maschine hinzufügen';
+    btn.textContent = '+  Add Machine';
     btn.addEventListener('click', () => this.#openSheet());
     this.rackEl.appendChild(btn);
     this.addSlotEl = btn;
@@ -15947,12 +15971,12 @@ $('#btn-unlock').addEventListener('click', async () => {
   try {
     const ok = await engine.unlock();
     if (!ok) {
-      hint.textContent = 'Audio blockiert — bitte erneut tippen';
+      hint.textContent = 'Audio blocked — tap again';
       return;
     }
   } catch (err) {
-    console.error('Audio-Unlock fehlgeschlagen:', err);
-    hint.textContent = 'Audio nicht verfügbar: ' + err.message;
+    console.error('Audio unlock failed:', err);
+    hint.textContent = 'Audio unavailable: ' + err.message;
     return;
   }
 
@@ -15979,6 +16003,17 @@ function boot() {
   masterFX.init();
   $('#rack').appendChild(masterFX.render());
 
+  // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
+  // ohne den Umweg über das Projekte-Sheet.
+  $('#rack').appendChild(buildRackShortcut({
+    icon: '🎚️', label: 'Mixer', color: '#7fd6a0',
+    onOpen: () => $('#btn-open-mixer').click(),
+  }));
+  $('#rack').appendChild(buildRackShortcut({
+    icon: '🎬', label: 'Song Timeline', color: '#ff4d3d',
+    onOpen: () => $('#btn-open-song').click(),
+  }));
+
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
   const autosave = store.get('autosave');
@@ -15987,7 +16022,7 @@ function boot() {
       loadProject(rack, JSON.parse(autosave));
       restored = true;
     } catch (err) {
-      console.warn('Autosave nicht ladbar, starte frisch:', err);
+      console.warn('Autosave could not be loaded, starting fresh:', err);
     }
   }
   if (!restored) {
@@ -16014,9 +16049,29 @@ function boot() {
     try {
       store.set('autosave', JSON.stringify(serializeProject(rack)));
     } catch (err) {
-      console.warn('Autosave fehlgeschlagen:', err);
+      console.warn('Autosave failed:', err);
     }
   }, 3000);
+}
+
+/** Kompaktes Rack-Modul, das nur einen bestehenden Öffnen-Mechanismus
+ *  antriggert (Mixer-/Song-Sheet) — dupliziert keine Logik, ruft nur
+ *  den Klick auf den jeweils schon verdrahteten Sheet-Öffner-Button. */
+function buildRackShortcut({ icon, label, color, onOpen }) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'machine rack-shortcut';
+  el.style.setProperty('--m-color', color);
+  el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
+  el.innerHTML = `
+    <span class="machine__stripe"></span>
+    <span class="rack-shortcut__icon">${icon}</span>
+    <span class="rack-shortcut__label">${label}</span>
+    <span class="rack-shortcut__chev">›</span>
+  `;
+  el.addEventListener('click', onOpen);
+  return el;
 }
 
 /* ---------- Projekte-Sheet ---------- */
@@ -16034,7 +16089,7 @@ function wireProjectUI(rack) {
       .map((k) => k.slice('project:'.length))
       .sort();
     if (!names.length) {
-      list.innerHTML = '<p class="sheet__empty">Noch keine gespeicherten Projekte.</p>';
+      list.innerHTML = '<p class="sheet__empty">No saved projects yet.</p>';
       return;
     }
     for (const name of names) {
@@ -16042,7 +16097,7 @@ function wireProjectUI(rack) {
       item.className = 'sheet__item sheet__item--project';
       item.innerHTML = `
         <button class="project__load">${name}</button>
-        <button class="project__delete" aria-label="Projekt löschen">✕</button>
+        <button class="project__delete" aria-label="Delete project">✕</button>
       `;
       item.querySelector('.project__load').addEventListener('click', () => {
         try {
@@ -16050,7 +16105,7 @@ function wireProjectUI(rack) {
           nameInput.value = name;
           sheet.hidden = true;
         } catch (err) {
-          console.error('Projekt nicht ladbar:', err);
+          console.error('Project could not be loaded:', err);
         }
       });
       item.querySelector('.project__delete').addEventListener('click', () => {
@@ -16070,7 +16125,7 @@ function wireProjectUI(rack) {
   });
 
   $('#btn-save-project').addEventListener('click', () => {
-    const name = nameInput.value.trim() || 'Ohne Titel';
+    const name = nameInput.value.trim() || 'Untitled';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
     refreshList();
   });
@@ -16078,8 +16133,8 @@ function wireProjectUI(rack) {
   $('#btn-new-session').addEventListener('click', () => {
     // Verwirft die aktuelle Session (Autosave überschreibt sie gleich) —
     // deshalb einmal nachfragen.
-    if (!window.confirm('Neue Session starten? Die aktuelle Anordnung wird ' +
-      'verworfen (nicht gespeicherte Änderungen gehen verloren).')) return;
+    if (!window.confirm('Start a new session? The current setup will be ' +
+      'discarded (unsaved changes will be lost).')) return;
     newProject(rack);
     nameInput.value = '';
     sheet.hidden = true;
@@ -16096,7 +16151,7 @@ function wireProjectUI(rack) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     } catch (err) {
-      console.error('Download nicht möglich:', err);
+      console.error('Download not possible:', err);
     }
   };
 
@@ -16121,7 +16176,7 @@ function wireProjectUI(rack) {
         else importMachines(rack, data);
         sheet.hidden = true;
       } catch (err) {
-        console.error('Import fehlgeschlagen:', err);
+        console.error('Import failed:', err);
       }
       fileInput.value = '';
     };
@@ -16140,18 +16195,18 @@ function wireProjectUI(rack) {
   recBtn.addEventListener('click', async () => {
     if (!recorder.active) {
       if (!recorder.supported) {
-        recResult.textContent = 'Aufnahme wird von diesem WebView leider nicht unterstützt.';
+        recResult.textContent = 'Recording is unfortunately not supported by this WebView.';
         return;
       }
       if (!recorder.start()) return;
-      recBtn.textContent = '■ Stopp & Speichern';
+      recBtn.textContent = '■ Stop & Save';
       recTime.hidden = false;
       prjBtn.classList.add('is-recording');
       recTimer = setInterval(() => { recTime.textContent = fmtTime(recorder.elapsed); }, 500);
     } else {
       clearInterval(recTimer);
       const result = await recorder.stop();
-      recBtn.textContent = '● Aufnahme starten';
+      recBtn.textContent = '● Start Recording';
       recTime.hidden = true;
       prjBtn.classList.remove('is-recording');
       if (!result) return;
@@ -16172,7 +16227,7 @@ function wireProjectUI(rack) {
           if (retried) {
             player.replaceWith(Object.assign(document.createElement('p'), {
               className: 'sheet__hint',
-              textContent: 'Wiedergabe wird hier blockiert — bitte Download/Teilen nutzen oder in Safari testen.',
+              textContent: 'Playback is blocked here — please use Download/Share or test in Safari.',
             }));
             return;
           }
@@ -16195,7 +16250,7 @@ function wireProjectUI(rack) {
       if (canShareFiles) {
         const shareBtn = document.createElement('button');
         shareBtn.className = 'm-btn rec-share';
-        shareBtn.textContent = '⇪ Teilen / Sichern …';
+        shareBtn.textContent = '⇪ Share / Save …';
         shareBtn.addEventListener('click', () => {
           navigator.share({ files: [file] }).catch(() => { /* abgebrochen */ });
         });
@@ -16242,8 +16297,8 @@ function wireJamUI(rack) {
   };
 
   const fail = (err) => {
-    console.error('Jam-Fehler:', err);
-    instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
+    console.error('Jam error:', err);
+    instructions.textContent = 'Connection failed: ' + (err?.message ?? err);
   };
 
   /* ---------- QR-Austausch ----------
@@ -16256,14 +16311,14 @@ function wireJamUI(rack) {
   /* Diagnose: Netzwerkwege beider Seiten (aus den ICE-Kandidaten).
      „verdeckt (mDNS)" heißt: Der Browser versteckt die lokale IP —
      deren Auflösung scheitert in vielen Netzen (v. a. Hotspots). */
-  const NET_NAMES = { host: 'lokal', srflx: 'öffentlich (STUN)', relay: 'TURN-Relay' };
+  const NET_NAMES = { host: 'local', srflx: 'public (STUN)', relay: 'TURN relay' };
   const netLabel = (info) =>
     info.types.map((x) => NET_NAMES[x] ?? x).join(', ') +
-    (info.mdns ? ' [Adresse verdeckt/mDNS]' : '');
+    (info.mdns ? ' [address hidden/mDNS]' : '');
   const renderNetInfo = () => {
     const parts = [];
-    if (jamlink.localInfo?.types.length) parts.push('Eigene Wege: ' + netLabel(jamlink.localInfo));
-    if (jamlink.remoteInfo?.types.length) parts.push('Gegenseite: ' + netLabel(jamlink.remoteInfo));
+    if (jamlink.localInfo?.types.length) parts.push('Own paths: ' + netLabel(jamlink.localInfo));
+    if (jamlink.remoteInfo?.types.length) parts.push('Other side: ' + netLabel(jamlink.remoteInfo));
     netinfo.textContent = parts.join(' · ');
     netinfo.hidden = parts.length === 0;
   };
@@ -16305,7 +16360,7 @@ function wireJamUI(rack) {
     scanStream?.getTracks().forEach((tr) => tr.stop());
     scanStream = null;
     scanBox.hidden = true;
-    scanBtn.textContent = 'QR scannen';
+    scanBtn.textContent = 'Scan QR';
   };
 
   // Frame prüfen: BarcodeDetector (Chrome u. a.), sonst jsQR (u. a. iOS Safari)
@@ -16331,7 +16386,7 @@ function wireJamUI(rack) {
     if (scanStream) { stopScan(); return; }
     if (!navigator.mediaDevices?.getUserMedia) {
       instructions.textContent =
-        'Kamera-Zugriff kann dieser Browser nicht — Code unten einfügen.';
+        'This browser can\'t access the camera — paste the code below.';
       instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
       return;
     }
@@ -16346,7 +16401,7 @@ function wireJamUI(rack) {
       video.srcObject = scanStream;
       await video.play();
       scanBox.hidden = false;
-      scanBtn.textContent = 'Scan stoppen';
+      scanBtn.textContent = 'Stop Scan';
       scanTimer = setInterval(async () => {
         try {
           const text = await detectFrame();
@@ -16359,7 +16414,7 @@ function wireJamUI(rack) {
     } catch (err) {
       stopScan();
       instructions.textContent =
-        'Kamera nicht verfügbar (' + (err?.name ?? err) + ') — Code unten einfügen.';
+        'Camera unavailable (' + (err?.name ?? err) + ') — paste the code below.';
       instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
     }
   });
@@ -16394,8 +16449,8 @@ function wireJamUI(rack) {
   const showStatus = () => {
     const ms = Math.max(1, Math.round(jamlink.rtt / 2));
     status.textContent = jamlink.role === 'host'
-      ? `Verbunden als Host (±${ms} ms) — dieses Gerät steuert Play/Stop und BPM.`
-      : `Verbunden als Gast (±${ms} ms) — Play/Stop und BPM steuert der Host.`;
+      ? `Connected as host (±${ms} ms) — this device controls Play/Stop and BPM.`
+      : `Connected as guest (±${ms} ms) — the host controls Play/Stop and BPM.`;
   };
 
   jamlink.onstate = (event) => {
@@ -16404,27 +16459,27 @@ function wireJamUI(rack) {
       prjBtn.classList.add('is-linked');
       transport.addListener(beatListener);
       status.textContent = jamlink.role === 'host'
-        ? 'Verbunden als Host — messe Laufzeit …'
-        : 'Verbunden als Gast — Uhr wird abgeglichen …';
+        ? 'Connected as host — measuring latency …'
+        : 'Connected as guest — syncing clock …';
     } else if (event === 'sync') {
       showStatus();
     } else if (event === 'connecting') {
-      instructions.textContent = 'Codes ausgetauscht — Geräte verbinden sich …';
+      instructions.textContent = 'Codes exchanged — devices connecting …';
     } else if (event === 'failed') {
-      let msg = 'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ';
+      let msg = 'Connection failed: the devices couldn\'t reach each other. ';
       if (jamlink.remoteInfo?.mdns) {
-        msg += 'Die Gegenseite hat verdeckte Adressen [mDNS] — dort beim ' +
-          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+        msg += 'The other side has hidden addresses [mDNS] — ALLOW the camera ' +
+          'prompt there when joining, then try again. ';
       } else if (jamlink.localInfo?.mdns) {
-        msg += 'Dieses Gerät hat verdeckte Adressen [mDNS] — beim Erstellen/' +
-          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+        msg += 'This device has hidden addresses [mDNS] — ALLOW the camera ' +
+          'prompt when creating/joining, then try again. ';
       } else {
-        msg += 'Am zuverlässigsten: beide im selben WLAN, oder einer im ' +
-          'persönlichen Hotspot des anderen. Dann neu versuchen. ';
+        msg += 'Most reliable: both on the same Wi-Fi, or one on the ' +
+          'other\'s personal hotspot. Then try again. ';
       }
       instructions.textContent = msg;
     } else if (event === 'unstable') {
-      status.textContent = 'Verbindung instabil — versuche wiederherzustellen …';
+      status.textContent = 'Connection unstable — trying to recover …';
     } else if (event === 'closed') {
       show('idle');
       stopBeatLed();
@@ -16437,7 +16492,7 @@ function wireJamUI(rack) {
 
   $('#btn-jam-host').addEventListener('click', async () => {
     if (!jamlink.supported) {
-      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      instructions.textContent = 'WebRTC is not supported by this WebView.';
       show('setup');
       codeOut.hidden = codeIn.hidden = true;
       return;
@@ -16446,16 +16501,16 @@ function wireJamUI(rack) {
     codeOut.hidden = codeIn.hidden = false;
     clearOwnCode();
     instructions.textContent =
-      '1) Der andere scannt diesen QR mit der Kamera-App (oder du teilst den Link). ' +
-      '2) Seinen Antwort-QR hier scannen — oder den Antwort-Code unten einfügen.';
-    codeOut.value = 'Erzeuge Code …';
-    await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
+      '1) The other device scans this QR with the camera app (or you share the link). ' +
+      '2) Scan their reply QR here — or paste the reply code below.';
+    codeOut.value = 'Generating code …';
+    await unlockNetwork(); // real IPs in the code (important for hotspots)
     try { showOwnCode(await jamlink.createOffer()); } catch (err) { fail(err); }
   });
 
   $('#btn-jam-join').addEventListener('click', () => {
     if (!jamlink.supported) {
-      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      instructions.textContent = 'WebRTC is not supported by this WebView.';
       show('setup');
       codeOut.hidden = codeIn.hidden = true;
       return;
@@ -16464,8 +16519,8 @@ function wireJamUI(rack) {
     codeOut.hidden = codeIn.hidden = false;
     clearOwnCode();
     instructions.textContent =
-      '1) QR des Hosts scannen — oder seinen Code unten einfügen und Übernehmen. ' +
-      '2) Den Antwort-QR vom Host scannen lassen (oder Antwort-Code zurückschicken).';
+      '1) Scan the host\'s QR — or paste their code below and Apply. ' +
+      '2) Have the host scan your reply QR (or send the reply code back).';
   });
 
   const applyCode = async (raw) => {
@@ -16475,15 +16530,15 @@ function wireJamUI(rack) {
     if (!code) return;
     try {
       if (jamlink.pc && jamlink.role === 'host') {
-        await jamlink.acceptAnswer(code);          // Host: Antwort einlesen
+        await jamlink.acceptAnswer(code);          // host: read the reply
         renderNetInfo();
-        instructions.textContent = 'Antwort übernommen — Geräte verbinden sich …';
+        instructions.textContent = 'Reply applied — devices connecting …';
       } else {
-        codeOut.value = 'Erzeuge Antwort-Code …';
-        await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
-        showOwnCode(await jamlink.createAnswer(code)); // Gast: Antwort bauen
+        codeOut.value = 'Generating reply code …';
+        await unlockNetwork(); // real IPs in the code (important for hotspots)
+        showOwnCode(await jamlink.createAnswer(code)); // guest: build the reply
         instructions.textContent =
-          'Diesen Antwort-QR vom Host scannen lassen — oder Code teilen/kopieren.';
+          'Have the host scan this reply QR — or share/copy the code.';
       }
       codeIn.value = '';
     } catch (err) { fail(err); }
@@ -16504,8 +16559,8 @@ function wireJamUI(rack) {
     clearOwnCode();
     codeIn.value = code;
     instructions.textContent =
-      'Jam-Einladung erkannt! Tippe auf »Übernehmen« — und erlaube danach ' +
-      'die Kamera-Abfrage: Sie schaltet die direkte Geräteverbindung frei.';
+      'Jam invite detected! Tap "Apply" — then allow the camera ' +
+      'prompt: it unlocks the direct device connection.';
   };
 
   shareBtn.addEventListener('click', () => {
@@ -16513,7 +16568,7 @@ function wireJamUI(rack) {
     if (!code || !navigator.share) return;
     const payload = jamlink.role === 'host'
       ? { title: 'RackWerk Jam', url: joinURL(code) }
-      : { title: 'RackWerk Jam — Antwort-Code', text: code };
+      : { title: 'RackWerk Jam — Reply Code', text: code };
     navigator.share(payload).catch(() => { /* Nutzer hat abgebrochen */ });
   });
 
@@ -16561,7 +16616,7 @@ function wireSongUI(rack) {
     playheads = [];
     const total = song.lengthSteps || 16;
     if (song.empty) {
-      timeline.innerHTML = '<div class="song-empty">Noch nichts aufgenommen — tippe „● Aufnahme".</div>';
+      timeline.innerHTML = '<div class="song-empty">Nothing recorded yet — tap "● Record".</div>';
     } else {
       rack.machines.forEach((m, idx) => {
         const color = m.constructor.meta.color;
@@ -16596,7 +16651,7 @@ function wireSongUI(rack) {
     }
     armBtn.classList.toggle('is-active', song.recording);
     playBtn.classList.toggle('is-active', song.playing);
-    playBtn.textContent = song.playing ? '■ Stopp' : '▶ Song';
+    playBtn.textContent = song.playing ? '■ Stop' : '▶ Song';
     prjBtn.classList.toggle('is-songrec', song.recording);
     prjBtn.classList.toggle('is-songplay', song.playing);
   };
@@ -16688,7 +16743,7 @@ function wireMixerUI(rack) {
   const render = () => {
     list.innerHTML = '';
     if (!rack.machines.length) {
-      list.innerHTML = '<p class="sheet__empty">Keine Maschinen im Rack.</p>';
+      list.innerHTML = '<p class="sheet__empty">No machines in the rack.</p>';
       return;
     }
     for (const m of rack.machines) {
@@ -16776,7 +16831,7 @@ function wireTransportUI() {
         iconPlay.hidden = playing;
         iconStop.hidden = !playing;
         btnPlay.setAttribute('aria-label',
-          playing ? 'Wiedergabe stoppen' : 'Wiedergabe starten');
+          playing ? 'Stop playback' : 'Start playback');
         if (!playing) lcdPos.textContent = '1.1';
       }
     },

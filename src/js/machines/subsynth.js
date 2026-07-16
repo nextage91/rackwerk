@@ -38,7 +38,7 @@ export class SubSynth extends Machine {
   static meta = {
     type: 'subsynth',
     name: 'SubSynth',
-    desc: 'Subtraktiver Synthesizer mit Tiefpassfilter',
+    desc: 'Subtractive synth with lowpass filter',
     color: '#6fb8d6',
     model: 'RW-01',
   };

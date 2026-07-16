@@ -39,11 +39,11 @@ export class StepSeq {
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
         <span class="stepseq__ctrl">
-          <button class="m-btn" data-page="-1" aria-label="Vorheriger Takt">◀</button>
+          <button class="m-btn" data-page="-1" aria-label="Previous bar">◀</button>
           <span class="stepseq__page" data-pagelabel>1/1</span>
-          <button class="m-btn" data-page="1" aria-label="Nächster Takt">▶</button>
-          <button class="m-btn" data-len aria-label="Pattern-Länge">1T</button>
-          <button class="m-btn" data-clear>Leeren</button>
+          <button class="m-btn" data-page="1" aria-label="Next bar">▶</button>
+          <button class="m-btn" data-len aria-label="Pattern length">1B</button>
+          <button class="m-btn" data-clear>Clear</button>
         </span>
       </div>
       <div class="stepseq__grid"></div>
@@ -102,7 +102,7 @@ export class StepSeq {
     this.el.querySelector('[data-pagelabel]').textContent = `${this.page + 1}/${this.bars}`;
     this.el.querySelectorAll('[data-page]').forEach((b) => (b.style.display = multi ? '' : 'none'));
     this.el.querySelector('[data-pagelabel]').style.display = multi ? '' : 'none';
-    this.lenBtn.textContent = `${this.bars}T`;
+    this.lenBtn.textContent = `${this.bars}B`;
   }
 
   /** Pattern-Daten austauschen (Spurwechsel, Längenänderung, Laden). */

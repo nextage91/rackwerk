@@ -187,7 +187,7 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
-        <div class="vu" data-vu aria-label="Master-Pegel">
+        <div class="vu" data-vu aria-label="Master level">
           ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
         </div>
       </header>
@@ -199,13 +199,13 @@ class MasterFX {
               `<button class="seg__btn" data-div="${d.steps}">${d.label}</button>`).join('')}
           </div>
           <x-knob label="Feedb." min="0" max="0.85" value="0.45" data-p="feedback"></x-knob>
-          <x-knob label="Ton" min="500" max="12000" value="4500" curve="log" unit="Hz" data-p="tone"></x-knob>
+          <x-knob label="Tone" min="500" max="12000" value="4500" curve="log" unit="Hz" data-p="tone"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.5" data-p="delayLevel"></x-knob>
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Reverb</span>
-          <x-knob label="Größe" min="0.3" max="6" value="1.8" curve="log" unit="s" data-p="revDecay"></x-knob>
-          <x-knob label="Dämpf." min="0" max="1" value="0.5" data-p="revDamp"></x-knob>
+          <x-knob label="Size" min="0.3" max="6" value="1.8" curve="log" unit="s" data-p="revDecay"></x-knob>
+          <x-knob label="Damp." min="0" max="1" value="0.5" data-p="revDamp"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.4" data-p="revLevel"></x-knob>
         </div>
       </div>

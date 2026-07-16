@@ -38,7 +38,7 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'pat-chip__btn';
-    copyBtn.textContent = '⧉ Kopieren';
+    copyBtn.textContent = '⧉ Copy';
     copyBtn.addEventListener('click', () => {
       clipboard.shape = shape;
       clipboard.data = getSlot(i);
@@ -50,7 +50,7 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape
     if (clipboard.data && clipboard.shape === shape) {
       const pasteBtn = document.createElement('button');
       pasteBtn.className = 'pat-chip__btn';
-      pasteBtn.textContent = '⇩ Einfügen';
+      pasteBtn.textContent = '⇩ Paste';
       pasteBtn.addEventListener('click', () => {
         putSlot(i, clipboard.data);
         setActive(i);
@@ -78,7 +78,7 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape
     const b = document.createElement('button');
     b.className = 'patbank__btn' + (i === index ? ' is-active' : '');
     b.textContent = letter;
-    b.setAttribute('aria-label', `Pattern ${letter} (halten: kopieren/einfügen)`);
+    b.setAttribute('aria-label', `Pattern ${letter} (hold: copy/paste)`);
 
     let holdTimer = null;
     let held = false;

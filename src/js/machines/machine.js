@@ -156,7 +156,7 @@ export class Machine {
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
-          <button class="m-btn m-btn--remove" data-remove aria-label="Maschine entfernen">✕</button>
+          <button class="m-btn m-btn--remove" data-remove aria-label="Remove machine">✕</button>
         </div>
       </header>
       <div class="machine__body"></div>
