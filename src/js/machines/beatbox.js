@@ -232,6 +232,7 @@ export class BeatBox extends Machine {
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -258,6 +259,17 @@ export class BeatBox extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptySlot());
     this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
     this.#bindSlot();
+    this.setPan(state.pan ?? 0);
+  }
+
+  /* ---------- Mixer: Pegel (BeatBox führt volume separat, nicht in params) ---------- */
+  get level() { return this.volume; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    this.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
   }
 
   onTransport(event) {
@@ -288,8 +300,7 @@ export class BeatBox extends Machine {
       if (!key) return;
       const val = e.detail.value;
       if (key === 'volume') {
-        this.volume = val;
-        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       } else {
         this.tracks[this.selected][key] = val;
       }

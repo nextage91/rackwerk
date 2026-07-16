@@ -505,6 +505,59 @@ button {
 }
 .song-ph.is-on { opacity: .9; }
 .song-empty { color: var(--ink-dim); font-size: 13px; padding: 10px 0; }
+
+/* ===================== Mixer ===================== */
+.mixer-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mixer-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+}
+.mixer-strip__head {
+  flex: 0 0 92px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mixer-strip__stripe {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 6px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.mixer-strip__name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mixer-strip__knobs {
+  --knob-size: 48px;   /* kompakter als die 64px-Standardknobs — mehrere
+                          Kanalzuege muessen nebeneinander aufs Phone passen */
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.mixer-strip__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: auto;
+}
+.mixer-strip__buttons .m-btn {
+  min-width: 52px;
+  min-height: 40px;
+  font-size: 10px;
+  padding: 0 6px;
+}
 #btn-song-arm.is-active {
   color: #fff; background: linear-gradient(#b33a3a, #7e2727);
   animation: rec-pulse 1.2s ease-in-out infinite;
@@ -1118,6 +1171,7 @@ x-knob.has-auto .knob__dial::after {
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
         <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
+        <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -1202,6 +1256,16 @@ x-knob.has-auto .knob__dial::after {
         <button class="m-btn" id="btn-song-clear">Leeren</button>
       </div>
       <div class="song-timeline" id="song-timeline"></div>
+    </div>
+  </div>
+
+  <!-- ===== Mixer (Bottom Sheet) ===== -->
+  <div class="sheet" id="mixer-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Mixer">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Mixer</h2>
+      <div class="mixer-list" id="mixer-list"></div>
     </div>
   </div>
 
@@ -14440,10 +14504,16 @@ class Machine {
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();
+    /** @type {StereoPannerNode} Panorama — sitzt direkt hinterm Fader, wie
+     *  am echten Kanalzug. Die Sends (Delay/Reverb) hängen hinter dem Gate,
+     *  tragen die Stereo-Position also mit. */
+    this.pan = 0;
+    this.panner = engine.ctx.createStereoPanner();
     /** @type {GainNode} Mute/Solo-Gate — getrennt vom Volume, damit
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
-    this.output.connect(this.gate);
+    this.output.connect(this.panner);
+    this.panner.connect(this.gate);
     this.gate.connect(engine.masterBus);
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
@@ -14478,6 +14548,30 @@ class Machine {
     if (key === 'sendDelay') return this.sends.delay;
     if (key === 'sendReverb') return this.sends.reverb;
     return this.params?.[key];
+  }
+
+  /* ---------- Mixer: Pegel & Panorama ---------- */
+
+  /**
+   * Pegel (0..1) — Basis liest/schreibt `this.params.volume`, passend für
+   * SubSynth/PercSynth. BeatBox überschreibt (führt die Lautstärke separat
+   * als `this.volume`). Sowohl der eigene Volume-Knob im Maschinen-Body als
+   * auch der Mixer greifen auf DIESELBE Methode zu — eine Quelle der
+   * Wahrheit, kein zweiter, widersprüchlicher Pegel-Regler.
+   */
+  get level() { return this.params?.volume ?? 1; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    if (this.params) this.params.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
+  }
+
+  /** Panorama (-1..1). Neu, ohne Legacy-Regler — nur der Mixer zeigt ihn. */
+  setPan(v) {
+    this.pan = Math.min(1, Math.max(-1, v));
+    this.panner.pan.setTargetAtTime(this.pan, engine.now, 0.01);
   }
 
   /* ---------- Master-FX-Sends ---------- */
@@ -14527,15 +14621,10 @@ class Machine {
       <div class="machine__body"></div>
     `;
 
-    el.querySelector('[data-mute]').addEventListener('click', (e) => {
-      this.setMuted(!this.muted);
-      e.currentTarget.classList.toggle('is-active', this.muted);
-    });
-
-    el.querySelector('[data-solo]').addEventListener('click', (e) => {
-      this.setSoloed(!this.soloed);
-      e.currentTarget.classList.toggle('is-active', this.soloed);
-    });
+    this.headMuteBtn = el.querySelector('[data-mute]');
+    this.headSoloBtn = el.querySelector('[data-solo]');
+    this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
+    this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
     el.querySelector('[data-remove]').addEventListener('click', () => {
       this.dispose();
@@ -14626,11 +14715,15 @@ class Machine {
 
   setMuted(muted) {
     this.muted = muted;
+    this.headMuteBtn?.classList.toggle('is-active', muted);
+    this.onMixerChange?.(); // Mixer-Sheet hält seine Buttons synchron, falls offen
     refreshGates();
   }
 
   setSoloed(soloed) {
     this.soloed = soloed;
+    this.headSoloBtn?.classList.toggle('is-active', soloed);
+    this.onMixerChange?.();
     refreshGates();
   }
 
@@ -14646,6 +14739,7 @@ class Machine {
     this.gate.gain.setTargetAtTime(0, t, 0.02);
     setTimeout(() => {
       this.output.disconnect();
+      this.panner.disconnect();
       this.gate.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
@@ -14749,6 +14843,7 @@ class SubSynth extends Machine {
       params: { ...this.params },
       patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -14766,6 +14861,7 @@ class SubSynth extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptyPattern());
     this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
   }
 
   onTransport(event) {
@@ -14915,7 +15011,7 @@ class SubSynth extends Machine {
       } else if (key === 'resonance') {
         for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
       } else if (key === 'volume') {
-        this.output.gain.setTargetAtTime(val, t, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
     });
     container.appendChild(row);
@@ -15180,6 +15276,7 @@ class BeatBox extends Machine {
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -15206,6 +15303,17 @@ class BeatBox extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptySlot());
     this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
     this.#bindSlot();
+    this.setPan(state.pan ?? 0);
+  }
+
+  /* ---------- Mixer: Pegel (BeatBox führt volume separat, nicht in params) ---------- */
+  get level() { return this.volume; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    this.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
   }
 
   onTransport(event) {
@@ -15236,8 +15344,7 @@ class BeatBox extends Machine {
       if (!key) return;
       const val = e.detail.value;
       if (key === 'volume') {
-        this.volume = val;
-        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       } else {
         this.tracks[this.selected][key] = val;
       }
@@ -15446,6 +15553,7 @@ class PercSynth extends Machine {
       params: { ...this.params },
       patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -15462,6 +15570,7 @@ class PercSynth extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptyPattern());
     this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
   }
 
   onTransport(event) {
@@ -15536,7 +15645,7 @@ class PercSynth extends Machine {
       const val = e.detail.value;
       this.params[key] = val;
       if (key === 'volume') {
-        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
     });
     container.appendChild(row);
@@ -15824,6 +15933,7 @@ function boot() {
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
   wireSongUI(rack);
+  wireMixerUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -16459,6 +16569,63 @@ function wireSongUI(rack) {
   });
 
   $('#btn-song-clear').addEventListener('click', () => song.clear());
+}
+
+/* ---------- Mixer: Pegel/Panorama/Mute/Solo aller Maschinen im Überblick ----------
+ * Steuert dieselben Werte, die auch die Maschinen-Panels selbst zeigen (eine
+ * Quelle der Wahrheit über Machine.setLevel/setPan/setMuted/setSoloed) — der
+ * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel. */
+function wireMixerUI(rack) {
+  const sheet = $('#mixer-sheet');
+  const list = $('#mixer-list');
+
+  const render = () => {
+    list.innerHTML = '';
+    if (!rack.machines.length) {
+      list.innerHTML = '<p class="sheet__empty">Keine Maschinen im Rack.</p>';
+      return;
+    }
+    for (const m of rack.machines) {
+      const { name, color } = m.constructor.meta;
+      const strip = document.createElement('div');
+      strip.className = 'mixer-strip';
+      strip.style.setProperty('--m-color', color);
+      strip.innerHTML = `
+        <div class="mixer-strip__head">
+          <span class="mixer-strip__stripe"></span>
+          <span class="mixer-strip__name">${name}</span>
+        </div>
+        <div class="mixer-strip__knobs">
+          <x-knob label="Level" min="0" max="1" value="${m.level}" data-k="level"></x-knob>
+          <x-knob label="Pan" min="-1" max="1" default="0" value="${m.pan}" data-k="pan"></x-knob>
+        </div>
+        <div class="mixer-strip__buttons">
+          <button class="m-btn m-btn--solo${m.soloed ? ' is-active' : ''}" data-solo>SOLO</button>
+          <button class="m-btn m-btn--mute${m.muted ? ' is-active' : ''}" data-mute>MUTE</button>
+        </div>
+      `;
+      strip.querySelector('[data-k="level"]').addEventListener('input', (e) => m.setLevel(e.detail.value));
+      strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => m.setPan(e.detail.value));
+      const muteBtn = strip.querySelector('[data-mute]');
+      const soloBtn = strip.querySelector('[data-solo]');
+      muteBtn.addEventListener('click', () => m.setMuted(!m.muted));
+      soloBtn.addEventListener('click', () => m.setSoloed(!m.soloed));
+      // Header-Buttons der Maschine bleiben die Referenz — hält den Mixer
+      // synchron, falls der Zustand von dort (oder programmatisch) ändert
+      m.onMixerChange = () => {
+        muteBtn.classList.toggle('is-active', m.muted);
+        soloBtn.classList.toggle('is-active', m.soloed);
+      };
+      list.appendChild(strip);
+    }
+  };
+
+  $('#btn-open-mixer').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    render();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
 }
 
 /* ---------- 3) Transport-Leiste ---------- */
