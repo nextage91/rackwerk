@@ -58,17 +58,26 @@ export class SubSynth extends Machine {
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
-    /** 4 Pattern-Slots (A/B/C/D), {on, midi} pro Step. A trägt die Demo-
-     *  Line, B–D starten leer. `this.pattern` zeigt aufs aktive Slot. */
-    const seedPat = Array.from({ length: 16 }, () => ({ on: false, midi: 48 }));
-    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 }; // kleine Acid-Line
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D), {on, midi} pro Step. `this.pattern`
+     *  zeigt aufs aktive Slot. Die Demo-Line kommt nicht von hier, sondern
+     *  optional über seedDemo() (s. dort). */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
+  }
+
+  /**
+   * Kleine Acid-Line in Slot A einfüllen — nur von der Startbesetzung einer
+   * neuen Session genutzt (project.js#newProject), damit die App sofort
+   * klingt. Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 };
+    for (const [step, midi] of Object.entries(seed)) {
+      this.patterns[0][step].on = true;
+      this.patterns[0][step].midi = midi;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.pattern);
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */

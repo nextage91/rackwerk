@@ -150,7 +150,10 @@ const TRACK_DEFS = [
 /** Leeres Pattern-Slot: 8 Spuren × 16 leere Steps. */
 const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
 
-// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat
+// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat — nur für
+// die Startbesetzung einer neuen Session genutzt (project.js#newProject),
+// nicht automatisch beim Hinzufügen über "+ Add Machine" (die soll leer
+// starten, s. seedDemo()).
 const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
 
 export class BeatBox extends Machine {
@@ -202,17 +205,27 @@ export class BeatBox extends Machine {
       };
     });
 
-    // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
-    // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
+    // 4 leere Pattern-Slots (A/B/C/D), je 8 Step-Spuren. Die Spuren zeigen
+    // per steps-Referenz aufs aktive Slot. Der Start-Groove kommt nicht von
+    // hier, sondern optional über seedDemo() (s. dort).
     this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
-    for (const [name, steps] of Object.entries(SEED)) {
-      const ti = this.tracks.findIndex((t) => t.name === name);
-      for (const s of steps) this.patterns[0][ti][s].on = true;
-    }
     this.patternIndex = 0;
     // Binden hier inline: buildAudio läuft aus dem Basis-Konstruktor, private
     // Methoden der Unterklasse sind da noch nicht verfügbar.
     this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
+  }
+
+  /**
+   * Start-Groove in Slot A einfüllen — nur von der Startbesetzung einer neuen
+   * Session genutzt (project.js#newProject), damit die App sofort klingt.
+   * Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    for (const [name, steps] of Object.entries(SEED)) {
+      const ti = this.tracks.findIndex((t) => t.name === name);
+      for (const s of steps) this.patterns[0][ti][s].on = true;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.tracks[this.selected].steps);
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */

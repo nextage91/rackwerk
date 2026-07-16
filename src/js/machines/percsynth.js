@@ -49,14 +49,9 @@ export class PercSynth extends Machine {
     };
     this.output.gain.value = this.params.volume;
 
-    /** 4 Pattern-Slots (A/B/C/D). A trägt die Offbeat-Perc, B–D leer. */
-    const seedPat = emptyPattern();
-    const seed = { 2: 79, 7: 72, 10: 84, 15: 76 }; // sparsame Offbeat-Perc
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
+     *  ohne vorprogrammierte Steps. */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }

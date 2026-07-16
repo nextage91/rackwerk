@@ -44,8 +44,8 @@ export function newProject(rack) {
   transport.setBpm(120);
   masterFX.reset();
   song.clear();
-  rack.addMachine(BY_TYPE.beatbox);
-  rack.addMachine(BY_TYPE.subsynth);
+  rack.addMachine(BY_TYPE.beatbox).seedDemo();
+  rack.addMachine(BY_TYPE.subsynth).seedDemo();
 }
 
 export function loadProject(rack, data) {
