@@ -112,6 +112,17 @@ export class StepSeq {
     this.#renderAll();
   }
 
+  /**
+   * Einzelnen Step neu zeichnen, nachdem die Maschine ihn extern verändert
+   * hat (Live-Aufnahme via REC — s. Machine.liveStepIndex). patternIdx ist
+   * der Index im GESAMTEN Pattern; ohne Wirkung, wenn die Seite gerade
+   * nicht sichtbar ist.
+   */
+  refreshStep(patternIdx) {
+    if (Math.floor(patternIdx / BAR_STEPS) !== this.page) return;
+    this.#renderCell(patternIdx % BAR_STEPS);
+  }
+
   /* ---------- Playhead ---------- */
   /** patternIdx ist der Index im GESAMTEN Pattern; sichtbar nur auf seiner Seite. */
   flashStep(patternIdx, delayMs, durMs) {

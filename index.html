@@ -1078,7 +1078,7 @@ x-knob.has-auto .knob__dial::after {
     </div>
 
     <div class="transport__controls">
-      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Automation aufnehmen">●</button>
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Aufnahme: Automation & Live-Spiel">●</button>
       <button class="t-btn" id="btn-bpm-down" aria-label="Tempo verringern">−</button>
       <button class="t-btn" id="btn-bpm-up" aria-label="Tempo erhöhen">+</button>
       <button class="t-btn t-btn--play" id="btn-play" aria-label="Wiedergabe starten">
@@ -12518,6 +12518,17 @@ class StepSeq {
     this.#renderAll();
   }
 
+  /**
+   * Einzelnen Step neu zeichnen, nachdem die Maschine ihn extern verändert
+   * hat (Live-Aufnahme via REC — s. Machine.liveStepIndex). patternIdx ist
+   * der Index im GESAMTEN Pattern; ohne Wirkung, wenn die Seite gerade
+   * nicht sichtbar ist.
+   */
+  refreshStep(patternIdx) {
+    if (Math.floor(patternIdx / BAR_STEPS) !== this.page) return;
+    this.#renderCell(patternIdx % BAR_STEPS);
+  }
+
   /* ---------- Playhead ---------- */
   /** patternIdx ist der Index im GESAMTEN Pattern; sichtbar nur auf seiner Seite. */
   flashStep(patternIdx, delayMs, durMs) {
@@ -13497,6 +13508,12 @@ const { automation } = (() => {
  *
  * Maschinen melden ihre Knobs über register(); der Schlüssel ist
  * `${machineId}:${paramName}`, unregisterMachine() räumt beim Entfernen auf.
+ *
+ * Dieselbe REC-Taste (armed-Flag) scharf/entschärft auch die Live-Aufnahme
+ * ins Step-Pattern: Keybed-Noten und Drum-Pad-Treffer werden bei scharfem
+ * REC + laufendem Transport direkt in den aktiven Pattern-Slot geschrieben
+ * (Machine.isLiveRecording/liveStepIndex, s. machine.js) — ein Knopf für
+ * Regler-Fahrten UND gespielte Noten, wie bei klassischen Grooveboxen.
  */
 
 const RESOLUTION = 128;   // Slots pro Takt
@@ -14588,6 +14605,25 @@ class Machine {
     }, delay);
   }
 
+  /**
+   * Live-Aufnahme ins Step-Pattern: Sind REC scharf und der Transport am
+   * Laufen, während live gespielt wird (Keybed-Note, Drum-Pad), schreiben
+   * Unterklassen den Treffer direkt in den aktuell aktiven Pattern-Slot.
+   * Dieselbe REC-Taste löst sonst die Regler-Automation aus — ein Knopf
+   * für beides, wie bei klassischen Grooveboxen ("Step-Rec").
+   *
+   * `liveStepIndex(length)` liefert den Ziel-Step (auf den nächsten 16tel
+   * gerundet, über den absoluten Transport-Step — bleibt so auch bei
+   * polymetrischen Patterns unterschiedlicher Länge konsistent zum
+   * Sequenzer-Playback, das genauso `step % length` rechnet).
+   */
+  get isLiveRecording() {
+    return automation.armed && transport.isPlaying;
+  }
+  liveStepIndex(length) {
+    return transport.currentStep % length;
+  }
+
   setMuted(muted) {
     this.muted = muted;
     refreshGates();
@@ -14771,6 +14807,11 @@ class SubSynth extends Machine {
   noteOn(midi) {
     if (this.voices.has(midi)) return;
     this.pulse();
+    if (this.isLiveRecording) {
+      const idx = this.liveStepIndex(this.pattern.length);
+      this.pattern[idx] = { on: true, midi };
+      this.seq?.refreshStep(idx);
+    }
     const ctx = engine.ctx;
     const t = ctx.currentTime;
     const p = this.params;
@@ -15242,8 +15283,11 @@ class BeatBox extends Machine {
       pad.textContent = tr.name;
       pad.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        if (this.isLiveRecording) {
+          tr.steps[this.liveStepIndex(tr.steps.length)].on = true;
+        }
         this.#trigger(tr, engine.ctx.currentTime);
-        this.#selectTrack(i);
+        this.#selectTrack(i); // rendert das Grid neu — zeigt den frischen Step gleich mit
       });
       pads.appendChild(pad);
       return pad;
@@ -15521,7 +15565,14 @@ class PercSynth extends Machine {
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({
       baseMidi: 72,
-      onNoteOn: (midi) => this.playNote(midi, engine.ctx.currentTime),
+      onNoteOn: (midi) => {
+        if (this.isLiveRecording) {
+          const idx = this.liveStepIndex(this.pattern.length);
+          this.pattern[idx] = { on: true, midi };
+          this.seq?.refreshStep(idx);
+        }
+        this.playNote(midi, engine.ctx.currentTime);
+      },
     }));
   }
 }

@@ -16,6 +16,12 @@
  *
  * Maschinen melden ihre Knobs über register(); der Schlüssel ist
  * `${machineId}:${paramName}`, unregisterMachine() räumt beim Entfernen auf.
+ *
+ * Dieselbe REC-Taste (armed-Flag) scharf/entschärft auch die Live-Aufnahme
+ * ins Step-Pattern: Keybed-Noten und Drum-Pad-Treffer werden bei scharfem
+ * REC + laufendem Transport direkt in den aktiven Pattern-Slot geschrieben
+ * (Machine.isLiveRecording/liveStepIndex, s. machine.js) — ein Knopf für
+ * Regler-Fahrten UND gespielte Noten, wie bei klassischen Grooveboxen.
  */
 import { transport } from './transport.js';
 

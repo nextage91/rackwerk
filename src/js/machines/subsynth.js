@@ -155,6 +155,11 @@ export class SubSynth extends Machine {
   noteOn(midi) {
     if (this.voices.has(midi)) return;
     this.pulse();
+    if (this.isLiveRecording) {
+      const idx = this.liveStepIndex(this.pattern.length);
+      this.pattern[idx] = { on: true, midi };
+      this.seq?.refreshStep(idx);
+    }
     const ctx = engine.ctx;
     const t = ctx.currentTime;
     const p = this.params;
