@@ -853,11 +853,16 @@ function wireMixerUI(rack) {
       return;
     }
     for (const m of rack.machines) {
-      const { name, color, type } = m.constructor.meta;
+      const { name, color } = m.constructor.meta;
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
 
-      if (type === 'beatbox') {
-        // Gruppe: Gesamt-Kanalzug (Kit-Bus) + einklappbare Drum-Spuren
+      if (Array.isArray(m.tracks)) {
+        // Jede Multi-Spur-Maschine (BeatBox, AnalogKit, …) läuft als Gruppe:
+        // Gesamt-Kanalzug (Kit-Bus) + einklappbare Einzel-Spuren. Duck-typed
+        // auf m.tracks statt auf einen bestimmten type -- jede künftige
+        // Multi-Spur-Maschine bekommt das automatisch, ohne main.js
+        // anzufassen (Voraussetzung: dieselben Setter wie BeatBox/AnalogKit:
+        // setTrackLevel/setTrackPan/setTrackSend/getTrackMeterAnalyser).
         const group = document.createElement('div');
         group.className = 'mixer-group';
         group.style.setProperty('--m-color', color);

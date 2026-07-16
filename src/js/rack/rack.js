@@ -9,9 +9,10 @@ import { SubSynth } from '../machines/subsynth.js';
 import { BeatBox } from '../machines/beatbox.js';
 import { PercSynth } from '../machines/percsynth.js';
 import { PolySynth } from '../machines/polysynth.js';
+import { AnalogKit } from '../machines/analogkit.js';
 
 /** Neue Maschinentypen einfach hier registrieren. */
-export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth];
+export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit];
 
 export class Rack {
   /**
