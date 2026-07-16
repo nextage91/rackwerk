@@ -205,7 +205,14 @@ export class PercSynth extends Machine {
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({
       baseMidi: 72,
-      onNoteOn: (midi) => this.playNote(midi, engine.ctx.currentTime),
+      onNoteOn: (midi) => {
+        if (this.isLiveRecording) {
+          const idx = this.liveStepIndex(this.pattern.length);
+          this.pattern[idx] = { on: true, midi };
+          this.seq?.refreshStep(idx);
+        }
+        this.playNote(midi, engine.ctx.currentTime);
+      },
     }));
   }
 }

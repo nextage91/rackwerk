@@ -335,8 +335,11 @@ export class BeatBox extends Machine {
       pad.textContent = tr.name;
       pad.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        if (this.isLiveRecording) {
+          tr.steps[this.liveStepIndex(tr.steps.length)].on = true;
+        }
         this.#trigger(tr, engine.ctx.currentTime);
-        this.#selectTrack(i);
+        this.#selectTrack(i); // rendert das Grid neu — zeigt den frischen Step gleich mit
       });
       pads.appendChild(pad);
       return pad;

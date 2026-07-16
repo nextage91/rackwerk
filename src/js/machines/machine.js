@@ -210,6 +210,25 @@ export class Machine {
     }, delay);
   }
 
+  /**
+   * Live-Aufnahme ins Step-Pattern: Sind REC scharf und der Transport am
+   * Laufen, während live gespielt wird (Keybed-Note, Drum-Pad), schreiben
+   * Unterklassen den Treffer direkt in den aktuell aktiven Pattern-Slot.
+   * Dieselbe REC-Taste löst sonst die Regler-Automation aus — ein Knopf
+   * für beides, wie bei klassischen Grooveboxen ("Step-Rec").
+   *
+   * `liveStepIndex(length)` liefert den Ziel-Step (auf den nächsten 16tel
+   * gerundet, über den absoluten Transport-Step — bleibt so auch bei
+   * polymetrischen Patterns unterschiedlicher Länge konsistent zum
+   * Sequenzer-Playback, das genauso `step % length` rechnet).
+   */
+  get isLiveRecording() {
+    return automation.armed && transport.isPlaying;
+  }
+  liveStepIndex(length) {
+    return transport.currentStep % length;
+  }
+
   setMuted(muted) {
     this.muted = muted;
     refreshGates();
