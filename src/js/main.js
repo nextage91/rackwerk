@@ -790,9 +790,9 @@ function wireMixerUI(rack) {
   const startMeters = () => { if (!meterRAF) meterRAF = requestAnimationFrame(meterTick); };
   const stopMeters = () => { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; };
 
-  /** Ein Kanalzug (Fader + VU-Meter + Pan + Mute/Solo) für eine Maschine
-   *  ODER eine einzelne Drum-Spur — beide teilen sich dieselben Setter-
-   *  Namen (setLevel/setPan/level/pan/getMeterAnalyser). */
+  /** Ein Kanalzug (Fader + VU-Meter + Pan + Sends + Mute/Solo) für eine
+   *  Maschine ODER eine einzelne Drum-Spur — beide teilen sich dieselben
+   *  Setter-Namen (setLevel/setPan/setSend/level/pan/sends/getMeterAnalyser). */
   const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
     const strip = document.createElement('div');
     strip.className = 'chstrip' + (compact ? ' chstrip--sub' : '');
@@ -801,7 +801,11 @@ function wireMixerUI(rack) {
         <span class="chstrip__stripe"></span>
         <span class="chstrip__name">${name}</span>
       </div>
-      <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      <div class="chstrip__knobs">
+        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+        <x-knob label="Dly" min="0" max="1" value="${target.sends.delay}" data-k="sendDelay"></x-knob>
+        <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>
+      </div>
       <div class="chstrip__meters">
         <div class="chstrip__vu" data-vu>${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}</div>
         <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
@@ -814,6 +818,8 @@ function wireMixerUI(rack) {
     `;
     strip.querySelector('[data-k="level"]').addEventListener('input', (e) => target.setLevel(e.detail.value));
     strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => target.setPan(e.detail.value));
+    strip.querySelector('[data-k="sendDelay"]').addEventListener('input', (e) => target.setSend('delay', e.detail.value));
+    strip.querySelector('[data-k="sendReverb"]').addEventListener('input', (e) => target.setSend('reverb', e.detail.value));
     if (withButtons) {
       const muteBtn = strip.querySelector('[data-mute]');
       const soloBtn = strip.querySelector('[data-solo]');
@@ -869,8 +875,9 @@ function wireMixerUI(rack) {
         m.tracks.forEach((tr, i) => {
           const sub = buildStrip(
             {
-              level: tr.level, pan: tr.pan,
+              level: tr.level, pan: tr.pan, sends: { delay: tr.sendDelay, reverb: tr.sendReverb },
               setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v),
+              setSend: (which, v) => m.setTrackSend(i, which, v),
               getMeterAnalyser: () => m.getTrackMeterAnalyser(i),
             },
             { name: tr.name, withButtons: false, compact: true },

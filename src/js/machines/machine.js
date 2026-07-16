@@ -136,6 +136,11 @@ export class Machine {
     this.sends[which] = value;
     const node = which === 'delay' ? this.sendDelay : this.sendReverb;
     node.gain.setTargetAtTime(value, engine.now, 0.01);
+    // Panel-Knob synchron halten — eine Quelle der Wahrheit, egal ob der
+    // Mixer oder das eigene Maschinen-Panel gerade gezogen wird.
+    const paramKey = which === 'delay' ? 'sendDelay' : 'sendReverb';
+    const knob = this.el?.querySelector(`x-knob[data-p="${paramKey}"]`);
+    if (knob) knob.value = value;
   }
 
   /** Beim Projekt-Laden: Werte setzen UND Knob-Stellungen nachziehen
