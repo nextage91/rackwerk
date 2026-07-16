@@ -147,7 +147,9 @@ button {
   min-width: 0;                     /* darf schrumpfen — sonst schiebt die
                                        LCD-Zeile den Play-Button vom Schirm */
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;      /* BPM links verankern → nie links
+                                       abgeschnitten; enge Screens klippen
+                                       höchstens die Position rechts */
   gap: 6px;
   background: var(--lcd-bg);
   border-radius: 6px;
@@ -450,6 +452,59 @@ button {
   color: var(--led-play);
   box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
 }
+/* SNG-Button leuchtet rot & pulsiert, während der Song aufgenommen wird */
+.t-btn--prj.is-songrec {
+  color: var(--led-on);
+  box-shadow: 0 0 12px rgba(255,77,61,.6), var(--shadow-panel);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+/* SNG-Button grün, während der Song abspielt */
+.t-btn--prj.is-songplay {
+  color: var(--led-play);
+  box-shadow: 0 0 10px rgba(127,217,122,.5), var(--shadow-panel);
+}
+
+/* ===================== Song-Timeline ===================== */
+.song-timeline { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.song-lane { display: flex; align-items: center; gap: 8px; }
+.song-lane__name {
+  flex: 0 0 62px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-left: 3px solid var(--lane-color, var(--ink-faint));
+  padding-left: 6px;
+}
+.song-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 30px;
+  border-radius: 5px;
+  background: var(--bg-panel-deep);
+  box-shadow: 0 2px 5px rgba(0,0,0,.55) inset;
+  overflow: hidden;
+}
+.song-block {
+  position: absolute; top: 2px; bottom: 2px;
+  display: grid; place-items: center;
+  font-family: var(--font-lcd); font-size: 12px; font-weight: 700;
+  color: #16120d;
+  border-radius: 3px;
+  border-left: 1px solid rgba(0,0,0,.45);
+  overflow: hidden;
+}
+.song-ph {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--lcd-ink); box-shadow: 0 0 6px var(--lcd-glow);
+  pointer-events: none; opacity: 0;
+}
+.song-ph.is-on { opacity: .9; }
+.song-empty { color: var(--ink-dim); font-size: 13px; padding: 10px 0; }
+#btn-song-arm.is-active {
+  color: #fff; background: linear-gradient(#b33a3a, #7e2727);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+#btn-song-play.is-active { color: var(--led-play); }
 /* Beat-Puls auf dem PRJ-Button: Sync-Feedback auch bei geschlossenem Sheet */
 .t-btn--prj.is-linked.is-beat {
   box-shadow: 0 0 18px rgba(102,224,122,.95), var(--shadow-panel);
@@ -1036,6 +1091,7 @@ x-knob.has-auto .knob__dial::after {
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -1099,6 +1155,27 @@ x-knob.has-auto .knob__dial::after {
       <p class="sheet__hint" id="project-hint" hidden>
         ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
       </p>
+    </div>
+  </div>
+
+  <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
+  <div class="sheet" id="song-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Song-Timeline">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Song-Timeline</h2>
+      <p class="sheet__hint">
+        <b>Aufnahme</b> schaltet scharf, schließt diese Seite und startet den Transport —
+        schalte dann live die Patterns (A/B/C/D) der Maschinen um, die Wechsel werden
+        mitgeschnitten. Mit dem Stopp oben beendest du die Aufnahme.
+        <b>Song ▶</b> spielt die Aufnahme in Schleife ab.
+      </p>
+      <div class="filerow">
+        <button class="m-btn" id="btn-song-arm">● Aufnahme</button>
+        <button class="m-btn" id="btn-song-play">▶ Song</button>
+        <button class="m-btn" id="btn-song-clear">Leeren</button>
+      </div>
+      <div class="song-timeline" id="song-timeline"></div>
     </div>
   </div>
 
@@ -12960,6 +13037,14 @@ class Transport {
   /** Aktuelle Position im 1-Takt-Loop (0..1). */
   get phase() { return this.phaseOver(1); }
 
+  /** Aktueller absoluter Step (auf der Audio-Uhr, gerundet) — für die
+   *  Song-Aufnahme: „zu welchem Step wurde live etwas gedrückt". */
+  get currentStep() {
+    if (!this.isPlaying) return 0;
+    const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
+    return Math.max(0, Math.round(stepFloat));
+  }
+
   /** Position als "Takt.Viertel" fürs LCD (grob, UI-Zwecke). */
   get positionLabel() {
     const bar = Math.floor(this.#step / STEPS_PER_BAR) + 1;
@@ -13676,6 +13761,165 @@ const automation = new Automation();
 return { automation };
 })();
 
+/* ===== js/core/song.js ===== */
+const { song } = (() => {
+/**
+ * song — freie Timeline-Aufnahme („Song-Modus").
+ *
+ * Idee: Statt Blöcke von Hand anzuordnen, spielst du den Song LIVE ein.
+ * Aufnahme scharf → Play → du schaltest live die Patterns der Maschinen
+ * um; jeder Wechsel wird mit seinem absoluten Step mitgeschnitten. Beim
+ * Abspielen fährt der Transport von vorn und die aufgezeichneten Wechsel
+ * werden zur richtigen Zeit wieder ausgelöst — der Song loopt in seiner
+ * Länge.
+ *
+ * v1 schneidet Pattern-Wechsel mit (das Song-Gerüst). Live-Reglerfahrten
+ * und gespielte Noten folgen als nächste Ausbaustufe.
+ *
+ * Reihenfolge wichtig: song hängt sich VOR den Maschinen als Transport-
+ * Listener ein (Konstruktor läuft beim Modul-Laden, vor dem Boot), damit
+ * ein Pattern-Wechsel angewandt ist, bevor die Maschinen im selben Step
+ * ihr Pattern lesen.
+ */
+
+const STEPS_PER_BAR = 16;
+
+class Song {
+  constructor() {
+    /** @type {{step:number, m:number, index:number}[]} Events, nach step
+     *  sortiert. `m` = Position der Maschine im Rack (stabil über Speichern/
+     *  Laden — IDs werden beim Laden neu vergeben, die Reihenfolge nicht). */
+    this.events = [];
+    this.lengthBars = 0;
+    this.recording = false;
+    this.playing = false;
+    this.rack = null;
+    this.onchange = null;    // () => void  — UI neu zeichnen
+    this.onplayhead = null;  // (songStep|null) => void
+
+    this.#startStep = 0;
+    this.#snapped = false;
+    transport.addListener(this);
+  }
+
+  #startStep;
+  #snapped;
+
+  get lengthSteps() { return this.lengthBars * STEPS_PER_BAR; }
+  get empty() { return this.events.length === 0; }
+
+  bind(rack) { this.rack = rack; }
+
+  arm(on) {
+    this.recording = on;
+    this.#snapped = false;
+    this.onchange?.();
+  }
+
+  clear() {
+    this.events = [];
+    this.lengthBars = 0;
+    this.#snapped = false;
+    this.onchange?.();
+  }
+
+  /* ---------- Aufnahme ---------- */
+  onTransport(ev) {
+    if (ev === 'play' && this.recording && !this.#snapped) this.#snapshotInitial();
+    if (ev === 'stop') {
+      if (this.playing) { this.playing = false; this.onplayhead?.(null); }
+      this.recording = false;   // Aufnahme endet mit dem Transport-Stopp
+      this.onchange?.();
+    }
+  }
+
+  /** Ausgangszustand aller Maschinen als Step-0-Events — so startet und
+   *  loopt der Song sauber vom definierten Anfang. */
+  #snapshotInitial() {
+    this.#snapped = true;
+    this.#startStep = transport.currentStep;
+    (this.rack?.machines ?? []).forEach((m, idx) => {
+      if (m.patternIndex != null) this.#put(0, idx, m.patternIndex);
+    });
+    this.#growTo(0);
+    this.onchange?.();
+  }
+
+  /** Live-Pattern-Wechsel mitschneiden (Maschine ruft das beim Umschalten). */
+  recordPattern(machineId, index) {
+    if (!this.recording || !transport.isPlaying || this.playing) return;
+    const m = this.rack?.machines.findIndex((x) => x.id === machineId);
+    if (m == null || m < 0) return;
+    if (!this.#snapped) this.#snapshotInitial();
+    const step = Math.max(0, transport.currentStep - this.#startStep);
+    this.#put(step, m, index);
+    this.#growTo(step);
+    this.onchange?.();
+  }
+
+  #put(step, m, index) {
+    this.events = this.events.filter((e) => !(e.step === step && e.m === m));
+    this.events.push({ step, m, index });
+    this.events.sort((a, b) => a.step - b.step || a.m - b.m);
+  }
+  #growTo(step) {
+    this.lengthBars = Math.max(this.lengthBars, Math.ceil((step + 1) / STEPS_PER_BAR));
+  }
+
+  /** Song-Länge manuell setzen (Takte), mind. so lang wie das letzte Event. */
+  setLengthBars(bars) {
+    const last = this.events.reduce((m, e) => Math.max(m, e.step), 0);
+    this.lengthBars = Math.max(Math.ceil((last + 1) / STEPS_PER_BAR), Math.max(1, bars));
+    this.onchange?.();
+  }
+
+  /* ---------- Wiedergabe ---------- */
+  play() {
+    if (this.empty || !this.rack) return;
+    this.recording = false;
+    this.playing = true;
+    transport.stop();
+    transport.play();                       // Start bei Step 0
+    this.#startStep = transport.currentStep;
+    this.onchange?.();
+  }
+  stop() {
+    this.playing = false;
+    transport.stop();
+    this.onplayhead?.(null);
+    this.onchange?.();
+  }
+
+  onStep(step) {
+    if (!this.playing || !this.lengthSteps) return;
+    const len = this.lengthSteps;
+    const songStep = (((step - this.#startStep) % len) + len) % len;
+    for (const e of this.events) if (e.step === songStep) this.#apply(e);
+    this.onplayhead?.(songStep);
+  }
+
+  #apply(e) {
+    this.rack?.machines[e.m]?.setPatternIndex?.(e.index);
+  }
+
+  /* ---------- Persistenz ---------- */
+  serialize() {
+    return { lengthBars: this.lengthBars, events: this.events.map((e) => ({ ...e })) };
+  }
+  deserialize(data) {
+    this.events = (data?.events ?? []).map((e) => ({ ...e }));
+    this.lengthBars = data?.lengthBars ?? 0;
+    this.playing = false;
+    this.#snapped = false;
+    this.onchange?.();
+  }
+}
+
+const song = new Song();
+
+return { song };
+})();
+
 /* ===== js/core/recorder.js ===== */
 const { recorder } = (() => {
 /**
@@ -14351,20 +14595,19 @@ class SubSynth extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  #applyPattern() {
-    this.pattern = this.patterns[this.patternIndex];
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-  #switchPattern(i) {
+  /** Aktives Pattern setzen. Auch von der Song-Wiedergabe aufgerufen —
+   *  ohne selbst wieder aufzunehmen. */
+  setPatternIndex(i) {
     this.patternIndex = i;
-    this.#applyPattern();
+    this.pattern = this.patterns[i];
+    this.seq?.setPattern(this.pattern);
+    this.patternBank?.setActive(i);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
   #copyPattern(i) {
     this.patterns[i] = this.pattern.map((s) => ({ ...s })); // aktuelles → Slot i
-    this.patternIndex = i;
-    this.patternBank?.setActive(i);
-    this.#applyPattern();
+    this.setPatternIndex(i);
+    song.recordPattern(this.id, i);
   }
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
@@ -14550,7 +14793,7 @@ class SubSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
-      onSwitch: (i) => this.#switchPattern(i),
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       onCopy: (i) => this.#copyPattern(i),
     });
     container.appendChild(this.patternBank.el);
@@ -14771,20 +15014,19 @@ class BeatBox extends Machine {
     const slot = this.patterns[this.patternIndex];
     this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
   }
-  #switchPattern(i) {
+  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
+  setPatternIndex(i) {
     this.patternIndex = i;
     this.#bindSlot();
-    this.seq.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq.bars);
+    this.patternBank?.setActive(i);
+    this.seq?.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
   #copyPattern(i) {
     this.patterns[i] = this.patterns[this.patternIndex]
       .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
-    this.patternIndex = i;
-    this.patternBank?.setActive(i);
-    this.#bindSlot();
-    this.seq.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq.bars);
+    this.setPatternIndex(i);
+    song.recordPattern(this.id, i);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -14923,7 +15165,7 @@ class BeatBox extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
-      onSwitch: (i) => this.#switchPattern(i),
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       onCopy: (i) => this.#copyPattern(i),
     });
     container.appendChild(this.patternBank.el);
@@ -15044,20 +15286,18 @@ class PercSynth extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  #applyPattern() {
-    this.pattern = this.patterns[this.patternIndex];
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-  #switchPattern(i) {
+  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
+  setPatternIndex(i) {
     this.patternIndex = i;
-    this.#applyPattern();
+    this.pattern = this.patterns[i];
+    this.seq?.setPattern(this.pattern);
+    this.patternBank?.setActive(i);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
   #copyPattern(i) {
     this.patterns[i] = this.pattern.map((s) => ({ ...s }));
-    this.patternIndex = i;
-    this.patternBank?.setActive(i);
-    this.#applyPattern();
+    this.setPatternIndex(i);
+    song.recordPattern(this.id, i);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -15172,7 +15412,7 @@ class PercSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
-      onSwitch: (i) => this.#switchPattern(i),
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       onCopy: (i) => this.#copyPattern(i),
     });
     container.appendChild(this.patternBank.el);
@@ -15314,6 +15554,7 @@ function serializeProject(rack) {
     v: 1,
     bpm: transport.bpm,
     fx: masterFX.serialize(),
+    song: song.serialize(),
     machines: rack.machines.map((m) => ({
       type: m.constructor.meta.type,
       state: m.serialize(),
@@ -15333,6 +15574,7 @@ function newProject(rack) {
   rack.clear();
   transport.setBpm(120);
   masterFX.reset();
+  song.clear();
   rack.addMachine(BY_TYPE.beatbox);
   rack.addMachine(BY_TYPE.subsynth);
 }
@@ -15351,6 +15593,7 @@ function loadProject(rack, data) {
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
   }
+  song.deserialize(data.song); // nach den Maschinen (Events zeigen auf deren Position)
 }
 
 /**
@@ -15416,6 +15659,7 @@ document.addEventListener('pointerdown', () => engine.resume(), true);
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
   const rack = new Rack($('#rack'), $('#machine-sheet'));
+  song.bind(rack); // Song-Wiedergabe/-Aufnahme braucht Zugriff aufs Rack
 
   // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
   masterFX.init();
@@ -15439,6 +15683,7 @@ function boot() {
   wireTransportUI();
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
+  wireSongUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -15985,6 +16230,95 @@ function wireJamUI(rack) {
   });
 
   return { joinWithCode };
+}
+
+/* ---------- Song-Timeline (freie Aufnahme von Pattern-Wechseln) ---------- */
+function wireSongUI(rack) {
+  const sheet = $('#song-sheet');
+  const timeline = $('#song-timeline');
+  const armBtn = $('#btn-song-arm');
+  const playBtn = $('#btn-song-play');
+  const prjBtn = $('#btn-projects'); // dient als Song-Aufnahme/-Play-Anzeige
+  let playheads = [];
+
+  const render = () => {
+    timeline.innerHTML = '';
+    playheads = [];
+    const total = song.lengthSteps || 16;
+    if (song.empty) {
+      timeline.innerHTML = '<div class="song-empty">Noch nichts aufgenommen — tippe „● Aufnahme".</div>';
+    } else {
+      rack.machines.forEach((m, idx) => {
+        const color = m.constructor.meta.color;
+        const lane = document.createElement('div');
+        lane.className = 'song-lane';
+        const name = document.createElement('span');
+        name.className = 'song-lane__name';
+        name.style.setProperty('--lane-color', color);
+        name.textContent = m.constructor.meta.name;
+        const track = document.createElement('div');
+        track.className = 'song-track';
+        const evs = song.events.filter((e) => e.m === idx).sort((a, b) => a.step - b.step);
+        evs.forEach((e, k) => {
+          const start = e.step;
+          const end = k + 1 < evs.length ? evs[k + 1].step : total;
+          if (end <= start) return;
+          const block = document.createElement('div');
+          block.className = 'song-block';
+          block.style.left = `${(start / total) * 100}%`;
+          block.style.width = `${((end - start) / total) * 100}%`;
+          block.style.background = color;
+          block.textContent = 'ABCD'[e.index] ?? '?';
+          track.appendChild(block);
+        });
+        const ph = document.createElement('div');
+        ph.className = 'song-ph';
+        track.appendChild(ph);
+        playheads.push(ph);
+        lane.append(name, track);
+        timeline.appendChild(lane);
+      });
+    }
+    armBtn.classList.toggle('is-active', song.recording);
+    playBtn.classList.toggle('is-active', song.playing);
+    playBtn.textContent = song.playing ? '■ Stopp' : '▶ Song';
+    prjBtn.classList.toggle('is-songrec', song.recording);
+    prjBtn.classList.toggle('is-songplay', song.playing);
+  };
+
+  song.onchange = render;
+  song.onplayhead = (songStep) => {
+    const total = song.lengthSteps || 16;
+    for (const ph of playheads) {
+      if (songStep == null) ph.classList.remove('is-on');
+      else { ph.style.left = `${(songStep / total) * 100}%`; ph.classList.add('is-on'); }
+    }
+  };
+
+  $('#btn-open-song').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    render();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
+
+  armBtn.addEventListener('click', () => {
+    // scharf schalten, Seite schließen, Transport von vorn starten →
+    // du spielst die Pattern-Wechsel live auf der Hauptansicht ein
+    song.stop();
+    song.arm(true);
+    sheet.hidden = true;
+    transport.play();
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (song.playing) { song.stop(); return; }
+    if (song.empty) return;
+    sheet.hidden = true;
+    song.play();
+  });
+
+  $('#btn-song-clear').addEventListener('click', () => song.clear());
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

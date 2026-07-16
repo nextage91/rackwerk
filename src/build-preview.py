@@ -28,6 +28,7 @@ MODULES = [
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR"]),
     ("js/core/fx.js",           ["masterFX"]),
     ("js/core/automation.js",   ["automation"]),
+    ("js/core/song.js",         ["song"]),
     ("js/core/recorder.js",     ["recorder"]),
     ("js/core/jamlink.js",      ["jamlink", "packSignal", "unpackSignal"]),
     ("js/machines/machine.js",  ["Machine"]),

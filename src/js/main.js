@@ -12,6 +12,7 @@ import { serializeProject, loadProject, importMachines, newProject } from './cor
 import { recorder } from './core/recorder.js';
 import { jamlink } from './core/jamlink.js';
 import { masterFX } from './core/fx.js';
+import { song } from './core/song.js';
 import { Rack } from './rack/rack.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -48,6 +49,7 @@ document.addEventListener('pointerdown', () => engine.resume(), true);
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
   const rack = new Rack($('#rack'), $('#machine-sheet'));
+  song.bind(rack); // Song-Wiedergabe/-Aufnahme braucht Zugriff aufs Rack
 
   // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
   masterFX.init();
@@ -71,6 +73,7 @@ function boot() {
   wireTransportUI();
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
+  wireSongUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -617,6 +620,95 @@ function wireJamUI(rack) {
   });
 
   return { joinWithCode };
+}
+
+/* ---------- Song-Timeline (freie Aufnahme von Pattern-Wechseln) ---------- */
+function wireSongUI(rack) {
+  const sheet = $('#song-sheet');
+  const timeline = $('#song-timeline');
+  const armBtn = $('#btn-song-arm');
+  const playBtn = $('#btn-song-play');
+  const prjBtn = $('#btn-projects'); // dient als Song-Aufnahme/-Play-Anzeige
+  let playheads = [];
+
+  const render = () => {
+    timeline.innerHTML = '';
+    playheads = [];
+    const total = song.lengthSteps || 16;
+    if (song.empty) {
+      timeline.innerHTML = '<div class="song-empty">Noch nichts aufgenommen — tippe „● Aufnahme".</div>';
+    } else {
+      rack.machines.forEach((m, idx) => {
+        const color = m.constructor.meta.color;
+        const lane = document.createElement('div');
+        lane.className = 'song-lane';
+        const name = document.createElement('span');
+        name.className = 'song-lane__name';
+        name.style.setProperty('--lane-color', color);
+        name.textContent = m.constructor.meta.name;
+        const track = document.createElement('div');
+        track.className = 'song-track';
+        const evs = song.events.filter((e) => e.m === idx).sort((a, b) => a.step - b.step);
+        evs.forEach((e, k) => {
+          const start = e.step;
+          const end = k + 1 < evs.length ? evs[k + 1].step : total;
+          if (end <= start) return;
+          const block = document.createElement('div');
+          block.className = 'song-block';
+          block.style.left = `${(start / total) * 100}%`;
+          block.style.width = `${((end - start) / total) * 100}%`;
+          block.style.background = color;
+          block.textContent = 'ABCD'[e.index] ?? '?';
+          track.appendChild(block);
+        });
+        const ph = document.createElement('div');
+        ph.className = 'song-ph';
+        track.appendChild(ph);
+        playheads.push(ph);
+        lane.append(name, track);
+        timeline.appendChild(lane);
+      });
+    }
+    armBtn.classList.toggle('is-active', song.recording);
+    playBtn.classList.toggle('is-active', song.playing);
+    playBtn.textContent = song.playing ? '■ Stopp' : '▶ Song';
+    prjBtn.classList.toggle('is-songrec', song.recording);
+    prjBtn.classList.toggle('is-songplay', song.playing);
+  };
+
+  song.onchange = render;
+  song.onplayhead = (songStep) => {
+    const total = song.lengthSteps || 16;
+    for (const ph of playheads) {
+      if (songStep == null) ph.classList.remove('is-on');
+      else { ph.style.left = `${(songStep / total) * 100}%`; ph.classList.add('is-on'); }
+    }
+  };
+
+  $('#btn-open-song').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    render();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
+
+  armBtn.addEventListener('click', () => {
+    // scharf schalten, Seite schließen, Transport von vorn starten →
+    // du spielst die Pattern-Wechsel live auf der Hauptansicht ein
+    song.stop();
+    song.arm(true);
+    sheet.hidden = true;
+    transport.play();
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (song.playing) { song.stop(); return; }
+    if (song.empty) return;
+    sheet.hidden = true;
+    song.play();
+  });
+
+  $('#btn-song-clear').addEventListener('click', () => song.clear());
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

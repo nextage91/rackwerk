@@ -71,6 +71,7 @@
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -134,6 +135,27 @@
       <p class="sheet__hint" id="project-hint" hidden>
         ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
       </p>
+    </div>
+  </div>
+
+  <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
+  <div class="sheet" id="song-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Song-Timeline">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Song-Timeline</h2>
+      <p class="sheet__hint">
+        <b>Aufnahme</b> schaltet scharf, schließt diese Seite und startet den Transport —
+        schalte dann live die Patterns (A/B/C/D) der Maschinen um, die Wechsel werden
+        mitgeschnitten. Mit dem Stopp oben beendest du die Aufnahme.
+        <b>Song ▶</b> spielt die Aufnahme in Schleife ab.
+      </p>
+      <div class="filerow">
+        <button class="m-btn" id="btn-song-arm">● Aufnahme</button>
+        <button class="m-btn" id="btn-song-play">▶ Song</button>
+        <button class="m-btn" id="btn-song-clear">Leeren</button>
+      </div>
+      <div class="song-timeline" id="song-timeline"></div>
     </div>
   </div>
 

@@ -13,6 +13,7 @@
 import { transport } from './transport.js';
 import { automation } from './automation.js';
 import { masterFX } from './fx.js';
+import { song } from './song.js';
 import { REGISTRY } from '../rack/rack.js';
 
 const BY_TYPE = Object.fromEntries(REGISTRY.map((M) => [M.meta.type, M]));
@@ -22,6 +23,7 @@ export function serializeProject(rack) {
     v: 1,
     bpm: transport.bpm,
     fx: masterFX.serialize(),
+    song: song.serialize(),
     machines: rack.machines.map((m) => ({
       type: m.constructor.meta.type,
       state: m.serialize(),
@@ -41,6 +43,7 @@ export function newProject(rack) {
   rack.clear();
   transport.setBpm(120);
   masterFX.reset();
+  song.clear();
   rack.addMachine(BY_TYPE.beatbox);
   rack.addMachine(BY_TYPE.subsynth);
 }
@@ -59,6 +62,7 @@ export function loadProject(rack, data) {
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
   }
+  song.deserialize(data.song); // nach den Maschinen (Events zeigen auf deren Position)
 }
 
 /**
