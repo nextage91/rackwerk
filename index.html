@@ -701,6 +701,43 @@ x-knob {
   box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset;
 }
 
+/* ===================== Pattern-Bank (A/B/C/D) ===================== */
+.patbank {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.patbank__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 4px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
+}
+.patbank__btn {
+  flex: 1 1 0;
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--ink-dim);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: none;                 /* Halten-Geste gehört dem Button */
+}
+.patbank__btn:active { transform: translateY(1px); }
+.patbank__btn.is-active {
+  color: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset,
+              0 2px 4px rgba(0,0,0,.4);
+}
+.patbank__btn.is-copied {
+  background: var(--m-color-dim, rgba(255,184,77,.3));
+}
+
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
 
@@ -12456,6 +12493,68 @@ function resizePattern(pattern, bars) {
 return { StepSeq, resizePattern };
 })();
 
+/* ===== js/ui/pattern-bank.js ===== */
+const { createPatternBank } = (() => {
+/**
+ * pattern-bank — A/B/C/D-Umschalter über dem Step-Sequenzer.
+ *
+ * Tippen  = Pattern wählen.
+ * Halten  = aktuelles Pattern in diesen Slot kopieren (und dorthin wechseln)
+ *           — der schnelle Weg, aus einem Groove Variationen zu bauen.
+ *
+ * Die Bank ist reine UI; die Datenhaltung (4 Pattern-Slots) und das
+ * eigentliche Umschalten/Kopieren macht die Maschine über die Callbacks.
+ */
+const LETTERS = ['A', 'B', 'C', 'D'];
+const HOLD_MS = 500;
+
+function createPatternBank({ index = 0, onSwitch, onCopy } = {}) {
+  const el = document.createElement('div');
+  el.className = 'patbank';
+  el.innerHTML = '<span class="patbank__label">Pattern</span>';
+
+  const btns = LETTERS.map((letter, i) => {
+    const b = document.createElement('button');
+    b.className = 'patbank__btn' + (i === index ? ' is-active' : '');
+    b.textContent = letter;
+    b.setAttribute('aria-label', `Pattern ${letter} (halten: aktuelles hierher kopieren)`);
+
+    let holdTimer = null;
+    let held = false;
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      held = false;
+      holdTimer = setTimeout(() => {
+        held = true;
+        onCopy?.(i);
+        flash(b);
+      }, HOLD_MS);
+    });
+    const cancel = () => clearTimeout(holdTimer);
+    b.addEventListener('pointerup', () => {
+      clearTimeout(holdTimer);
+      if (!held) { setActive(i); onSwitch?.(i); }
+    });
+    b.addEventListener('pointerleave', cancel);
+    b.addEventListener('pointercancel', cancel);
+    return b;
+  });
+  for (const b of btns) el.appendChild(b);
+
+  function setActive(i) {
+    btns.forEach((b, j) => b.classList.toggle('is-active', j === i));
+  }
+  function flash(b) {
+    b.classList.add('is-copied');
+    setTimeout(() => b.classList.remove('is-copied'), 320);
+  }
+
+  return { el, setActive };
+}
+
+return { createPatternBank };
+})();
+
 /* ===== js/ui/keybed.js ===== */
 const { createKeybed } = (() => {
 /**
@@ -14210,6 +14309,10 @@ const { SubSynth } = (() => {
  * Spielfläche; später ersetzt/ergänzt durch den Pattern-Sequenzer.
  */
 
+/** Leeres 1-Takt-Pattern (16 Steps aus). */
+const emptyPattern = (len = 16) =>
+  Array.from({ length: len }, () => ({ on: false, midi: 48 }));
+
 class SubSynth extends Machine {
   static meta = {
     type: 'subsynth',
@@ -14234,13 +14337,34 @@ class SubSynth extends Machine {
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
-    /** 16-Step-Pattern: {on, midi} pro Step. Startet mit einer Demo-Line. */
-    this.pattern = Array.from({ length: 16 }, () => ({ on: false, midi: 48 }));
+    /** 4 Pattern-Slots (A/B/C/D), {on, midi} pro Step. A trägt die Demo-
+     *  Line, B–D starten leer. `this.pattern` zeigt aufs aktive Slot. */
+    const seedPat = Array.from({ length: 16 }, () => ({ on: false, midi: 48 }));
     const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 }; // kleine Acid-Line
     for (const [step, midi] of Object.entries(seed)) {
-      this.pattern[step].on = true;
-      this.pattern[step].midi = midi;
+      seedPat[step].on = true;
+      seedPat[step].midi = midi;
     }
+    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patternIndex = 0;
+    this.pattern = this.patterns[0];
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  #applyPattern() {
+    this.pattern = this.patterns[this.patternIndex];
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+  #switchPattern(i) {
+    this.patternIndex = i;
+    this.#applyPattern();
+  }
+  #copyPattern(i) {
+    this.patterns[i] = this.pattern.map((s) => ({ ...s })); // aktuelles → Slot i
+    this.patternIndex = i;
+    this.patternBank?.setActive(i);
+    this.#applyPattern();
   }
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
@@ -14256,13 +14380,24 @@ class SubSynth extends Machine {
   serialize() {
     return {
       params: { ...this.params },
-      pattern: this.pattern.map((s) => ({ ...s })),
+      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
+      patternIndex: this.patternIndex,
     };
   }
 
   deserialize(state) {
     Object.assign(this.params, state.params);
-    this.pattern = state.pattern.map((s) => ({ ...s }));
+    if (state.patterns) {
+      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.pattern) {
+      // Altes Format (ein Pattern): in Slot A, B–D leer in gleicher Länge
+      const a = state.pattern.map((s) => ({ ...s }));
+      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
+    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
   }
 
@@ -14413,6 +14548,13 @@ class SubSynth extends Machine {
     });
     container.appendChild(row);
 
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      onSwitch: (i) => this.#switchPattern(i),
+      onCopy: (i) => this.#copyPattern(i),
+    });
+    container.appendChild(this.patternBank.el);
+
     this.seq = new StepSeq(this.pattern, {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
@@ -14421,6 +14563,7 @@ class SubSynth extends Machine {
       },
     });
     container.appendChild(this.seq.el);
+    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
     // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
     automation.setBars(this.id, this.seq.bars);
 
@@ -14578,6 +14721,9 @@ const TRACK_DEFS = [
   { name: 'Perc',  synth: perc },
 ];
 
+/** Leeres Pattern-Slot: 8 Spuren × 16 leere Steps. */
+const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
+
 // Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat
 const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
 
@@ -14603,17 +14749,42 @@ class BeatBox extends Machine {
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
 
-    this.tracks = TRACK_DEFS.map((def) => ({
-      ...def,
-      steps: Array.from({ length: 16 }, () => ({ on: false })),
-      tune: 1,
-      decay: 1,
-      level: 0.9,
-    }));
+    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig)
+    this.tracks = TRACK_DEFS.map((def) => ({ ...def, tune: 1, decay: 1, level: 0.9 }));
+
+    // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
+    // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
+    this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
     for (const [name, steps] of Object.entries(SEED)) {
-      const tr = this.tracks.find((t) => t.name === name);
-      for (const s of steps) tr.steps[s].on = true;
+      const ti = this.tracks.findIndex((t) => t.name === name);
+      for (const s of steps) this.patterns[0][ti][s].on = true;
     }
+    this.patternIndex = 0;
+    // Binden hier inline: buildAudio läuft aus dem Basis-Konstruktor, private
+    // Methoden der Unterklasse sind da noch nicht verfügbar.
+    this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  /** Die steps-Referenzen der Spuren aufs aktive Slot zeigen lassen. */
+  #bindSlot() {
+    const slot = this.patterns[this.patternIndex];
+    this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
+  }
+  #switchPattern(i) {
+    this.patternIndex = i;
+    this.#bindSlot();
+    this.seq.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq.bars);
+  }
+  #copyPattern(i) {
+    this.patterns[i] = this.patterns[this.patternIndex]
+      .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
+    this.patternIndex = i;
+    this.patternBank?.setActive(i);
+    this.#bindSlot();
+    this.seq.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq.bars);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -14632,13 +14803,13 @@ class BeatBox extends Machine {
   serialize() {
     return {
       volume: this.volume,
+      // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune,
-        decay: tr.decay,
-        level: tr.level,
-        snap: tr.snap,
-        steps: tr.steps.map((s) => ({ on: s.on })),
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
       })),
+      // 4 Pattern-Slots (nur Steps)
+      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
+      patternIndex: this.patternIndex,
     };
   }
 
@@ -14652,8 +14823,19 @@ class BeatBox extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
-      tr.steps = saved.steps.map((s) => ({ on: !!s.on }));
     });
+    if (state.patterns) {
+      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.tracks?.some((t) => t.steps)) {
+      // Altes Format: Steps lagen in tracks[].steps → Slot A, B–D leer
+      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
+      this.patterns = [slotA, emptySlot(), emptySlot(), emptySlot()];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(emptySlot());
+    this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
+    this.#bindSlot();
   }
 
   onTransport(event) {
@@ -14739,6 +14921,13 @@ class BeatBox extends Machine {
     });
     container.appendChild(pads);
 
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      onSwitch: (i) => this.#switchPattern(i),
+      onCopy: (i) => this.#copyPattern(i),
+    });
+    container.appendChild(this.patternBank.el);
+
     // Ein Grid für alle Spuren — zeigt immer die gewählte
     this.seq = new StepSeq(this.tracks[0].steps, {
       pitch: false,
@@ -14780,7 +14969,7 @@ class BeatBox extends Machine {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
-    this.seq.el.querySelector('.stepseq__title').textContent = `Pattern · ${tr.name}`;
+    this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
     this.#refreshSoloUI();
   }
 
@@ -14818,6 +15007,10 @@ const { PercSynth } = (() => {
  * Noten kommen aus dem Pitch-Step-Grid (wie SubSynth) oder vom Keybed.
  */
 
+/** Leeres 1-Takt-Pattern (16 Steps aus). */
+const emptyPattern = (len = 16) =>
+  Array.from({ length: len }, () => ({ on: false, midi: 76 }));
+
 class PercSynth extends Machine {
   static meta = {
     type: 'percsynth',
@@ -14838,13 +15031,33 @@ class PercSynth extends Machine {
     };
     this.output.gain.value = this.params.volume;
 
-    /** 16-Step-Pattern wie in der SubSynth: {on, midi} pro Step */
-    this.pattern = Array.from({ length: 16 }, () => ({ on: false, midi: 76 }));
+    /** 4 Pattern-Slots (A/B/C/D). A trägt die Offbeat-Perc, B–D leer. */
+    const seedPat = emptyPattern();
     const seed = { 2: 79, 7: 72, 10: 84, 15: 76 }; // sparsame Offbeat-Perc
     for (const [step, midi] of Object.entries(seed)) {
-      this.pattern[step].on = true;
-      this.pattern[step].midi = midi;
+      seedPat[step].on = true;
+      seedPat[step].midi = midi;
     }
+    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patternIndex = 0;
+    this.pattern = this.patterns[0];
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  #applyPattern() {
+    this.pattern = this.patterns[this.patternIndex];
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+  #switchPattern(i) {
+    this.patternIndex = i;
+    this.#applyPattern();
+  }
+  #copyPattern(i) {
+    this.patterns[i] = this.pattern.map((s) => ({ ...s }));
+    this.patternIndex = i;
+    this.patternBank?.setActive(i);
+    this.#applyPattern();
   }
 
   /* ---------- Sequenzer ---------- */
@@ -14860,13 +15073,23 @@ class PercSynth extends Machine {
   serialize() {
     return {
       params: { ...this.params },
-      pattern: this.pattern.map((s) => ({ ...s })),
+      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
+      patternIndex: this.patternIndex,
     };
   }
 
   deserialize(state) {
     Object.assign(this.params, state.params);
-    this.pattern = state.pattern.map((s) => ({ ...s }));
+    if (state.patterns) {
+      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.pattern) {
+      const a = state.pattern.map((s) => ({ ...s }));
+      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
+    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
   }
 
@@ -14947,6 +15170,13 @@ class PercSynth extends Machine {
     });
     container.appendChild(row);
 
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      onSwitch: (i) => this.#switchPattern(i),
+      onCopy: (i) => this.#copyPattern(i),
+    });
+    container.appendChild(this.patternBank.el);
+
     this.seq = new StepSeq(this.pattern, {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
@@ -14955,6 +15185,7 @@ class PercSynth extends Machine {
       },
     });
     container.appendChild(this.seq.el);
+    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
     // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
     automation.setBars(this.id, this.seq.bars);
 

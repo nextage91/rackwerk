@@ -20,6 +20,7 @@ MODULES = [
     ("js/vendor/jsqr.js",       ["jsQR"]),
     ("js/ui/qr.js",             ["drawQR"]),
     ("js/ui/step-seq.js",       ["StepSeq", "resizePattern"]),
+    ("js/ui/pattern-bank.js",   ["createPatternBank"]),
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/store.js",        ["store"]),
     ("js/core/audio-engine.js", ["engine"]),

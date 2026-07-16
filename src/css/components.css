@@ -218,6 +218,43 @@ x-knob {
   box-shadow: 0 0 10px var(--m-color-glow, rgba(77,195,255,.45)) inset;
 }
 
+/* ===================== Pattern-Bank (A/B/C/D) ===================== */
+.patbank {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.patbank__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 4px;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
+}
+.patbank__btn {
+  flex: 1 1 0;
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--ink-dim);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: none;                 /* Halten-Geste gehört dem Button */
+}
+.patbank__btn:active { transform: translateY(1px); }
+.patbank__btn.is-active {
+  color: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset,
+              0 2px 4px rgba(0,0,0,.4);
+}
+.patbank__btn.is-copied {
+  background: var(--m-color-dim, rgba(255,184,77,.3));
+}
+
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
 

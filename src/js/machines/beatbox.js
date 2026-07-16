@@ -15,6 +15,7 @@ import { Machine } from './machine.js';
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
+import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
 import { noise, env, autoStop } from '../core/dsp.js';
 
@@ -145,6 +146,9 @@ const TRACK_DEFS = [
   { name: 'Perc',  synth: perc },
 ];
 
+/** Leeres Pattern-Slot: 8 Spuren × 16 leere Steps. */
+const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
+
 // Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat
 const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
 
@@ -170,17 +174,42 @@ export class BeatBox extends Machine {
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
 
-    this.tracks = TRACK_DEFS.map((def) => ({
-      ...def,
-      steps: Array.from({ length: 16 }, () => ({ on: false })),
-      tune: 1,
-      decay: 1,
-      level: 0.9,
-    }));
+    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig)
+    this.tracks = TRACK_DEFS.map((def) => ({ ...def, tune: 1, decay: 1, level: 0.9 }));
+
+    // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
+    // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
+    this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
     for (const [name, steps] of Object.entries(SEED)) {
-      const tr = this.tracks.find((t) => t.name === name);
-      for (const s of steps) tr.steps[s].on = true;
+      const ti = this.tracks.findIndex((t) => t.name === name);
+      for (const s of steps) this.patterns[0][ti][s].on = true;
     }
+    this.patternIndex = 0;
+    // Binden hier inline: buildAudio läuft aus dem Basis-Konstruktor, private
+    // Methoden der Unterklasse sind da noch nicht verfügbar.
+    this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  /** Die steps-Referenzen der Spuren aufs aktive Slot zeigen lassen. */
+  #bindSlot() {
+    const slot = this.patterns[this.patternIndex];
+    this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
+  }
+  #switchPattern(i) {
+    this.patternIndex = i;
+    this.#bindSlot();
+    this.seq.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq.bars);
+  }
+  #copyPattern(i) {
+    this.patterns[i] = this.patterns[this.patternIndex]
+      .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
+    this.patternIndex = i;
+    this.patternBank?.setActive(i);
+    this.#bindSlot();
+    this.seq.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq.bars);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -199,13 +228,13 @@ export class BeatBox extends Machine {
   serialize() {
     return {
       volume: this.volume,
+      // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune,
-        decay: tr.decay,
-        level: tr.level,
-        snap: tr.snap,
-        steps: tr.steps.map((s) => ({ on: s.on })),
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
       })),
+      // 4 Pattern-Slots (nur Steps)
+      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
+      patternIndex: this.patternIndex,
     };
   }
 
@@ -219,8 +248,19 @@ export class BeatBox extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
-      tr.steps = saved.steps.map((s) => ({ on: !!s.on }));
     });
+    if (state.patterns) {
+      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.tracks?.some((t) => t.steps)) {
+      // Altes Format: Steps lagen in tracks[].steps → Slot A, B–D leer
+      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
+      this.patterns = [slotA, emptySlot(), emptySlot(), emptySlot()];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(emptySlot());
+    this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
+    this.#bindSlot();
   }
 
   onTransport(event) {
@@ -306,6 +346,13 @@ export class BeatBox extends Machine {
     });
     container.appendChild(pads);
 
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      onSwitch: (i) => this.#switchPattern(i),
+      onCopy: (i) => this.#copyPattern(i),
+    });
+    container.appendChild(this.patternBank.el);
+
     // Ein Grid für alle Spuren — zeigt immer die gewählte
     this.seq = new StepSeq(this.tracks[0].steps, {
       pitch: false,
@@ -347,7 +394,7 @@ export class BeatBox extends Machine {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
-    this.seq.el.querySelector('.stepseq__title').textContent = `Pattern · ${tr.name}`;
+    this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
     this.#refreshSoloUI();
   }
 
