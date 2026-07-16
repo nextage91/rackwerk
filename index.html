@@ -16729,10 +16729,12 @@ const { AnalogKit } = (() => {
  * Tune/Decay/Level/Sends pro Spur), aber ein eigener Klangcharakter:
  *
  * - BD/SD/Toms: kürzere, knackigere Hüllkurven als die BeatBox, SD mit
- *   Doppel-Ton-Body (zwei leicht verstimmte Oszillatoren) statt einem.
- * - CH/OH/CC/RC: die klassische "6 verstimmte Oszillatoren durchs
- *   Hochpass/Bandpass"-Technik für einen metallischen, unharmonischen
- *   Klang — deutlich anders als die BeatBox-Hats (gefiltertes Rauschen).
+ *   Doppel-Ton-Body (zwei leicht verstimmte Oszillatoren, je eigener
+ *   Decay) statt einem gemeinsamen.
+ * - CH/OH/CC/RC: 6 verstimmte Oszillatoren durchs Hochpass/Bandpass für
+ *   den metallischen Grundklang, plus eine hochpassgefilterte Rausch-
+ *   schicht darunter für die Dichte, die das echte 909-PCM-Cymbal-Sample
+ *   hat (ein reines Oszillatorbündel klingt sonst zu "sauber"/808-artig).
  *
  * Kit: BD (Bass Drum), SD (Snare), LT/MT/HT (Toms), RS (Rim Shot),
  * CP (Clap), CH/OH (Hi-Hats), CC/RC (Cymbals).
@@ -16774,46 +16776,70 @@ function bd(ctx, t, dest, p) {
 }
 
 function sd(ctx, t, dest, p) {
-  // Doppel-Ton-Body (zwei Dreieckwellen) statt einem — der charakteristische
-  // 909-Snare-"Ping". Dazu ein helles, schmaleres Rauschband als die BeatBox.
-  const bodyBus = ctx.createGain();
-  const bodyEnv = env(ctx, t, 0.45 * p.level, 0.12 * p.decay);
-  bodyBus.connect(bodyEnv).connect(dest);
-  for (const f of [180, 330]) {
+  // Doppel-Ton-Body (zwei Dreieckwellen) — der charakteristische 909-Snare-
+  // "Ping". Beim Original bekommt jeder Oszillator eine EIGENE Hüllkurve,
+  // und der tiefere Ton (mehr "Fell") klingt spürbar länger nach als der
+  // höhere ("Ping") — nicht ein gemeinsamer Bus mit einer Hüllkurve.
+  for (const { f, durMul, mix } of [{ f: 180, durMul: 1.0, mix: 0.32 }, { f: 330, durMul: 0.6, mix: 0.24 }]) {
     const o = ctx.createOscillator();
     o.type = 'triangle';
     o.frequency.value = f * p.tune;
-    o.connect(bodyBus);
-    autoStop(o, t, 0.12 * p.decay, [bodyBus, bodyEnv]);
+    const dur = 0.12 * p.decay * durMul;
+    const g = env(ctx, t, mix * p.level, dur);
+    o.connect(g).connect(dest);
+    autoStop(o, t, dur, [g]);
   }
 
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 2200 * p.tune;
-  bp.Q.value = 1.2;
-  const ng = env(ctx, t, 0.85 * p.level, 0.16 * p.decay);
-  n.connect(bp).connect(ng).connect(dest);
-  autoStop(n, t, 0.16 * p.decay, [bp, ng]);
+  // "Snare-Kabel"-Rauschen: beim Original zwei PARALLELE Pfade (Tiefpass +
+  // Hochpass), je eigene Hüllkurve, statt eines einzelnen Bandpasses — der
+  // Tiefpass-Anteil gibt den dumpferen Rattle-Körper, der Hochpass-Anteil
+  // das helle Zischen im Attack.
+  const nLow = ctx.createBufferSource();
+  nLow.buffer = noise(ctx);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 1100 * p.tune;
+  const lpg = env(ctx, t, 0.4 * p.level, 0.15 * p.decay);
+  nLow.connect(lp).connect(lpg).connect(dest);
+  autoStop(nLow, t, 0.15 * p.decay, [lp, lpg]);
+
+  const nHigh = ctx.createBufferSource();
+  nHigh.buffer = noise(ctx);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 3500 * p.tune;
+  const hpg = env(ctx, t, 0.4 * p.level, 0.08 * p.decay);
+  nHigh.connect(hp).connect(hpg).connect(dest);
+  autoStop(nHigh, t, 0.08 * p.decay, [hp, hpg]);
 }
 
 function rs(ctx, t, dest, p) {
-  // Rim Shot: sehr kurz, zwei verstimmte Rechtecke durch ein schmales
-  // Bandpass — der metallische "Klack" neben dem Rand.
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 1600 * p.tune;
-  bp.Q.value = 3;
-  const g = env(ctx, t, p.level, 0.02 * p.decay);
-  bp.connect(g).connect(dest);
-  for (const mult of [1, 1.7]) {
-    const o = ctx.createOscillator();
-    o.type = 'square';
-    o.frequency.value = 340 * mult * p.tune;
-    o.connect(bp);
-    autoStop(o, t, 0.02 * p.decay, [bp, g]);
+  // Rim Shot: das Original regt mit einem kurzen Trigger-Impuls drei
+  // parallele, unterschiedlich gestimmte Resonanzfilter an (Bridged-T-
+  // Filter, je ein eigener Kondensatorwert), die über eine einfache VCA
+  // summiert werden — kein Ton, der durch EIN Filter läuft, sondern drei
+  // gleichzeitig "angeschlagene" Resonanzen. Das ergibt den mehrschichtigen
+  // Klack statt eines einzelnen Buzz-Tons.
+  const RS_RESONANCES = [520, 1200, 2400];
+  const dur = 0.02 * p.decay;
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const nodes = [];
+  // Makeup-Gain: ein enges Q=12-Bandpass lässt von breitbandigem Rauschen
+  // nur einen schmalen Frequenzausschnitt durch (anders als vorher, wo ein
+  // Oszillator exakt auf der Resonanz sass) — ohne Kompensation war der
+  // Rimshot fast unhörbar leise (gemessen: Peak 0.048 statt der 0.267 hier,
+  // per OfflineAudioContext gegen die 3 Filter kalibriert).
+  for (const f of RS_RESONANCES) {
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f * p.tune;
+    bp.Q.value = 12;
+    const g = env(ctx, t, 4 * p.level, dur);
+    n.connect(bp).connect(g).connect(dest);
+    nodes.push(bp, g);
   }
+  autoStop(n, t, dur, nodes);
 }
 
 function cp(ctx, t, dest, p) {
@@ -16879,6 +16905,21 @@ function metallic(ctx, t, dest, { freq, filterFreq, filterType = 'highpass', fil
     o.connect(bus);
     autoStop(o, t, dur, [bus, filt, g]);
   }
+
+  // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
+  // komprimiertes 6-Bit-PCM-Sample eines echten Beckens (per VCA/Filter
+  // geformt) — im Spektrum deutlich dichter/"kratziger", als 6 diskrete
+  // Rechteckwellen je erreichen (die klingen eher nach einem gestimmten
+  // Akkord, "808-artig"). Eine hochpassgefilterte Rauschschicht unter dem
+  // Oszillatorbündel nähert diese Dichte an, ohne selbst ein Sample zu sein.
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const nf = ctx.createBiquadFilter();
+  nf.type = 'highpass';
+  nf.frequency.value = Math.max(filterFreq * 0.5, 2000);
+  const ng = env(ctx, t, level * METAL_HEADROOM * 0.45, dur);
+  n.connect(nf).connect(ng).connect(dest);
+  autoStop(n, t, dur, [nf, ng]);
 }
 
 /** Hi-Hat/Crash-Stimme: feste Klangfarbe, Tune/Decay/Level wirken wie bei
