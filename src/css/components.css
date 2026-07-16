@@ -100,6 +100,7 @@
   touch-action: manipulation;
 }
 .m-btn:active { transform: translateY(1px); }
+.m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 .m-btn--remove { color: var(--ink-faint); }
 

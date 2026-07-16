@@ -29,19 +29,26 @@ const DIVISIONS = [
   { steps: 8, label: '1/2' },
 ];
 
+const FX_DEFAULTS = {
+  delaySteps: 3,     // 16tel-Steps → 1/8 punktiert (klassisches Dub-Delay)
+  feedback: 0.45,
+  tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
+  delayLevel: 0.5,
+  revDecay: 1.8,     // s — Länge des Impulses
+  revDamp: 0.5,      // 0..1 — Höhendämpfung im Impuls
+  revLevel: 0.4,
+};
+
 class MasterFX {
   constructor() {
-    this.params = {
-      delaySteps: 3,     // 16tel-Steps → 1/8 punktiert (klassisches Dub-Delay)
-      feedback: 0.45,
-      tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
-      delayLevel: 0.5,
-      revDecay: 1.8,     // s — Länge des Impulses
-      revDamp: 0.5,      // 0..1 — Höhendämpfung im Impuls
-      revLevel: 0.4,
-    };
+    this.params = { ...FX_DEFAULTS };
     this.el = null;
     this.#irTimer = null;
+  }
+
+  /** Auf Werkseinstellung zurück (für „Neue Session"). */
+  reset() {
+    this.deserialize({ ...FX_DEFAULTS });
   }
 
   #irTimer;

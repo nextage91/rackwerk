@@ -567,6 +567,7 @@ button {
   touch-action: manipulation;
 }
 .m-btn:active { transform: translateY(1px); }
+.m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 .m-btn--remove { color: var(--ink-faint); }
 
@@ -979,6 +980,9 @@ x-knob.has-auto .knob__dial::after {
       <div class="saverow">
         <input class="saverow__input" id="project-name" placeholder="Projektname" maxlength="40">
         <button class="m-btn saverow__btn" id="btn-save-project">Speichern</button>
+      </div>
+      <div class="filerow">
+        <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -12946,19 +12950,26 @@ const DIVISIONS = [
   { steps: 8, label: '1/2' },
 ];
 
+const FX_DEFAULTS = {
+  delaySteps: 3,     // 16tel-Steps → 1/8 punktiert (klassisches Dub-Delay)
+  feedback: 0.45,
+  tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
+  delayLevel: 0.5,
+  revDecay: 1.8,     // s — Länge des Impulses
+  revDamp: 0.5,      // 0..1 — Höhendämpfung im Impuls
+  revLevel: 0.4,
+};
+
 class MasterFX {
   constructor() {
-    this.params = {
-      delaySteps: 3,     // 16tel-Steps → 1/8 punktiert (klassisches Dub-Delay)
-      feedback: 0.45,
-      tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
-      delayLevel: 0.5,
-      revDecay: 1.8,     // s — Länge des Impulses
-      revDamp: 0.5,      // 0..1 — Höhendämpfung im Impuls
-      revLevel: 0.4,
-    };
+    this.params = { ...FX_DEFAULTS };
     this.el = null;
     this.#irTimer = null;
+  }
+
+  /** Auf Werkseinstellung zurück (für „Neue Session"). */
+  reset() {
+    this.deserialize({ ...FX_DEFAULTS });
   }
 
   #irTimer;
@@ -15035,7 +15046,7 @@ return { Rack, REGISTRY };
 })();
 
 /* ===== js/core/project.js ===== */
-const { serializeProject, loadProject, importMachines } = (() => {
+const { serializeProject, loadProject, importMachines, newProject } = (() => {
 /**
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
@@ -15063,6 +15074,20 @@ function serializeProject(rack) {
       lanes: automation.exportLanes(m.id),
     })),
   };
+}
+
+/**
+ * Frische Session: alles auf Werkseinstellung — leeres Rack, 120 BPM,
+ * Master-FX auf Default, dann die Startbesetzung (BeatBox + SubSynth
+ * mit Demo-Groove). Entspricht dem allerersten App-Start.
+ */
+function newProject(rack) {
+  transport.stop();
+  rack.clear();
+  transport.setBpm(120);
+  masterFX.reset();
+  rack.addMachine(BY_TYPE.beatbox);
+  rack.addMachine(BY_TYPE.subsynth);
 }
 
 function loadProject(rack, data) {
@@ -15101,7 +15126,7 @@ function importMachines(rack, data) {
   return added;
 }
 
-return { serializeProject, loadProject, importMachines };
+return { serializeProject, loadProject, importMachines, newProject };
 })();
 
 /* ===== js/main.js ===== */
@@ -15161,8 +15186,7 @@ function boot() {
     }
   }
   if (!restored) {
-    rack.addMachine(BeatBox);
-    rack.addMachine(SubSynth);
+    newProject(rack); // Startbesetzung: BeatBox + SubSynth mit Demo-Groove
   }
 
   wireTransportUI();
@@ -15242,6 +15266,16 @@ function wireProjectUI(rack) {
     const name = nameInput.value.trim() || 'Ohne Titel';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
     refreshList();
+  });
+
+  $('#btn-new-session').addEventListener('click', () => {
+    // Verwirft die aktuelle Session (Autosave überschreibt sie gleich) —
+    // deshalb einmal nachfragen.
+    if (!window.confirm('Neue Session starten? Die aktuelle Anordnung wird ' +
+      'verworfen (nicht gespeicherte Änderungen gehen verloren).')) return;
+    newProject(rack);
+    nameInput.value = '';
+    sheet.hidden = true;
   });
 
   /* ---- Export / Import als Datei ---- */

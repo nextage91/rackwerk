@@ -8,13 +8,11 @@ import { engine } from './core/audio-engine.js';
 import { transport, STEPS_PER_BAR } from './core/transport.js';
 import { automation } from './core/automation.js';
 import { store } from './core/store.js';
-import { serializeProject, loadProject, importMachines } from './core/project.js';
+import { serializeProject, loadProject, importMachines, newProject } from './core/project.js';
 import { recorder } from './core/recorder.js';
 import { jamlink } from './core/jamlink.js';
 import { masterFX } from './core/fx.js';
 import { Rack } from './rack/rack.js';
-import { SubSynth } from './machines/subsynth.js';
-import { BeatBox } from './machines/beatbox.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -67,8 +65,7 @@ function boot() {
     }
   }
   if (!restored) {
-    rack.addMachine(BeatBox);
-    rack.addMachine(SubSynth);
+    newProject(rack); // Startbesetzung: BeatBox + SubSynth mit Demo-Groove
   }
 
   wireTransportUI();
@@ -148,6 +145,16 @@ function wireProjectUI(rack) {
     const name = nameInput.value.trim() || 'Ohne Titel';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
     refreshList();
+  });
+
+  $('#btn-new-session').addEventListener('click', () => {
+    // Verwirft die aktuelle Session (Autosave überschreibt sie gleich) —
+    // deshalb einmal nachfragen.
+    if (!window.confirm('Neue Session starten? Die aktuelle Anordnung wird ' +
+      'verworfen (nicht gespeicherte Änderungen gehen verloren).')) return;
+    newProject(rack);
+    nameInput.value = '';
+    sheet.hidden = true;
   });
 
   /* ---- Export / Import als Datei ---- */
