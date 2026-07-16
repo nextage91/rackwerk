@@ -287,7 +287,22 @@ export class BeatBox extends Machine {
 
   /** Basisklasse kennt die Spur-Panner nicht — selbst aufräumen. */
   disposeAudio() {
-    for (const tr of this.tracks) tr.panner.disconnect();
+    for (const tr of this.tracks) {
+      tr.panner.disconnect();
+      tr.meterAnalyser?.disconnect();
+    }
+  }
+
+  /** Analyser fürs Kanalzug-VU-Meter einer einzelnen Drum-Spur im Mixer
+   *  (Pendant zu Machine.getMeterAnalyser, hier hinter dem Spur-Panner). */
+  getTrackMeterAnalyser(i) {
+    const tr = this.tracks[i];
+    if (!tr.meterAnalyser) {
+      tr.meterAnalyser = engine.ctx.createAnalyser();
+      tr.meterAnalyser.fftSize = 512;
+      tr.panner.connect(tr.meterAnalyser);
+    }
+    return tr.meterAnalyser;
   }
 
   #trigger(tr, time) {

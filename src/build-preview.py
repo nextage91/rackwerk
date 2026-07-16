@@ -16,6 +16,7 @@ OUT = ROOT / "rackwerk-preview.html"
 # Reihenfolge = Abhängigkeitsreihenfolge; Werte = exportierte Namen
 MODULES = [
     ("js/ui/knob.js",           ["XKnob"]),
+    ("js/ui/fader.js",          ["XFader"]),
     ("js/vendor/qrcodegen.js",  ["qrcodegen"]),
     ("js/vendor/jsqr.js",       ["jsQR"]),
     ("js/ui/qr.js",             ["drawQR"]),

@@ -166,12 +166,13 @@
   </div>
 
   <!-- ===== Mixer (Bottom Sheet) ===== -->
-  <div class="sheet" id="mixer-sheet" hidden>
-    <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Mixer">
-      <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Mixer</h2>
-      <div class="mixer-list" id="mixer-list"></div>
+  <div class="sheet sheet--console" id="mixer-sheet" hidden>
+    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Mixer">
+      <div class="console__head">
+        <h2 class="sheet__title">Mixer</h2>
+        <button class="m-btn console__close" id="btn-mixer-close" aria-label="Close mixer" data-close>✕</button>
+      </div>
+      <div class="mixer-console" id="mixer-list"></div>
     </div>
   </div>
 

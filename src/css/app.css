@@ -419,92 +419,172 @@ button {
 .song-ph.is-on { opacity: .9; }
 .song-empty { color: var(--ink-dim); font-size: 13px; padding: 10px 0; }
 
-/* ===================== Mixer ===================== */
-.mixer-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-.mixer-strip {
+/* ===================== Mixer: Breitbild-Konsole ===================== */
+/* Volles Sheet statt Bottom-Drawer — die Fader brauchen Höhe, und seitlich
+   scrollende Kanalzüge brauchen Breite. Bleibt aber UNTER der Transport-
+   Leiste (--transport-h, per JS gemessen), damit Play/Stop/BPM auch bei
+   offenem Mixer bedienbar bleiben — genau dafür will man beim Mischen ja
+   live zugreifen können. Eigener Close-Button statt Backdrop-Tap, weil
+   der Backdrop hier gar nicht mehr sichtbar wäre (Panel deckt den Rest
+   des Screens ab) — das Markup hat für #mixer-sheet daher gar keinen
+   .sheet__backdrop mehr, nur den expliziten ✕-Button. */
+/* .sheet selbst deckt (fixed, inset:0) auch den Bereich ÜBER dem Panel ab
+   (die Transport-Leiste bleibt dort ja bewusst sichtbar) — ohne diese Zeile
+   würde der leere obere Streifen trotzdem Klicks auf Play/Stop/BPM
+   schlucken, obwohl dort nichts vom Sheet zu sehen ist. */
+.sheet--console { pointer-events: none; }
+#mixer-sheet .sheet__panel {
+  pointer-events: auto;
+  position: absolute;
+  top: var(--transport-h, 64px);
+  left: 0; right: 0; bottom: 0;
+  border-radius: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px calc(10px + var(--safe-bottom));
+}
+.console__head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.console__head .sheet__title { margin: 0; }
+.console__close { min-width: 44px; min-height: 40px; font-size: 15px; }
+
+.mixer-console {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 4px 10px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.mixer-empty { color: var(--ink-dim); font-size: 13px; padding: 16px; }
+
+/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. */
+.chstrip {
+  flex: 0 0 100px;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  padding: 8px;
+  padding: 10px 6px 8px;
   border-radius: var(--r-ctl);
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
-.mixer-strip__head {
-  flex: 0 0 92px;
-  min-width: 0;
+.chstrip--sub {
+  flex-basis: 78px;
+  padding-top: 6px;
+  background: rgba(0,0,0,.15);
+  box-shadow: none;
+}
+.chstrip__head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  width: 100%;
 }
-.mixer-strip__stripe {
+.chstrip__stripe {
   width: 4px;
-  align-self: stretch;
+  height: 16px;
+  flex: 0 0 auto;
   border-radius: 2px;
   background: var(--m-color, var(--m-subsynth));
   box-shadow: 0 0 6px var(--m-color-glow, rgba(77,195,255,.45));
 }
-.mixer-strip__name {
-  font-size: 12px;
+.chstrip__name {
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: .02em;
+  letter-spacing: .01em;
+  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
-.mixer-strip__knobs {
-  --knob-size: 48px;   /* kompakter als die 64px-Standardknobs — mehrere
-                          Kanalzuege muessen nebeneinander aufs Phone passen */
+.chstrip--sub .chstrip__name { font-weight: 500; color: var(--ink-dim); }
+.chstrip--sub x-knob { --knob-size: 42px; }
+
+.chstrip__meters {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  gap: 2px;
-  flex: 0 0 auto;
-}
-.mixer-strip__buttons {
-  display: flex;
-  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
   gap: 6px;
-  margin-left: auto;
-}
-.mixer-strip__buttons .m-btn {
-  min-width: 52px;
-  min-height: 40px;
-  font-size: 10px;
-  padding: 0 6px;
 }
 
-/* Gruppe (z. B. BeatBox): der Kanalzug oben führt den ganzen Kit-Bus,
-   darunter die einzelnen Drum-Spuren mit eigenem Level/Pan. */
-.mixer-group {
-  border-radius: var(--r-ctl);
-  background: var(--bg-panel);
-  box-shadow: var(--shadow-panel);
-  overflow: hidden;
-}
-.mixer-group .mixer-strip { background: none; box-shadow: none; }
-.mixer-subtracks {
+/* Vertikales VU-Meter neben dem Fader — dieselben LED-Segmente wie am
+   Master-FX-Meter, nur gestapelt statt in einer Reihe. Füllt die volle
+   Fader-Höhe (durchgereicht von .chstrip__meters), damit alle Kanalzüge
+   nebeneinander denselben Fader-Weg haben, wie an einem echten Pult. */
+.chstrip__vu {
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 2px;
-  padding: 2px 8px 8px;
-  border-top: 1px dashed rgba(255,255,255,.08);
+  height: 100%;
+  min-height: 0;
+  padding: 3px 0;
 }
-.mixer-substrip {
+.chstrip__vu .vu__seg { width: 5px; height: auto; flex: 1 1 0; }
+
+.chstrip__buttons {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0 4px 12px;   /* Einrückung zeigt die Zugehörigkeit zur Gruppe */
-  border-left: 2px solid var(--m-color-dim, rgba(255,140,66,.3));
+  gap: 4px;
+  width: 100%;
 }
-.mixer-substrip__name {
-  flex: 0 0 52px;
+.chstrip__buttons .m-btn {
+  flex: 1 1 0;
   min-width: 0;
-  font-size: 11px;
-  color: var(--ink-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 32px;
+  font-size: 9px;
+  padding: 0 2px;
 }
-.mixer-substrip .mixer-strip__knobs { --knob-size: 40px; gap: 0; }
+
+/* Gruppe (z. B. BeatBox): der Kanalzug führt den ganzen Kit-Bus, ein
+   Klapp-Button daneben zeigt/versteckt die einzelnen Drum-Spuren. */
+.mixer-group {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--r-ctl);
+  background: var(--m-color-tint, rgba(255,255,255,.03));
+  box-shadow: var(--shadow-panel);
+}
+.mixer-group__toggle {
+  flex: 0 0 auto;
+  width: 22px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(0,0,0,.2);
+  color: var(--ink-dim);
+  font-size: 13px;
+  touch-action: manipulation;
+}
+.mixer-group__toggle::after { content: "‹"; }
+.mixer-group.is-collapsed .mixer-group__toggle::after { content: "›"; }
+.mixer-group__subtracks {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.mixer-group.is-collapsed .mixer-group__subtracks { display: none; }
+
 #btn-song-arm.is-active {
   color: #fff; background: linear-gradient(#b33a3a, #7e2727);
   animation: rec-pulse 1.2s ease-in-out infinite;
