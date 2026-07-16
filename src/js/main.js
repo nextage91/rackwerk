@@ -23,12 +23,12 @@ $('#btn-unlock').addEventListener('click', async () => {
   try {
     const ok = await engine.unlock();
     if (!ok) {
-      hint.textContent = 'Audio blockiert — bitte erneut tippen';
+      hint.textContent = 'Audio blocked — tap again';
       return;
     }
   } catch (err) {
-    console.error('Audio-Unlock fehlgeschlagen:', err);
-    hint.textContent = 'Audio nicht verfügbar: ' + err.message;
+    console.error('Audio unlock failed:', err);
+    hint.textContent = 'Audio unavailable: ' + err.message;
     return;
   }
 
@@ -62,7 +62,7 @@ function boot() {
     onOpen: () => $('#btn-open-mixer').click(),
   }));
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🎬', label: 'Song-Timeline', color: '#ff4d3d',
+    icon: '🎬', label: 'Song Timeline', color: '#ff4d3d',
     onOpen: () => $('#btn-open-song').click(),
   }));
 
@@ -74,7 +74,7 @@ function boot() {
       loadProject(rack, JSON.parse(autosave));
       restored = true;
     } catch (err) {
-      console.warn('Autosave nicht ladbar, starte frisch:', err);
+      console.warn('Autosave could not be loaded, starting fresh:', err);
     }
   }
   if (!restored) {
@@ -101,7 +101,7 @@ function boot() {
     try {
       store.set('autosave', JSON.stringify(serializeProject(rack)));
     } catch (err) {
-      console.warn('Autosave fehlgeschlagen:', err);
+      console.warn('Autosave failed:', err);
     }
   }, 3000);
 }
@@ -141,7 +141,7 @@ function wireProjectUI(rack) {
       .map((k) => k.slice('project:'.length))
       .sort();
     if (!names.length) {
-      list.innerHTML = '<p class="sheet__empty">Noch keine gespeicherten Projekte.</p>';
+      list.innerHTML = '<p class="sheet__empty">No saved projects yet.</p>';
       return;
     }
     for (const name of names) {
@@ -149,7 +149,7 @@ function wireProjectUI(rack) {
       item.className = 'sheet__item sheet__item--project';
       item.innerHTML = `
         <button class="project__load">${name}</button>
-        <button class="project__delete" aria-label="Projekt löschen">✕</button>
+        <button class="project__delete" aria-label="Delete project">✕</button>
       `;
       item.querySelector('.project__load').addEventListener('click', () => {
         try {
@@ -157,7 +157,7 @@ function wireProjectUI(rack) {
           nameInput.value = name;
           sheet.hidden = true;
         } catch (err) {
-          console.error('Projekt nicht ladbar:', err);
+          console.error('Project could not be loaded:', err);
         }
       });
       item.querySelector('.project__delete').addEventListener('click', () => {
@@ -177,7 +177,7 @@ function wireProjectUI(rack) {
   });
 
   $('#btn-save-project').addEventListener('click', () => {
-    const name = nameInput.value.trim() || 'Ohne Titel';
+    const name = nameInput.value.trim() || 'Untitled';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
     refreshList();
   });
@@ -185,8 +185,8 @@ function wireProjectUI(rack) {
   $('#btn-new-session').addEventListener('click', () => {
     // Verwirft die aktuelle Session (Autosave überschreibt sie gleich) —
     // deshalb einmal nachfragen.
-    if (!window.confirm('Neue Session starten? Die aktuelle Anordnung wird ' +
-      'verworfen (nicht gespeicherte Änderungen gehen verloren).')) return;
+    if (!window.confirm('Start a new session? The current setup will be ' +
+      'discarded (unsaved changes will be lost).')) return;
     newProject(rack);
     nameInput.value = '';
     sheet.hidden = true;
@@ -203,7 +203,7 @@ function wireProjectUI(rack) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     } catch (err) {
-      console.error('Download nicht möglich:', err);
+      console.error('Download not possible:', err);
     }
   };
 
@@ -228,7 +228,7 @@ function wireProjectUI(rack) {
         else importMachines(rack, data);
         sheet.hidden = true;
       } catch (err) {
-        console.error('Import fehlgeschlagen:', err);
+        console.error('Import failed:', err);
       }
       fileInput.value = '';
     };
@@ -247,18 +247,18 @@ function wireProjectUI(rack) {
   recBtn.addEventListener('click', async () => {
     if (!recorder.active) {
       if (!recorder.supported) {
-        recResult.textContent = 'Aufnahme wird von diesem WebView leider nicht unterstützt.';
+        recResult.textContent = 'Recording is unfortunately not supported by this WebView.';
         return;
       }
       if (!recorder.start()) return;
-      recBtn.textContent = '■ Stopp & Speichern';
+      recBtn.textContent = '■ Stop & Save';
       recTime.hidden = false;
       prjBtn.classList.add('is-recording');
       recTimer = setInterval(() => { recTime.textContent = fmtTime(recorder.elapsed); }, 500);
     } else {
       clearInterval(recTimer);
       const result = await recorder.stop();
-      recBtn.textContent = '● Aufnahme starten';
+      recBtn.textContent = '● Start Recording';
       recTime.hidden = true;
       prjBtn.classList.remove('is-recording');
       if (!result) return;
@@ -279,7 +279,7 @@ function wireProjectUI(rack) {
           if (retried) {
             player.replaceWith(Object.assign(document.createElement('p'), {
               className: 'sheet__hint',
-              textContent: 'Wiedergabe wird hier blockiert — bitte Download/Teilen nutzen oder in Safari testen.',
+              textContent: 'Playback is blocked here — please use Download/Share or test in Safari.',
             }));
             return;
           }
@@ -302,7 +302,7 @@ function wireProjectUI(rack) {
       if (canShareFiles) {
         const shareBtn = document.createElement('button');
         shareBtn.className = 'm-btn rec-share';
-        shareBtn.textContent = '⇪ Teilen / Sichern …';
+        shareBtn.textContent = '⇪ Share / Save …';
         shareBtn.addEventListener('click', () => {
           navigator.share({ files: [file] }).catch(() => { /* abgebrochen */ });
         });
@@ -349,8 +349,8 @@ function wireJamUI(rack) {
   };
 
   const fail = (err) => {
-    console.error('Jam-Fehler:', err);
-    instructions.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message ?? err);
+    console.error('Jam error:', err);
+    instructions.textContent = 'Connection failed: ' + (err?.message ?? err);
   };
 
   /* ---------- QR-Austausch ----------
@@ -363,14 +363,14 @@ function wireJamUI(rack) {
   /* Diagnose: Netzwerkwege beider Seiten (aus den ICE-Kandidaten).
      „verdeckt (mDNS)" heißt: Der Browser versteckt die lokale IP —
      deren Auflösung scheitert in vielen Netzen (v. a. Hotspots). */
-  const NET_NAMES = { host: 'lokal', srflx: 'öffentlich (STUN)', relay: 'TURN-Relay' };
+  const NET_NAMES = { host: 'local', srflx: 'public (STUN)', relay: 'TURN relay' };
   const netLabel = (info) =>
     info.types.map((x) => NET_NAMES[x] ?? x).join(', ') +
-    (info.mdns ? ' [Adresse verdeckt/mDNS]' : '');
+    (info.mdns ? ' [address hidden/mDNS]' : '');
   const renderNetInfo = () => {
     const parts = [];
-    if (jamlink.localInfo?.types.length) parts.push('Eigene Wege: ' + netLabel(jamlink.localInfo));
-    if (jamlink.remoteInfo?.types.length) parts.push('Gegenseite: ' + netLabel(jamlink.remoteInfo));
+    if (jamlink.localInfo?.types.length) parts.push('Own paths: ' + netLabel(jamlink.localInfo));
+    if (jamlink.remoteInfo?.types.length) parts.push('Other side: ' + netLabel(jamlink.remoteInfo));
     netinfo.textContent = parts.join(' · ');
     netinfo.hidden = parts.length === 0;
   };
@@ -412,7 +412,7 @@ function wireJamUI(rack) {
     scanStream?.getTracks().forEach((tr) => tr.stop());
     scanStream = null;
     scanBox.hidden = true;
-    scanBtn.textContent = 'QR scannen';
+    scanBtn.textContent = 'Scan QR';
   };
 
   // Frame prüfen: BarcodeDetector (Chrome u. a.), sonst jsQR (u. a. iOS Safari)
@@ -438,7 +438,7 @@ function wireJamUI(rack) {
     if (scanStream) { stopScan(); return; }
     if (!navigator.mediaDevices?.getUserMedia) {
       instructions.textContent =
-        'Kamera-Zugriff kann dieser Browser nicht — Code unten einfügen.';
+        'This browser can\'t access the camera — paste the code below.';
       instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
       return;
     }
@@ -453,7 +453,7 @@ function wireJamUI(rack) {
       video.srcObject = scanStream;
       await video.play();
       scanBox.hidden = false;
-      scanBtn.textContent = 'Scan stoppen';
+      scanBtn.textContent = 'Stop Scan';
       scanTimer = setInterval(async () => {
         try {
           const text = await detectFrame();
@@ -466,7 +466,7 @@ function wireJamUI(rack) {
     } catch (err) {
       stopScan();
       instructions.textContent =
-        'Kamera nicht verfügbar (' + (err?.name ?? err) + ') — Code unten einfügen.';
+        'Camera unavailable (' + (err?.name ?? err) + ') — paste the code below.';
       instructions.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
     }
   });
@@ -501,8 +501,8 @@ function wireJamUI(rack) {
   const showStatus = () => {
     const ms = Math.max(1, Math.round(jamlink.rtt / 2));
     status.textContent = jamlink.role === 'host'
-      ? `Verbunden als Host (±${ms} ms) — dieses Gerät steuert Play/Stop und BPM.`
-      : `Verbunden als Gast (±${ms} ms) — Play/Stop und BPM steuert der Host.`;
+      ? `Connected as host (±${ms} ms) — this device controls Play/Stop and BPM.`
+      : `Connected as guest (±${ms} ms) — the host controls Play/Stop and BPM.`;
   };
 
   jamlink.onstate = (event) => {
@@ -511,27 +511,27 @@ function wireJamUI(rack) {
       prjBtn.classList.add('is-linked');
       transport.addListener(beatListener);
       status.textContent = jamlink.role === 'host'
-        ? 'Verbunden als Host — messe Laufzeit …'
-        : 'Verbunden als Gast — Uhr wird abgeglichen …';
+        ? 'Connected as host — measuring latency …'
+        : 'Connected as guest — syncing clock …';
     } else if (event === 'sync') {
       showStatus();
     } else if (event === 'connecting') {
-      instructions.textContent = 'Codes ausgetauscht — Geräte verbinden sich …';
+      instructions.textContent = 'Codes exchanged — devices connecting …';
     } else if (event === 'failed') {
-      let msg = 'Verbindung fehlgeschlagen: Die Geräte konnten sich nicht erreichen. ';
+      let msg = 'Connection failed: the devices couldn\'t reach each other. ';
       if (jamlink.remoteInfo?.mdns) {
-        msg += 'Die Gegenseite hat verdeckte Adressen [mDNS] — dort beim ' +
-          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+        msg += 'The other side has hidden addresses [mDNS] — ALLOW the camera ' +
+          'prompt there when joining, then try again. ';
       } else if (jamlink.localInfo?.mdns) {
-        msg += 'Dieses Gerät hat verdeckte Adressen [mDNS] — beim Erstellen/' +
-          'Beitreten die Kamera-Abfrage ERLAUBEN, dann neu versuchen. ';
+        msg += 'This device has hidden addresses [mDNS] — ALLOW the camera ' +
+          'prompt when creating/joining, then try again. ';
       } else {
-        msg += 'Am zuverlässigsten: beide im selben WLAN, oder einer im ' +
-          'persönlichen Hotspot des anderen. Dann neu versuchen. ';
+        msg += 'Most reliable: both on the same Wi-Fi, or one on the ' +
+          'other\'s personal hotspot. Then try again. ';
       }
       instructions.textContent = msg;
     } else if (event === 'unstable') {
-      status.textContent = 'Verbindung instabil — versuche wiederherzustellen …';
+      status.textContent = 'Connection unstable — trying to recover …';
     } else if (event === 'closed') {
       show('idle');
       stopBeatLed();
@@ -544,7 +544,7 @@ function wireJamUI(rack) {
 
   $('#btn-jam-host').addEventListener('click', async () => {
     if (!jamlink.supported) {
-      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      instructions.textContent = 'WebRTC is not supported by this WebView.';
       show('setup');
       codeOut.hidden = codeIn.hidden = true;
       return;
@@ -553,16 +553,16 @@ function wireJamUI(rack) {
     codeOut.hidden = codeIn.hidden = false;
     clearOwnCode();
     instructions.textContent =
-      '1) Der andere scannt diesen QR mit der Kamera-App (oder du teilst den Link). ' +
-      '2) Seinen Antwort-QR hier scannen — oder den Antwort-Code unten einfügen.';
-    codeOut.value = 'Erzeuge Code …';
-    await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
+      '1) The other device scans this QR with the camera app (or you share the link). ' +
+      '2) Scan their reply QR here — or paste the reply code below.';
+    codeOut.value = 'Generating code …';
+    await unlockNetwork(); // real IPs in the code (important for hotspots)
     try { showOwnCode(await jamlink.createOffer()); } catch (err) { fail(err); }
   });
 
   $('#btn-jam-join').addEventListener('click', () => {
     if (!jamlink.supported) {
-      instructions.textContent = 'WebRTC wird von diesem WebView nicht unterstützt.';
+      instructions.textContent = 'WebRTC is not supported by this WebView.';
       show('setup');
       codeOut.hidden = codeIn.hidden = true;
       return;
@@ -571,8 +571,8 @@ function wireJamUI(rack) {
     codeOut.hidden = codeIn.hidden = false;
     clearOwnCode();
     instructions.textContent =
-      '1) QR des Hosts scannen — oder seinen Code unten einfügen und Übernehmen. ' +
-      '2) Den Antwort-QR vom Host scannen lassen (oder Antwort-Code zurückschicken).';
+      '1) Scan the host\'s QR — or paste their code below and Apply. ' +
+      '2) Have the host scan your reply QR (or send the reply code back).';
   });
 
   const applyCode = async (raw) => {
@@ -582,15 +582,15 @@ function wireJamUI(rack) {
     if (!code) return;
     try {
       if (jamlink.pc && jamlink.role === 'host') {
-        await jamlink.acceptAnswer(code);          // Host: Antwort einlesen
+        await jamlink.acceptAnswer(code);          // host: read the reply
         renderNetInfo();
-        instructions.textContent = 'Antwort übernommen — Geräte verbinden sich …';
+        instructions.textContent = 'Reply applied — devices connecting …';
       } else {
-        codeOut.value = 'Erzeuge Antwort-Code …';
-        await unlockNetwork(); // echte IPs in den Code (wichtig für Hotspot)
-        showOwnCode(await jamlink.createAnswer(code)); // Gast: Antwort bauen
+        codeOut.value = 'Generating reply code …';
+        await unlockNetwork(); // real IPs in the code (important for hotspots)
+        showOwnCode(await jamlink.createAnswer(code)); // guest: build the reply
         instructions.textContent =
-          'Diesen Antwort-QR vom Host scannen lassen — oder Code teilen/kopieren.';
+          'Have the host scan this reply QR — or share/copy the code.';
       }
       codeIn.value = '';
     } catch (err) { fail(err); }
@@ -611,8 +611,8 @@ function wireJamUI(rack) {
     clearOwnCode();
     codeIn.value = code;
     instructions.textContent =
-      'Jam-Einladung erkannt! Tippe auf »Übernehmen« — und erlaube danach ' +
-      'die Kamera-Abfrage: Sie schaltet die direkte Geräteverbindung frei.';
+      'Jam invite detected! Tap "Apply" — then allow the camera ' +
+      'prompt: it unlocks the direct device connection.';
   };
 
   shareBtn.addEventListener('click', () => {
@@ -620,7 +620,7 @@ function wireJamUI(rack) {
     if (!code || !navigator.share) return;
     const payload = jamlink.role === 'host'
       ? { title: 'RackWerk Jam', url: joinURL(code) }
-      : { title: 'RackWerk Jam — Antwort-Code', text: code };
+      : { title: 'RackWerk Jam — Reply Code', text: code };
     navigator.share(payload).catch(() => { /* Nutzer hat abgebrochen */ });
   });
 
@@ -668,7 +668,7 @@ function wireSongUI(rack) {
     playheads = [];
     const total = song.lengthSteps || 16;
     if (song.empty) {
-      timeline.innerHTML = '<div class="song-empty">Noch nichts aufgenommen — tippe „● Aufnahme".</div>';
+      timeline.innerHTML = '<div class="song-empty">Nothing recorded yet — tap "● Record".</div>';
     } else {
       rack.machines.forEach((m, idx) => {
         const color = m.constructor.meta.color;
@@ -703,7 +703,7 @@ function wireSongUI(rack) {
     }
     armBtn.classList.toggle('is-active', song.recording);
     playBtn.classList.toggle('is-active', song.playing);
-    playBtn.textContent = song.playing ? '■ Stopp' : '▶ Song';
+    playBtn.textContent = song.playing ? '■ Stop' : '▶ Song';
     prjBtn.classList.toggle('is-songrec', song.recording);
     prjBtn.classList.toggle('is-songplay', song.playing);
   };
@@ -795,7 +795,7 @@ function wireMixerUI(rack) {
   const render = () => {
     list.innerHTML = '';
     if (!rack.machines.length) {
-      list.innerHTML = '<p class="sheet__empty">Keine Maschinen im Rack.</p>';
+      list.innerHTML = '<p class="sheet__empty">No machines in the rack.</p>';
       return;
     }
     for (const m of rack.machines) {
@@ -883,7 +883,7 @@ function wireTransportUI() {
         iconPlay.hidden = playing;
         iconStop.hidden = !playing;
         btnPlay.setAttribute('aria-label',
-          playing ? 'Wiedergabe stoppen' : 'Wiedergabe starten');
+          playing ? 'Stop playback' : 'Start playback');
         if (!playing) lcdPos.textContent = '1.1';
       }
     },

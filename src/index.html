@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <!-- Capacitor-ready: kein Zoom, App-artiges Verhalten, Safe-Areas via viewport-fit -->
@@ -28,7 +28,7 @@
       <span class="brand__mark">▦</span>
       <span class="brand__name">RackWerk</span>
     </div>
-    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projekte">PRJ</button>
+    <button class="t-btn t-btn--prj" id="btn-projects" aria-label="Projects">PRJ</button>
 
     <div class="transport__lcd" id="lcd">
       <span class="lcd__bpm" id="lcd-bpm">120.0</span>
@@ -37,10 +37,10 @@
     </div>
 
     <div class="transport__controls">
-      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Aufnahme: Automation & Live-Spiel">●</button>
-      <button class="t-btn" id="btn-bpm-down" aria-label="Tempo verringern">−</button>
-      <button class="t-btn" id="btn-bpm-up" aria-label="Tempo erhöhen">+</button>
-      <button class="t-btn t-btn--play" id="btn-play" aria-label="Wiedergabe starten">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
+      <button class="t-btn" id="btn-bpm-down" aria-label="Decrease tempo">−</button>
+      <button class="t-btn" id="btn-bpm-up" aria-label="Increase tempo">+</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
         <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
         <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
       </button>
@@ -55,9 +55,9 @@
   <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
   <div class="sheet" id="machine-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Maschine hinzufügen">
+    <div class="sheet__panel" role="dialog" aria-label="Add machine">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Maschine hinzufügen</h2>
+      <h2 class="sheet__title">Add machine</h2>
       <div class="sheet__list" id="machine-list">
         <!-- Einträge kommen aus der Machine-Registry -->
       </div>
@@ -67,33 +67,33 @@
   <!-- ===== Projekte (Bottom Sheet) ===== -->
   <div class="sheet" id="project-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Projekte">
+    <div class="sheet__panel" role="dialog" aria-label="Projects">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Projekte</h2>
+      <h2 class="sheet__title">Projects</h2>
       <div class="saverow">
-        <input class="saverow__input" id="project-name" placeholder="Projektname" maxlength="40">
-        <button class="m-btn saverow__btn" id="btn-save-project">Speichern</button>
+        <input class="saverow__input" id="project-name" placeholder="Project name" maxlength="40">
+        <button class="m-btn saverow__btn" id="btn-save-project">Save</button>
       </div>
       <div class="filerow">
-        <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
+        <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song Timeline</button>
         <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
-      <h3 class="sheet__sub">Datei</h3>
+      <h3 class="sheet__sub">File</h3>
       <div class="filerow">
-        <button class="m-btn" id="btn-export">Exportieren</button>
-        <button class="m-btn" id="btn-import-replace">Datei laden</button>
-        <button class="m-btn" id="btn-import-merge">Dazuladen</button>
+        <button class="m-btn" id="btn-export">Export</button>
+        <button class="m-btn" id="btn-import-replace">Load File</button>
+        <button class="m-btn" id="btn-import-merge">Add From File</button>
         <input type="file" id="file-input" accept="application/json,.json" hidden>
       </div>
 
-      <h3 class="sheet__sub">Jam-Session (2 Geräte)</h3>
+      <h3 class="sheet__sub">Jam Session (2 Devices)</h3>
       <div id="jam-idle">
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-host">Session erstellen</button>
-          <button class="m-btn" id="btn-jam-join">Beitreten</button>
+          <button class="m-btn" id="btn-jam-host">Create Session</button>
+          <button class="m-btn" id="btn-jam-join">Join</button>
         </div>
       </div>
       <div id="jam-setup" hidden>
@@ -102,44 +102,44 @@
           <canvas class="jam-qr" id="jam-qr"></canvas>
         </div>
         <p class="sheet__hint jam-netinfo" id="jam-netinfo" hidden></p>
-        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Eigener Code erscheint hier …"></textarea>
+        <textarea class="jam-code" id="jam-code-out" readonly placeholder="Your code will appear here …"></textarea>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-share" hidden>Teilen</button>
-          <button class="m-btn" id="btn-jam-copy">Kopieren</button>
-          <button class="m-btn" id="btn-jam-cancel">Abbrechen</button>
+          <button class="m-btn" id="btn-jam-share" hidden>Share</button>
+          <button class="m-btn" id="btn-jam-copy">Copy</button>
+          <button class="m-btn" id="btn-jam-cancel">Cancel</button>
         </div>
         <div id="jam-scan" hidden>
           <video class="jam-video" id="jam-video" playsinline muted></video>
         </div>
-        <textarea class="jam-code" id="jam-code-in" placeholder="Code des anderen Geräts hier einfügen …"></textarea>
+        <textarea class="jam-code" id="jam-code-in" placeholder="Paste the other device's code here …"></textarea>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-scan">QR scannen</button>
-          <button class="m-btn" id="btn-jam-apply">Übernehmen</button>
+          <button class="m-btn" id="btn-jam-scan">Scan QR</button>
+          <button class="m-btn" id="btn-jam-apply">Apply</button>
         </div>
       </div>
       <div id="jam-active" hidden>
         <p class="sheet__hint" id="jam-status"></p>
         <div class="jam-beat">
           <span class="jam-beat__led" id="jam-beat-led"></span>
-          <span class="sheet__hint jam-beat__hint">Beat-Anzeige — blinkt im Takt,
-            sobald Play läuft. Blinken beide Geräte gleichzeitig, steht der
-            Sync (Taktanfang orange).</span>
+          <span class="sheet__hint jam-beat__hint">Beat indicator — blinks on the beat
+            once playback runs. If both devices blink together, sync is
+            good (downbeat is orange).</span>
         </div>
         <div class="filerow">
-          <button class="m-btn" id="btn-jam-send">Maschinen senden</button>
-          <button class="m-btn" id="btn-jam-leave">Trennen</button>
+          <button class="m-btn" id="btn-jam-send">Send Machines</button>
+          <button class="m-btn" id="btn-jam-leave">Disconnect</button>
         </div>
       </div>
 
-      <h3 class="sheet__sub">Master-Aufnahme</h3>
+      <h3 class="sheet__sub">Master Recording</h3>
       <div class="recrow">
-        <button class="m-btn" id="btn-audio-rec">● Aufnahme starten</button>
+        <button class="m-btn" id="btn-audio-rec">● Start Recording</button>
         <span class="recrow__time" id="rec-time" hidden>0:00</span>
       </div>
       <div id="rec-result"></div>
 
       <p class="sheet__hint" id="project-hint" hidden>
-        ⚠︎ Dauerhafter Speicher ist hier nicht verfügbar — Projekte gelten nur für diese Sitzung.
+        ⚠︎ Persistent storage isn't available here — projects only last for this session.
       </p>
     </div>
   </div>
@@ -147,19 +147,19 @@
   <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
   <div class="sheet" id="song-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Song-Timeline">
+    <div class="sheet__panel" role="dialog" aria-label="Song Timeline">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Song-Timeline</h2>
+      <h2 class="sheet__title">Song Timeline</h2>
       <p class="sheet__hint">
-        <b>Aufnahme</b> schaltet scharf, schließt diese Seite und startet den Transport —
-        schalte dann live die Patterns (A/B/C/D) der Maschinen um, die Wechsel werden
-        mitgeschnitten. Mit dem Stopp oben beendest du die Aufnahme.
-        <b>Song ▶</b> spielt die Aufnahme in Schleife ab.
+        <b>Record</b> arms recording, closes this sheet, and starts the transport —
+        then switch the machines' patterns (A/B/C/D) live, and the switches get
+        captured. Hit Stop above to end the recording.
+        <b>Song ▶</b> plays the recording back in a loop.
       </p>
       <div class="filerow">
-        <button class="m-btn" id="btn-song-arm">● Aufnahme</button>
+        <button class="m-btn" id="btn-song-arm">● Record</button>
         <button class="m-btn" id="btn-song-play">▶ Song</button>
-        <button class="m-btn" id="btn-song-clear">Leeren</button>
+        <button class="m-btn" id="btn-song-clear">Clear</button>
       </div>
       <div class="song-timeline" id="song-timeline"></div>
     </div>
@@ -179,8 +179,8 @@
   <div class="unlock" id="unlock-overlay">
     <button class="unlock__btn" id="btn-unlock">
       <span class="unlock__icon">▶</span>
-      <span>Tippen zum Starten</span>
-      <small>Audio wird aktiviert</small>
+      <span>Tap to Start</span>
+      <small>Enabling audio</small>
     </button>
   </div>
 

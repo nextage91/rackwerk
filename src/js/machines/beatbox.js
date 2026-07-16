@@ -163,7 +163,7 @@ export class BeatBox extends Machine {
   static meta = {
     type: 'beatbox',
     name: 'BeatBox',
-    desc: '8-Spur-Drum-Machine, synthetisierte Sounds',
+    desc: '8-track drum machine, synthesized sounds',
     color: '#ff8c42',
     model: 'RW-02',
   };
