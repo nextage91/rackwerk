@@ -189,6 +189,96 @@ x-knob {
   font-variant-numeric: tabular-nums;
 }
 
+/* ===================== Fader (x-fader) ===================== */
+x-fader {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: 1fr auto;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  min-height: 0;
+  touch-action: none;               /* Drag gehört dem Fader, nicht dem Scroll */
+}
+.fader__scale {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;           /* 0 dB oben, −60 dB unten */
+  justify-content: space-between;
+  height: 100%;
+  padding: 2px 0;
+  font-family: var(--font-lcd);
+  font-size: 8px;
+  color: var(--ink-faint);
+  text-align: right;
+}
+.fader__track {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  width: 30px;
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #1c1811, #100d09 45%, #1c1811);
+  box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
+}
+/* Fader-Nut in der Mitte, wie ein echter Kanalzug-Schlitz */
+.fader__track::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 6px; bottom: 6px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: #050403;
+  box-shadow: 0 0 3px rgba(0,0,0,.8) inset;
+}
+.fader__fill {
+  position: absolute;
+  left: 50%; bottom: 6px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px 2px 0 0;
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 5px var(--m-color-glow, transparent);
+  pointer-events: none;
+}
+.fader__cap {
+  position: absolute;
+  left: 50%;
+  width: 40px; height: 18px;
+  margin-left: -20px;
+  margin-bottom: -9px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #6a6254, #3a352b 45%, #221e18);
+  box-shadow:
+    0 1px 0 var(--edge-light) inset,
+    0 2px 5px rgba(0,0,0,.6);
+  pointer-events: none;
+}
+/* Griffrillen auf der Fader-Kappe */
+.fader__cap::before {
+  content: "";
+  position: absolute;
+  left: 6px; right: 6px; top: 50%;
+  height: 6px;
+  margin-top: -3px;
+  background:
+    repeating-linear-gradient(180deg, rgba(0,0,0,.5) 0 1px, transparent 1px 3px);
+  border-radius: 1px;
+}
+.fader__value {
+  grid-column: 1 / span 2;
+  grid-row: 2;
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  color: var(--lcd-ink);
+  text-align: center;
+  min-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ===================== Keybed (Test-Tastatur) ===================== */
 .keybed {
   margin-top: 12px;

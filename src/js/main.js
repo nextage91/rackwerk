@@ -2,6 +2,7 @@
  * main.js — verdrahtet Engine, Transport, Rack und die Transport-Leiste.
  */
 import './ui/knob.js';                       // registriert <x-knob>
+import './ui/fader.js';                      // registriert <x-fader>
 import { drawQR } from './ui/qr.js';
 import { jsQR } from './vendor/jsqr.js';
 import { engine } from './core/audio-engine.js';
@@ -45,6 +46,18 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', () => engine.resume());
 document.addEventListener('pointerdown', () => engine.resume(), true);
+
+/* Transport-Höhe als CSS-Variable durchreichen — der Vollbild-Mixer setzt
+   sich darunter, damit Play/Stop/BPM auch bei offenem Mixer bedienbar
+   bleiben. Höhe hängt von der Safe-Area ab, deshalb bei Resize/Rotation
+   neu messen statt einen Fixwert zu raten. */
+const syncTransportHeight = () => {
+  const h = $('#transport')?.getBoundingClientRect().height;
+  if (h) document.documentElement.style.setProperty('--transport-h', `${h}px`);
+};
+window.addEventListener('resize', syncTransportHeight);
+window.addEventListener('orientationchange', syncTransportHeight);
+syncTransportHeight();
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
@@ -743,34 +756,58 @@ function wireSongUI(rack) {
   $('#btn-song-clear').addEventListener('click', () => song.clear());
 }
 
-/* ---------- Mixer: Pegel/Panorama/Mute/Solo aller Maschinen im Überblick ----------
+/* ---------- Mixer: Breitbild-Konsole mit Channel-Strips ----------
  * Steuert dieselben Werte, die auch die Maschinen-Panels selbst zeigen (eine
  * Quelle der Wahrheit über Machine.setLevel/setPan/setMuted/setSoloed) — der
- * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel. */
+ * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel.
+ * Layout: horizontal scrollende Kanalzüge mit echten Fadern (dB-Skala) und
+ * live mitlaufenden VU-Metern; die BeatBox läuft als klappbare Gruppe
+ * (Gesamt-Fader + acht Drum-Spuren, einklappbar auf den Gruppen-Fader). */
 function wireMixerUI(rack) {
   const sheet = $('#mixer-sheet');
   const list = $('#mixer-list');
 
-  /** Ein Kanalzug (Level/Pan/Mute/Solo) für eine Maschine ODER eine
-   *  einzelne Drum-Spur — beide teilen sich dieselben Setter-Namen
-   *  (setLevel/setPan/level/pan), nur Mute/Solo gibt es nur maschinenweit. */
+  /* Ein gemeinsamer rAF-Ticker treibt alle sichtbaren VU-Meter — nur
+     während der Mixer offen ist, sonst unnötige Dauerlast im Hintergrund. */
+  const FLOOR_DB = -45;
+  let meterEntries = [];
+  let meterRAF = null;
+  const meterTick = () => {
+    for (const m of meterEntries) {
+      m.analyser.getFloatTimeDomainData(m.buf);
+      let sum = 0;
+      for (let i = 0; i < m.buf.length; i++) sum += m.buf[i] ** 2;
+      const rms = Math.sqrt(sum / m.buf.length);
+      const db = 20 * Math.log10(Math.max(1e-6, rms));
+      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * m.segs.length);
+      if (lit !== m.lastLit) {
+        m.segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+        m.lastLit = lit;
+      }
+    }
+    meterRAF = requestAnimationFrame(meterTick);
+  };
+  const startMeters = () => { if (!meterRAF) meterRAF = requestAnimationFrame(meterTick); };
+  const stopMeters = () => { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; };
+
+  /** Ein Kanalzug (Fader + VU-Meter + Pan + Mute/Solo) für eine Maschine
+   *  ODER eine einzelne Drum-Spur — beide teilen sich dieselben Setter-
+   *  Namen (setLevel/setPan/level/pan/getMeterAnalyser). */
   const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
     const strip = document.createElement('div');
-    strip.className = 'mixer-strip' + (compact ? ' mixer-substrip' : '');
-    const head = compact
-      ? `<span class="mixer-substrip__name">${name}</span>`
-      : `<div class="mixer-strip__head">
-           <span class="mixer-strip__stripe"></span>
-           <span class="mixer-strip__name">${name}</span>
-         </div>`;
+    strip.className = 'chstrip' + (compact ? ' chstrip--sub' : '');
     strip.innerHTML = `
-      ${head}
-      <div class="mixer-strip__knobs">
-        <x-knob label="Level" min="0" max="1" value="${target.level}" data-k="level"></x-knob>
-        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      <div class="chstrip__head">
+        <span class="chstrip__stripe"></span>
+        <span class="chstrip__name">${name}</span>
+      </div>
+      <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      <div class="chstrip__meters">
+        <div class="chstrip__vu" data-vu>${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}</div>
+        <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
       </div>
       ${withButtons ? `
-      <div class="mixer-strip__buttons">
+      <div class="chstrip__buttons">
         <button class="m-btn m-btn--solo${target.soloed ? ' is-active' : ''}" data-solo>SOLO</button>
         <button class="m-btn m-btn--mute${target.muted ? ' is-active' : ''}" data-mute>MUTE</button>
       </div>` : ''}
@@ -789,13 +826,24 @@ function wireMixerUI(rack) {
         soloBtn.classList.toggle('is-active', target.soloed);
       };
     }
+
+    const analyser = target.getMeterAnalyser?.();
+    if (analyser && typeof analyser.getFloatTimeDomainData === 'function') {
+      meterEntries.push({
+        analyser,
+        buf: new Float32Array(analyser.fftSize),
+        segs: strip.querySelectorAll('.vu__seg'),
+        lastLit: -1,
+      });
+    }
     return strip;
   };
 
   const render = () => {
     list.innerHTML = '';
+    meterEntries = [];
     if (!rack.machines.length) {
-      list.innerHTML = '<p class="sheet__empty">No machines in the rack.</p>';
+      list.innerHTML = '<p class="mixer-empty">No machines in the rack.</p>';
       return;
     }
     for (const m of rack.machines) {
@@ -803,19 +851,28 @@ function wireMixerUI(rack) {
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
 
       if (type === 'beatbox') {
-        // Gruppe: Gesamt-Kanalzug (Kit-Bus) + eine Zeile je Drum-Spur
+        // Gruppe: Gesamt-Kanalzug (Kit-Bus) + einklappbare Drum-Spuren
         const group = document.createElement('div');
         group.className = 'mixer-group';
         group.style.setProperty('--m-color', color);
-        group.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.3)`);
+        group.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.1)`);
         group.appendChild(buildStrip(m, { name }));
 
+        const toggle = document.createElement('button');
+        toggle.className = 'mixer-group__toggle';
+        toggle.setAttribute('aria-label', 'Toggle drum tracks');
+        toggle.addEventListener('click', () => group.classList.toggle('is-collapsed'));
+        group.appendChild(toggle);
+
         const subtracks = document.createElement('div');
-        subtracks.className = 'mixer-subtracks';
+        subtracks.className = 'mixer-group__subtracks';
         m.tracks.forEach((tr, i) => {
           const sub = buildStrip(
-            { level: tr.level, pan: tr.pan,
-              setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v) },
+            {
+              level: tr.level, pan: tr.pan,
+              setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v),
+              getMeterAnalyser: () => m.getTrackMeterAnalyser(i),
+            },
             { name: tr.name, withButtons: false, compact: true },
           );
           subtracks.appendChild(sub);
@@ -835,8 +892,12 @@ function wireMixerUI(rack) {
     $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
     render();
     sheet.hidden = false;
+    startMeters();
   });
-  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
+  sheet.querySelector('[data-close]').addEventListener('click', () => {
+    sheet.hidden = true;
+    stopMeters();
+  });
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

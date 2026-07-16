@@ -115,6 +115,22 @@ export class Machine {
     this.panner.pan.setTargetAtTime(this.pan, engine.now, 0.01);
   }
 
+  /** @type {AnalyserNode|null} */
+  #meterAnalyser = null;
+  /**
+   * Analyser für das Kanalzug-VU-Meter im Mixer — hinter dem Mute/Solo-Gate
+   * abgegriffen, zeigt also genau das, was hörbar ist (still bei Mute).
+   * Lazy angelegt: kostet nichts, solange kein Mixer-Kanalzug ihn abfragt.
+   */
+  getMeterAnalyser() {
+    if (!this.#meterAnalyser) {
+      this.#meterAnalyser = engine.ctx.createAnalyser();
+      this.#meterAnalyser.fftSize = 512;
+      this.gate.connect(this.#meterAnalyser);
+    }
+    return this.#meterAnalyser;
+  }
+
   /* ---------- Master-FX-Sends ---------- */
   setSend(which, value) {
     this.sends[which] = value;
@@ -284,6 +300,7 @@ export class Machine {
       this.gate.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
+      this.#meterAnalyser?.disconnect();
     }, 120);
     this.el?.remove();
   }
