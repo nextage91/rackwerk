@@ -471,6 +471,40 @@ button {
   font-size: 10px;
   padding: 0 6px;
 }
+
+/* Gruppe (z. B. BeatBox): der Kanalzug oben führt den ganzen Kit-Bus,
+   darunter die einzelnen Drum-Spuren mit eigenem Level/Pan. */
+.mixer-group {
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+.mixer-group .mixer-strip { background: none; box-shadow: none; }
+.mixer-subtracks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 8px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.mixer-substrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 4px 12px;   /* Einrückung zeigt die Zugehörigkeit zur Gruppe */
+  border-left: 2px solid var(--m-color-dim, rgba(255,140,66,.3));
+}
+.mixer-substrip__name {
+  flex: 0 0 52px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mixer-substrip .mixer-strip__knobs { --knob-size: 40px; gap: 0; }
 #btn-song-arm.is-active {
   color: #fff; background: linear-gradient(#b33a3a, #7e2727);
   animation: rec-pulse 1.2s ease-in-out infinite;

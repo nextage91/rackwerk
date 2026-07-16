@@ -175,8 +175,16 @@ export class BeatBox extends Machine {
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
 
-    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig)
-    this.tracks = TRACK_DEFS.map((def) => ({ ...def, tune: 1, decay: 1, level: 0.9 }));
+    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig). Jede Spur
+    // bekommt eine eigene StereoPannerNode — anders als bei Level (steckt
+    // als Multiplikator in der Hüllkurve, siehe Drum-Synthese oben) gibt es
+    // für Panorama keine "Stelle im Code", an der man ansetzen könnte, ohne
+    // echte Audio-Nodes: jeder Trigger muss durch die Spur-eigene Node.
+    this.tracks = TRACK_DEFS.map((def) => {
+      const panner = engine.ctx.createStereoPanner();
+      panner.connect(this.output);
+      return { ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner };
+    });
 
     // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
     // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
@@ -227,7 +235,7 @@ export class BeatBox extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
       })),
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
@@ -246,6 +254,7 @@ export class BeatBox extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
+      this.setTrackPan(i, saved.pan ?? 0);
     });
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
@@ -276,11 +285,33 @@ export class BeatBox extends Machine {
     if (event === 'stop') this.seq?.clearPlayhead();
   }
 
+  /** Basisklasse kennt die Spur-Panner nicht — selbst aufräumen. */
+  disposeAudio() {
+    for (const tr of this.tracks) tr.panner.disconnect();
+  }
+
   #trigger(tr, time) {
     this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
-    // identisch im Audio-Block positioniert (siehe engine.quantizeTime)
-    tr.synth(engine.ctx, engine.quantizeTime(time), this.output, tr);
+    // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
+    // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
+    // damit jede Drum-Spur ihre eigene Stereo-Position hat.
+    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, tr);
+  }
+
+  /* ---------- Mixer: Pegel & Panorama pro Spur ---------- */
+  /** Hält den Panel-Level-Knob synchron, falls diese Spur gerade angezeigt wird. */
+  setTrackLevel(i, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    tr.level = Math.min(1, Math.max(0, v));
+    if (i === this.selected) this.knobs.level.value = tr.level;
+  }
+  setTrackPan(i, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    tr.pan = Math.min(1, Math.max(-1, v));
+    tr.panner.pan.setTargetAtTime(tr.pan, engine.now, 0.01);
   }
 
   /* ---------- UI ---------- */
