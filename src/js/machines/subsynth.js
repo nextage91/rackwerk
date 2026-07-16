@@ -21,6 +21,19 @@ import { song } from '../core/song.js';
 const emptyPattern = (len = 16) =>
   Array.from({ length: len }, () => ({ on: false, midi: 48 }));
 
+/**
+ * Headroom für die Amp-Hüllkurve: Ohne diese Skalierung ramp(t) immer bis
+ * 1 (volle Aussteuerung) — anders als bei der BeatBox, wo jeder Drum-Klang
+ * intern schon gegen die anderen austariert ist (Kick 1.0, Snare-Körper
+ * 0.5, Hats 0.45 …). Gemessen (OfflineAudioContext, RMS über 0.6 s nach
+ * Trigger, jeweils an Default-Einstellungen): eine gehaltene SubSynth-Note
+ * lag ohne Headroom 7 dB über einem einzelnen Kick und 13 dB über der
+ * Snare — ein Sequenzer-Bass drängt sich damit permanent vor den Rest des
+ * Kits, weil er (anders als ein perkussiver Klang) die ganze Notenlänge
+ * über nahe der Spitzenlautstärke gehalten wird statt abzuklingen.
+ */
+const VOICE_HEADROOM = 0.6;
+
 export class SubSynth extends Machine {
   static meta = {
     type: 'subsynth',
@@ -129,7 +142,7 @@ export class SubSynth extends Machine {
     const env = ctx.createGain();
     const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(1, time + atk);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filter).connect(env).connect(this.output);
@@ -157,7 +170,7 @@ export class SubSynth extends Machine {
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(0, t);
-    env.gain.linearRampToValueAtTime(1, t + p.attack);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
 
     osc.connect(filter).connect(env).connect(this.output);
     osc.start(t);
