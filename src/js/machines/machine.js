@@ -189,11 +189,15 @@ export class Machine {
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
     el.querySelector('[data-remove]').addEventListener('click', () => {
-      this.dispose();
+      const state = this.serialize(); // vor dispose() sichern — für Undo
+      // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
+      // ein bubbling Event auf einem bereits entfernten Knoten erreicht
+      // keine Vorfahren mehr (also auch nicht Racks Listener).
       el.dispatchEvent(new CustomEvent('machine:removed', {
-        detail: { machine: this },
+        detail: { machine: this, state },
         bubbles: true,
       }));
+      this.dispose();
     });
 
     this.buildControls(el.querySelector('.machine__body'));

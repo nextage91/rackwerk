@@ -67,15 +67,9 @@ export class PolySynth extends Machine {
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
-    // Kleine Demo-Progression (Root-Noten) — der gewählte Chord-Typ macht
-    // daraus beim Abspielen die volle Voicing.
-    const seedPat = emptyPattern();
-    const seed = { 0: 48, 4: 45, 8: 41, 12: 43 }; // C – Ab – F – G (Root-Noten)
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
+     *  ohne vorprogrammierte Steps. */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }

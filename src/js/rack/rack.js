@@ -10,6 +10,7 @@ import { BeatBox } from '../machines/beatbox.js';
 import { PercSynth } from '../machines/percsynth.js';
 import { PolySynth } from '../machines/polysynth.js';
 import { AnalogKit } from '../machines/analogkit.js';
+import { undo } from '../core/undo.js';
 
 /** Neue Maschinentypen einfach hier registrieren. */
 export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit];
@@ -30,7 +31,20 @@ export class Rack {
 
     // Maschinen melden ihr Entfernen selbst (Event aus machine.js)
     this.rackEl.addEventListener('machine:removed', (e) => {
-      this.machines = this.machines.filter((m) => m !== e.detail.machine);
+      const { machine, state } = e.detail;
+      const index = this.machines.indexOf(machine);
+      this.machines = this.machines.filter((m) => m !== machine);
+      if (index === -1) return;
+
+      const MachineClass = machine.constructor;
+      undo.offer(`${MachineClass.meta.name} removed`, () => {
+        const restored = new MachineClass();
+        if (state) restored.deserialize(state);
+        this.machines.splice(index, 0, restored);
+        const refEl = this.machines[index + 1]?.el ?? this.addSlotEl;
+        this.rackEl.insertBefore(restored.render(), refEl);
+        restored.el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+      });
     });
   }
 

@@ -1278,6 +1278,38 @@ x-knob.has-auto .knob__dial::after {
   white-space: nowrap;
 }
 
+/* Undo-Toast: erscheint nach destruktiven Aktionen (Maschine entfernt,
+   Pattern geleert, …) mit direktem Rückgängig-Button. */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 22px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+  white-space: nowrap;
+}
+.undo-toast__btn {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  background: linear-gradient(#7fe28e, #4faf5f);
+  color: #0f130f;
+  font-size: 13px;
+  font-weight: 700;
+}
+.undo-toast__btn:active { transform: translateY(1px); }
+
 /* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
 .seg {
   display: flex;
@@ -1553,6 +1585,42 @@ x-knob.has-auto .knob__dial::after {
   </div>
 
   <script>
+/* ===== js/core/undo.js ===== */
+const { undo } = (() => {
+/**
+ * undo.js — »Letzte destruktive Aktion rückgängig machen«.
+ *
+ * Bewusst nur ein Slot statt ein Stack: der Undo-Toast zeigt ohnehin immer
+ * nur die letzte Aktion an, ältere wären über die UI gar nicht erreichbar.
+ * Jede Stelle im Code, die etwas ohne Rückfrage löscht (Maschine entfernen,
+ * Pattern leeren, …), ruft nach der Aktion `undo.offer(label, fn)` auf;
+ * `fn` macht die Aktion beim Antippen von »Undo« rückgängig.
+ */
+let last = null; // { label, run() }
+const listeners = new Set();
+
+function notify() {
+  for (const fn of listeners) fn(last);
+}
+
+const undo = {
+  offer(label, run) {
+    last = { label, run };
+    notify();
+  },
+  trigger() {
+    if (!last) return;
+    const entry = last;
+    last = null;
+    notify();
+    entry.run();
+  },
+  onChange(fn) { listeners.add(fn); },
+};
+
+return { undo };
+})();
+
 /* ===== js/ui/knob.js ===== */
 const { XKnob } = (() => {
 /**
@@ -12904,6 +12972,7 @@ const { StepSeq, resizePattern } = (() => {
  * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
  * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
  */
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const noteLabel = (midi) => NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
 
@@ -12953,9 +13022,16 @@ class StepSeq {
     }
 
     this.el.querySelector('[data-clear]').addEventListener('click', () => {
+      const snapshot = this.pattern.map((st) => ({ ...st }));
+      if (snapshot.every((st) => !st.on)) return; // schon leer — kein Undo nötig
       for (const st of this.pattern) st.on = false;
       this.#renderAll();
       this.onChange?.();
+      undo.offer('Pattern cleared', () => {
+        snapshot.forEach((st, i) => { if (this.pattern[i]) Object.assign(this.pattern[i], st); });
+        this.#renderAll();
+        this.onChange?.();
+      });
     });
 
     this.el.querySelectorAll('[data-page]').forEach((btn) =>
@@ -15118,11 +15194,15 @@ class Machine {
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
     el.querySelector('[data-remove]').addEventListener('click', () => {
-      this.dispose();
+      const state = this.serialize(); // vor dispose() sichern — für Undo
+      // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
+      // ein bubbling Event auf einem bereits entfernten Knoten erreicht
+      // keine Vorfahren mehr (also auch nicht Racks Listener).
       el.dispatchEvent(new CustomEvent('machine:removed', {
-        detail: { machine: this },
+        detail: { machine: this, state },
         bubbles: true,
       }));
+      this.dispose();
     });
 
     this.buildControls(el.querySelector('.machine__body'));
@@ -15296,17 +15376,26 @@ class SubSynth extends Machine {
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
-    /** 4 Pattern-Slots (A/B/C/D), {on, midi} pro Step. A trägt die Demo-
-     *  Line, B–D starten leer. `this.pattern` zeigt aufs aktive Slot. */
-    const seedPat = Array.from({ length: 16 }, () => ({ on: false, midi: 48 }));
-    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 }; // kleine Acid-Line
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D), {on, midi} pro Step. `this.pattern`
+     *  zeigt aufs aktive Slot. Die Demo-Line kommt nicht von hier, sondern
+     *  optional über seedDemo() (s. dort). */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
+  }
+
+  /**
+   * Kleine Acid-Line in Slot A einfüllen — nur von der Startbesetzung einer
+   * neuen Session genutzt (project.js#newProject), damit die App sofort
+   * klingt. Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 };
+    for (const [step, midi] of Object.entries(seed)) {
+      this.patterns[0][step].on = true;
+      this.patterns[0][step].midi = midi;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.pattern);
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -15686,7 +15775,10 @@ const TRACK_DEFS = [
 /** Leeres Pattern-Slot: 8 Spuren × 16 leere Steps. */
 const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
 
-// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat
+// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat — nur für
+// die Startbesetzung einer neuen Session genutzt (project.js#newProject),
+// nicht automatisch beim Hinzufügen über "+ Add Machine" (die soll leer
+// starten, s. seedDemo()).
 const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
 
 class BeatBox extends Machine {
@@ -15738,17 +15830,27 @@ class BeatBox extends Machine {
       };
     });
 
-    // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
-    // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
+    // 4 leere Pattern-Slots (A/B/C/D), je 8 Step-Spuren. Die Spuren zeigen
+    // per steps-Referenz aufs aktive Slot. Der Start-Groove kommt nicht von
+    // hier, sondern optional über seedDemo() (s. dort).
     this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
-    for (const [name, steps] of Object.entries(SEED)) {
-      const ti = this.tracks.findIndex((t) => t.name === name);
-      for (const s of steps) this.patterns[0][ti][s].on = true;
-    }
     this.patternIndex = 0;
     // Binden hier inline: buildAudio läuft aus dem Basis-Konstruktor, private
     // Methoden der Unterklasse sind da noch nicht verfügbar.
     this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
+  }
+
+  /**
+   * Start-Groove in Slot A einfüllen — nur von der Startbesetzung einer neuen
+   * Session genutzt (project.js#newProject), damit die App sofort klingt.
+   * Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    for (const [name, steps] of Object.entries(SEED)) {
+      const ti = this.tracks.findIndex((t) => t.name === name);
+      for (const s of steps) this.patterns[0][ti][s].on = true;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.tracks[this.selected].steps);
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -16107,14 +16209,9 @@ class PercSynth extends Machine {
     };
     this.output.gain.value = this.params.volume;
 
-    /** 4 Pattern-Slots (A/B/C/D). A trägt die Offbeat-Perc, B–D leer. */
-    const seedPat = emptyPattern();
-    const seed = { 2: 79, 7: 72, 10: 84, 15: 76 }; // sparsame Offbeat-Perc
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
+     *  ohne vorprogrammierte Steps. */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }
@@ -16342,15 +16439,9 @@ class PolySynth extends Machine {
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
-    // Kleine Demo-Progression (Root-Noten) — der gewählte Chord-Typ macht
-    // daraus beim Abspielen die volle Voicing.
-    const seedPat = emptyPattern();
-    const seed = { 0: 48, 4: 45, 8: 41, 12: 43 }; // C – Ab – F – G (Root-Noten)
-    for (const [step, midi] of Object.entries(seed)) {
-      seedPat[step].on = true;
-      seedPat[step].midi = midi;
-    }
-    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
+     *  ohne vorprogrammierte Steps. */
+    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }
@@ -16828,9 +16919,6 @@ const TRACK_DEFS = [
 /** Leeres Pattern-Slot: 11 Spuren × 16 leere Steps. */
 const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
 
-// Start-Groove: klassischer 909-Vierviertel-Groove
-const SEED = { BD: [0, 4, 8, 12], SD: [4, 12], CH: [0, 2, 4, 6, 8, 10, 12, 14], OH: [7, 15] };
-
 class AnalogKit extends Machine {
   getParamForKnob(key) {
     return key === 'volume' ? this.volume : super.getParamForKnob(key);
@@ -16870,12 +16958,9 @@ class AnalogKit extends Machine {
       };
     });
 
-    // 4 Pattern-Slots (A/B/C/D), je 11 Step-Spuren. A trägt den Start-Groove.
+    // 4 leere Pattern-Slots (A/B/C/D), je 11 Step-Spuren — neu hinzugefügte
+    // Maschinen starten ohne vorprogrammierte Steps.
     this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
-    for (const [name, steps] of Object.entries(SEED)) {
-      const ti = this.tracks.findIndex((t) => t.name === name);
-      for (const s of steps) this.patterns[0][ti][s].on = true;
-    }
     this.patternIndex = 0;
     this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
   }
@@ -17184,7 +17269,20 @@ class Rack {
 
     // Maschinen melden ihr Entfernen selbst (Event aus machine.js)
     this.rackEl.addEventListener('machine:removed', (e) => {
-      this.machines = this.machines.filter((m) => m !== e.detail.machine);
+      const { machine, state } = e.detail;
+      const index = this.machines.indexOf(machine);
+      this.machines = this.machines.filter((m) => m !== machine);
+      if (index === -1) return;
+
+      const MachineClass = machine.constructor;
+      undo.offer(`${MachineClass.meta.name} removed`, () => {
+        const restored = new MachineClass();
+        if (state) restored.deserialize(state);
+        this.machines.splice(index, 0, restored);
+        const refEl = this.machines[index + 1]?.el ?? this.addSlotEl;
+        this.rackEl.insertBefore(restored.render(), refEl);
+        restored.el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+      });
     });
   }
 
@@ -17290,8 +17388,8 @@ function newProject(rack) {
   transport.setBpm(120);
   masterFX.reset();
   song.clear();
-  rack.addMachine(BY_TYPE.beatbox);
-  rack.addMachine(BY_TYPE.subsynth);
+  rack.addMachine(BY_TYPE.beatbox).seedDemo();
+  rack.addMachine(BY_TYPE.subsynth).seedDemo();
 }
 
 function loadProject(rack, data) {
@@ -17423,6 +17521,7 @@ function boot() {
   const jam = wireJamUI(rack);
   wireSongUI(rack);
   wireMixerUI(rack);
+  wireUndoUI();
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -18292,6 +18391,34 @@ function wireTransportUI() {
   }, 120);
 
   lcdBpm.textContent = transport.bpm.toFixed(1);
+}
+
+/* ---------- Undo-Toast ---------- */
+/** Zeigt nach jeder destruktiven Aktion (Maschine entfernt, Pattern
+ *  geleert, …) kurz einen Toast mit Rückgängig-Button — behebt versehent-
+ *  liche Löschungen, ohne für jede Aktion eine Rückfrage einzubauen. */
+function wireUndoUI() {
+  let toastEl = null;
+  let hideTimer = null;
+
+  const hide = () => {
+    clearTimeout(hideTimer);
+    toastEl?.remove();
+    toastEl = null;
+  };
+
+  undo.onChange((entry) => {
+    hide();
+    if (!entry) return;
+    const el = document.createElement('div');
+    el.className = 'undo-toast';
+    el.innerHTML = `<span>${entry.label}</span>
+      <button type="button" class="undo-toast__btn" data-undo>Undo</button>`;
+    el.querySelector('[data-undo]').addEventListener('click', () => undo.trigger());
+    document.body.appendChild(el);
+    toastEl = el;
+    hideTimer = setTimeout(hide, 8000);
+  });
 }
 
 })();

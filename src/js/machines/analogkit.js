@@ -202,9 +202,6 @@ const TRACK_DEFS = [
 /** Leeres Pattern-Slot: 11 Spuren × 16 leere Steps. */
 const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
 
-// Start-Groove: klassischer 909-Vierviertel-Groove
-const SEED = { BD: [0, 4, 8, 12], SD: [4, 12], CH: [0, 2, 4, 6, 8, 10, 12, 14], OH: [7, 15] };
-
 export class AnalogKit extends Machine {
   getParamForKnob(key) {
     return key === 'volume' ? this.volume : super.getParamForKnob(key);
@@ -244,12 +241,9 @@ export class AnalogKit extends Machine {
       };
     });
 
-    // 4 Pattern-Slots (A/B/C/D), je 11 Step-Spuren. A trägt den Start-Groove.
+    // 4 leere Pattern-Slots (A/B/C/D), je 11 Step-Spuren — neu hinzugefügte
+    // Maschinen starten ohne vorprogrammierte Steps.
     this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
-    for (const [name, steps] of Object.entries(SEED)) {
-      const ti = this.tracks.findIndex((t) => t.name === name);
-      for (const s of steps) this.patterns[0][ti][s].on = true;
-    }
     this.patternIndex = 0;
     this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
   }
