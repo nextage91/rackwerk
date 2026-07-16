@@ -38,8 +38,8 @@ button {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: calc(8px + var(--safe-top)) 12px 8px;
+  gap: 8px;
+  padding: calc(8px + var(--safe-top)) 10px 8px;
   background: linear-gradient(#322c23, #211c15);
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light) inset;
@@ -61,24 +61,26 @@ button {
 
 /* LCD-Anzeige */
 .transport__lcd {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-width: 0;                     /* darf schrumpfen — sonst schiebt die
+                                       LCD-Zeile den Play-Button vom Schirm */
   display: flex;
-  align-items: baseline;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   background: var(--lcd-bg);
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   min-height: var(--tap-min);
   align-items: center;
+  overflow: hidden;
   font-family: var(--font-lcd);
   color: var(--lcd-ink);
   text-shadow: 0 0 8px var(--lcd-glow);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset, 0 1px 0 var(--edge-light);
 }
-.lcd__bpm   { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lcd__bpm   { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lcd__label { font-size: 10px; opacity: .7; letter-spacing: .12em; }
-.lcd__pos   { font-size: 14px; opacity: .85; font-variant-numeric: tabular-nums; margin-left: auto; }
+.lcd__pos   { font-size: 14px; opacity: .85; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; }
 
 /* Transport-Buttons */
 .transport__controls { display: flex; gap: 8px; }
@@ -213,6 +215,20 @@ button {
 
 @media (max-width: 460px) {
   .brand__name { display: none; }  /* schmale Phones: nur das Logo-Zeichen */
+}
+/* Sehr schmale Phones: Platz fürs LCD schaffen, damit die Transport-
+   Leiste nie überläuft. Erst das dekorative Logo, dann BPM-Label/Position
+   opfern — die BPM-Zahl und alle Buttons bleiben immer erhalten. */
+@media (max-width: 400px) {
+  .transport__brand { display: none; }
+  .transport { gap: 7px; }
+}
+@media (max-width: 344px) {
+  /* Uralt-Phones (iPhone SE1, 320px): nur BPM-Zahl + Buttons, alles passt */
+  .lcd__label, .lcd__pos { display: none; }
+  .lcd__bpm { font-size: 13px; }
+  .transport__lcd { padding: 6px 6px; }
+  .transport { gap: 6px; padding-left: 8px; padding-right: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

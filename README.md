@@ -9,6 +9,7 @@ gebaut für spätere Verpackung mit Capacitor (iOS/Android).
 |---|---|
 | `index.html` | Gebündelte Einzeldatei — das, was GitHub Pages ausliefert. Wird generiert, nicht von Hand bearbeitet! |
 | `src/` | Das modulare Quellprojekt (ES-Module, CSS, Bundler). Hier wird entwickelt. |
+| `tools/` | Dev-Werkzeuge (nicht Teil der App), z. B. der Layout-Check. |
 
 ## Entwickeln & Deployen
 
@@ -27,3 +28,19 @@ gebaut für spätere Verpackung mit Capacitor (iOS/Android).
 **Wichtig:** Jedes neue JS-Modul und jeder neue Export muss in die `MODULES`-Liste
 in `src/build-preview.py` eingetragen werden (in Abhängigkeitsreihenfolge), sonst
 fehlt er im Bundle.
+
+## Layout-Check (nach jeder UI-Änderung)
+
+Die App ist Touch-first und wird nur auf dem iPhone genutzt. Nach **jeder**
+Änderung an Markup/CSS/Layout wird `tools/layout-check.mjs` ausgeführt: Es bootet
+das gebündelte `index.html` in Chromium über gängige iPhone-Breiten (320–430 px)
+und prüft, dass nichts horizontal aus dem Bild läuft und die Transport-Bedien-
+elemente (Play, PRJ, REC, BPM) immer komplett sichtbar sind.
+
+```bash
+python3 -m http.server 8901 &        # Server auf dem Repo-Root
+node tools/layout-check.mjs          # exit 0 = alles passt
+```
+
+(Braucht Playwright als Dev-Abhängigkeit — `npm i playwright`; die App selbst
+bleibt abhängigkeitsfrei.)
