@@ -17,6 +17,7 @@ import { transport } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
+import { song } from '../core/song.js';
 import { noise, env, autoStop } from '../core/dsp.js';
 
 /* ================= Drum-Synthese ================= */
@@ -196,20 +197,19 @@ export class BeatBox extends Machine {
     const slot = this.patterns[this.patternIndex];
     this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
   }
-  #switchPattern(i) {
+  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
+  setPatternIndex(i) {
     this.patternIndex = i;
     this.#bindSlot();
-    this.seq.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq.bars);
+    this.patternBank?.setActive(i);
+    this.seq?.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
   #copyPattern(i) {
     this.patterns[i] = this.patterns[this.patternIndex]
       .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
-    this.patternIndex = i;
-    this.patternBank?.setActive(i);
-    this.#bindSlot();
-    this.seq.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq.bars);
+    this.setPatternIndex(i);
+    song.recordPattern(this.id, i);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -348,7 +348,7 @@ export class BeatBox extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
-      onSwitch: (i) => this.#switchPattern(i),
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       onCopy: (i) => this.#copyPattern(i),
     });
     container.appendChild(this.patternBank.el);

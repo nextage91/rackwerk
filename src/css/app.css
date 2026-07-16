@@ -65,7 +65,9 @@ button {
   min-width: 0;                     /* darf schrumpfen — sonst schiebt die
                                        LCD-Zeile den Play-Button vom Schirm */
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;      /* BPM links verankern → nie links
+                                       abgeschnitten; enge Screens klippen
+                                       höchstens die Position rechts */
   gap: 6px;
   background: var(--lcd-bg);
   border-radius: 6px;
@@ -368,6 +370,59 @@ button {
   color: var(--led-play);
   box-shadow: 0 0 10px rgba(102,224,122,.4), var(--shadow-panel);
 }
+/* SNG-Button leuchtet rot & pulsiert, während der Song aufgenommen wird */
+.t-btn--prj.is-songrec {
+  color: var(--led-on);
+  box-shadow: 0 0 12px rgba(255,77,61,.6), var(--shadow-panel);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+/* SNG-Button grün, während der Song abspielt */
+.t-btn--prj.is-songplay {
+  color: var(--led-play);
+  box-shadow: 0 0 10px rgba(127,217,122,.5), var(--shadow-panel);
+}
+
+/* ===================== Song-Timeline ===================== */
+.song-timeline { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.song-lane { display: flex; align-items: center; gap: 8px; }
+.song-lane__name {
+  flex: 0 0 62px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-left: 3px solid var(--lane-color, var(--ink-faint));
+  padding-left: 6px;
+}
+.song-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 30px;
+  border-radius: 5px;
+  background: var(--bg-panel-deep);
+  box-shadow: 0 2px 5px rgba(0,0,0,.55) inset;
+  overflow: hidden;
+}
+.song-block {
+  position: absolute; top: 2px; bottom: 2px;
+  display: grid; place-items: center;
+  font-family: var(--font-lcd); font-size: 12px; font-weight: 700;
+  color: #16120d;
+  border-radius: 3px;
+  border-left: 1px solid rgba(0,0,0,.45);
+  overflow: hidden;
+}
+.song-ph {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--lcd-ink); box-shadow: 0 0 6px var(--lcd-glow);
+  pointer-events: none; opacity: 0;
+}
+.song-ph.is-on { opacity: .9; }
+.song-empty { color: var(--ink-dim); font-size: 13px; padding: 10px 0; }
+#btn-song-arm.is-active {
+  color: #fff; background: linear-gradient(#b33a3a, #7e2727);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+#btn-song-play.is-active { color: var(--led-play); }
 /* Beat-Puls auf dem PRJ-Button: Sync-Feedback auch bei geschlossenem Sheet */
 .t-btn--prj.is-linked.is-beat {
   box-shadow: 0 0 18px rgba(102,224,122,.95), var(--shadow-panel);

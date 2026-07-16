@@ -96,6 +96,14 @@ class Transport {
   /** Aktuelle Position im 1-Takt-Loop (0..1). */
   get phase() { return this.phaseOver(1); }
 
+  /** Aktueller absoluter Step (auf der Audio-Uhr, gerundet) — für die
+   *  Song-Aufnahme: „zu welchem Step wurde live etwas gedrückt". */
+  get currentStep() {
+    if (!this.isPlaying) return 0;
+    const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
+    return Math.max(0, Math.round(stepFloat));
+  }
+
   /** Position als "Takt.Viertel" fürs LCD (grob, UI-Zwecke). */
   get positionLabel() {
     const bar = Math.floor(this.#step / STEPS_PER_BAR) + 1;

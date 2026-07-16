@@ -23,6 +23,7 @@ import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
 import { automation } from '../core/automation.js';
+import { song } from '../core/song.js';
 
 /** Leeres 1-Takt-Pattern (16 Steps aus). */
 const emptyPattern = (len = 16) =>
@@ -61,20 +62,18 @@ export class PercSynth extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  #applyPattern() {
-    this.pattern = this.patterns[this.patternIndex];
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-  #switchPattern(i) {
+  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
+  setPatternIndex(i) {
     this.patternIndex = i;
-    this.#applyPattern();
+    this.pattern = this.patterns[i];
+    this.seq?.setPattern(this.pattern);
+    this.patternBank?.setActive(i);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
   #copyPattern(i) {
     this.patterns[i] = this.pattern.map((s) => ({ ...s }));
-    this.patternIndex = i;
-    this.patternBank?.setActive(i);
-    this.#applyPattern();
+    this.setPatternIndex(i);
+    song.recordPattern(this.id, i);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -189,7 +188,7 @@ export class PercSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
-      onSwitch: (i) => this.#switchPattern(i),
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       onCopy: (i) => this.#copyPattern(i),
     });
     container.appendChild(this.patternBank.el);

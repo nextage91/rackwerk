@@ -47,6 +47,20 @@ for (const width of WIDTHS) {
         out.clipped.push(`${s} [${Math.round(b.left)}..${Math.round(b.right)}]`);
       }
     }
+    // Elemente, die vollständig INNERHALB eines Containers liegen müssen
+    // (z. B. die BPM-Zahl im LCD — reicht nicht, dass die Breite passt,
+    //  sie darf auch nicht über die Ränder hinausragen).
+    const within = [['#lcd-bpm', '.transport__lcd']];
+    for (const [innerSel, outerSel] of within) {
+      const inner = document.querySelector(innerSel);
+      const outer = document.querySelector(outerSel);
+      if (!inner || !outer) continue;
+      const a = inner.getBoundingClientRect();
+      const o = outer.getBoundingClientRect();
+      if (a.left < o.left - 0.5 || a.right > o.right + 0.5) {
+        out.clipped.push(`${innerSel} ragt aus ${outerSel}`);
+      }
+    }
     return out;
   }, MUST_FIT);
 
