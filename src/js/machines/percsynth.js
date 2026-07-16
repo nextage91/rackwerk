@@ -20,8 +20,13 @@ import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { noise, autoStop, midiToHz } from '../core/dsp.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
+import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
 import { automation } from '../core/automation.js';
+
+/** Leeres 1-Takt-Pattern (16 Steps aus). */
+const emptyPattern = (len = 16) =>
+  Array.from({ length: len }, () => ({ on: false, midi: 76 }));
 
 export class PercSynth extends Machine {
   static meta = {
@@ -43,13 +48,33 @@ export class PercSynth extends Machine {
     };
     this.output.gain.value = this.params.volume;
 
-    /** 16-Step-Pattern wie in der SubSynth: {on, midi} pro Step */
-    this.pattern = Array.from({ length: 16 }, () => ({ on: false, midi: 76 }));
+    /** 4 Pattern-Slots (A/B/C/D). A trägt die Offbeat-Perc, B–D leer. */
+    const seedPat = emptyPattern();
     const seed = { 2: 79, 7: 72, 10: 84, 15: 76 }; // sparsame Offbeat-Perc
     for (const [step, midi] of Object.entries(seed)) {
-      this.pattern[step].on = true;
-      this.pattern[step].midi = midi;
+      seedPat[step].on = true;
+      seedPat[step].midi = midi;
     }
+    this.patterns = [seedPat, emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patternIndex = 0;
+    this.pattern = this.patterns[0];
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  #applyPattern() {
+    this.pattern = this.patterns[this.patternIndex];
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+  #switchPattern(i) {
+    this.patternIndex = i;
+    this.#applyPattern();
+  }
+  #copyPattern(i) {
+    this.patterns[i] = this.pattern.map((s) => ({ ...s }));
+    this.patternIndex = i;
+    this.patternBank?.setActive(i);
+    this.#applyPattern();
   }
 
   /* ---------- Sequenzer ---------- */
@@ -65,13 +90,23 @@ export class PercSynth extends Machine {
   serialize() {
     return {
       params: { ...this.params },
-      pattern: this.pattern.map((s) => ({ ...s })),
+      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
+      patternIndex: this.patternIndex,
     };
   }
 
   deserialize(state) {
     Object.assign(this.params, state.params);
-    this.pattern = state.pattern.map((s) => ({ ...s }));
+    if (state.patterns) {
+      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.pattern) {
+      const a = state.pattern.map((s) => ({ ...s }));
+      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
+    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
   }
 
@@ -152,6 +187,13 @@ export class PercSynth extends Machine {
     });
     container.appendChild(row);
 
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      onSwitch: (i) => this.#switchPattern(i),
+      onCopy: (i) => this.#copyPattern(i),
+    });
+    container.appendChild(this.patternBank.el);
+
     this.seq = new StepSeq(this.pattern, {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
@@ -160,6 +202,7 @@ export class PercSynth extends Machine {
       },
     });
     container.appendChild(this.seq.el);
+    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
     // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
     automation.setBars(this.id, this.seq.bars);
 
