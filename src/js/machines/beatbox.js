@@ -205,11 +205,8 @@ export class BeatBox extends Machine {
     this.seq?.setPattern(this.tracks[this.selected].steps);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
-  #copyPattern(i) {
-    this.patterns[i] = this.patterns[this.patternIndex]
-      .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
-    this.setPatternIndex(i);
-    song.recordPattern(this.id, i);
+  #cloneSlot(i) {
+    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
   }
 
   /* ---------- Sequenzer ---------- */
@@ -348,8 +345,13 @@ export class BeatBox extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
+      shape: 'drums',
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      onCopy: (i) => this.#copyPattern(i),
+      getSlot: (i) => this.#cloneSlot(i),
+      putSlot: (i, data) => {
+        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
+        this.setPatternIndex(i);
+      },
     });
     container.appendChild(this.patternBank.el);
 

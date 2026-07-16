@@ -68,11 +68,6 @@ export class SubSynth extends Machine {
     this.patternBank?.setActive(i);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
-  #copyPattern(i) {
-    this.patterns[i] = this.pattern.map((s) => ({ ...s })); // aktuelles → Slot i
-    this.setPatternIndex(i);
-    song.recordPattern(this.id, i);
-  }
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
@@ -257,8 +252,10 @@ export class SubSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
+      shape: 'notes',
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      onCopy: (i) => this.#copyPattern(i),
+      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
+      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
     });
     container.appendChild(this.patternBank.el);
 
