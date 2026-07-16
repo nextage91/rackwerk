@@ -77,6 +77,7 @@
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
         <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
+        <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -161,6 +162,16 @@
         <button class="m-btn" id="btn-song-clear">Leeren</button>
       </div>
       <div class="song-timeline" id="song-timeline"></div>
+    </div>
+  </div>
+
+  <!-- ===== Mixer (Bottom Sheet) ===== -->
+  <div class="sheet" id="mixer-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Mixer">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Mixer</h2>
+      <div class="mixer-list" id="mixer-list"></div>
     </div>
   </div>
 

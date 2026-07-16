@@ -45,10 +45,16 @@ export class Machine {
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();
+    /** @type {StereoPannerNode} Panorama — sitzt direkt hinterm Fader, wie
+     *  am echten Kanalzug. Die Sends (Delay/Reverb) hängen hinter dem Gate,
+     *  tragen die Stereo-Position also mit. */
+    this.pan = 0;
+    this.panner = engine.ctx.createStereoPanner();
     /** @type {GainNode} Mute/Solo-Gate — getrennt vom Volume, damit
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
-    this.output.connect(this.gate);
+    this.output.connect(this.panner);
+    this.panner.connect(this.gate);
     this.gate.connect(engine.masterBus);
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
@@ -83,6 +89,30 @@ export class Machine {
     if (key === 'sendDelay') return this.sends.delay;
     if (key === 'sendReverb') return this.sends.reverb;
     return this.params?.[key];
+  }
+
+  /* ---------- Mixer: Pegel & Panorama ---------- */
+
+  /**
+   * Pegel (0..1) — Basis liest/schreibt `this.params.volume`, passend für
+   * SubSynth/PercSynth. BeatBox überschreibt (führt die Lautstärke separat
+   * als `this.volume`). Sowohl der eigene Volume-Knob im Maschinen-Body als
+   * auch der Mixer greifen auf DIESELBE Methode zu — eine Quelle der
+   * Wahrheit, kein zweiter, widersprüchlicher Pegel-Regler.
+   */
+  get level() { return this.params?.volume ?? 1; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    if (this.params) this.params.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
+  }
+
+  /** Panorama (-1..1). Neu, ohne Legacy-Regler — nur der Mixer zeigt ihn. */
+  setPan(v) {
+    this.pan = Math.min(1, Math.max(-1, v));
+    this.panner.pan.setTargetAtTime(this.pan, engine.now, 0.01);
   }
 
   /* ---------- Master-FX-Sends ---------- */
@@ -132,15 +162,10 @@ export class Machine {
       <div class="machine__body"></div>
     `;
 
-    el.querySelector('[data-mute]').addEventListener('click', (e) => {
-      this.setMuted(!this.muted);
-      e.currentTarget.classList.toggle('is-active', this.muted);
-    });
-
-    el.querySelector('[data-solo]').addEventListener('click', (e) => {
-      this.setSoloed(!this.soloed);
-      e.currentTarget.classList.toggle('is-active', this.soloed);
-    });
+    this.headMuteBtn = el.querySelector('[data-mute]');
+    this.headSoloBtn = el.querySelector('[data-solo]');
+    this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
+    this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
     el.querySelector('[data-remove]').addEventListener('click', () => {
       this.dispose();
@@ -231,11 +256,15 @@ export class Machine {
 
   setMuted(muted) {
     this.muted = muted;
+    this.headMuteBtn?.classList.toggle('is-active', muted);
+    this.onMixerChange?.(); // Mixer-Sheet hält seine Buttons synchron, falls offen
     refreshGates();
   }
 
   setSoloed(soloed) {
     this.soloed = soloed;
+    this.headSoloBtn?.classList.toggle('is-active', soloed);
+    this.onMixerChange?.();
     refreshGates();
   }
 
@@ -251,6 +280,7 @@ export class Machine {
     this.gate.gain.setTargetAtTime(0, t, 0.02);
     setTimeout(() => {
       this.output.disconnect();
+      this.panner.disconnect();
       this.gate.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();

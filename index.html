@@ -505,6 +505,93 @@ button {
 }
 .song-ph.is-on { opacity: .9; }
 .song-empty { color: var(--ink-dim); font-size: 13px; padding: 10px 0; }
+
+/* ===================== Mixer ===================== */
+.mixer-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mixer-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+}
+.mixer-strip__head {
+  flex: 0 0 92px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mixer-strip__stripe {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 6px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.mixer-strip__name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mixer-strip__knobs {
+  --knob-size: 48px;   /* kompakter als die 64px-Standardknobs — mehrere
+                          Kanalzuege muessen nebeneinander aufs Phone passen */
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.mixer-strip__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: auto;
+}
+.mixer-strip__buttons .m-btn {
+  min-width: 52px;
+  min-height: 40px;
+  font-size: 10px;
+  padding: 0 6px;
+}
+
+/* Gruppe (z. B. BeatBox): der Kanalzug oben führt den ganzen Kit-Bus,
+   darunter die einzelnen Drum-Spuren mit eigenem Level/Pan. */
+.mixer-group {
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+.mixer-group .mixer-strip { background: none; box-shadow: none; }
+.mixer-subtracks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 8px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.mixer-substrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 4px 12px;   /* Einrückung zeigt die Zugehörigkeit zur Gruppe */
+  border-left: 2px solid var(--m-color-dim, rgba(255,140,66,.3));
+}
+.mixer-substrip__name {
+  flex: 0 0 52px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mixer-substrip .mixer-strip__knobs { --knob-size: 40px; gap: 0; }
 #btn-song-arm.is-active {
   color: #fff; background: linear-gradient(#b33a3a, #7e2727);
   animation: rec-pulse 1.2s ease-in-out infinite;
@@ -1118,6 +1205,7 @@ x-knob.has-auto .knob__dial::after {
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ Neue Session</button>
         <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song-Timeline</button>
+        <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -1202,6 +1290,16 @@ x-knob.has-auto .knob__dial::after {
         <button class="m-btn" id="btn-song-clear">Leeren</button>
       </div>
       <div class="song-timeline" id="song-timeline"></div>
+    </div>
+  </div>
+
+  <!-- ===== Mixer (Bottom Sheet) ===== -->
+  <div class="sheet" id="mixer-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Mixer">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Mixer</h2>
+      <div class="mixer-list" id="mixer-list"></div>
     </div>
   </div>
 
@@ -14440,10 +14538,16 @@ class Machine {
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();
+    /** @type {StereoPannerNode} Panorama — sitzt direkt hinterm Fader, wie
+     *  am echten Kanalzug. Die Sends (Delay/Reverb) hängen hinter dem Gate,
+     *  tragen die Stereo-Position also mit. */
+    this.pan = 0;
+    this.panner = engine.ctx.createStereoPanner();
     /** @type {GainNode} Mute/Solo-Gate — getrennt vom Volume, damit
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
-    this.output.connect(this.gate);
+    this.output.connect(this.panner);
+    this.panner.connect(this.gate);
     this.gate.connect(engine.masterBus);
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
@@ -14478,6 +14582,30 @@ class Machine {
     if (key === 'sendDelay') return this.sends.delay;
     if (key === 'sendReverb') return this.sends.reverb;
     return this.params?.[key];
+  }
+
+  /* ---------- Mixer: Pegel & Panorama ---------- */
+
+  /**
+   * Pegel (0..1) — Basis liest/schreibt `this.params.volume`, passend für
+   * SubSynth/PercSynth. BeatBox überschreibt (führt die Lautstärke separat
+   * als `this.volume`). Sowohl der eigene Volume-Knob im Maschinen-Body als
+   * auch der Mixer greifen auf DIESELBE Methode zu — eine Quelle der
+   * Wahrheit, kein zweiter, widersprüchlicher Pegel-Regler.
+   */
+  get level() { return this.params?.volume ?? 1; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    if (this.params) this.params.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
+  }
+
+  /** Panorama (-1..1). Neu, ohne Legacy-Regler — nur der Mixer zeigt ihn. */
+  setPan(v) {
+    this.pan = Math.min(1, Math.max(-1, v));
+    this.panner.pan.setTargetAtTime(this.pan, engine.now, 0.01);
   }
 
   /* ---------- Master-FX-Sends ---------- */
@@ -14527,15 +14655,10 @@ class Machine {
       <div class="machine__body"></div>
     `;
 
-    el.querySelector('[data-mute]').addEventListener('click', (e) => {
-      this.setMuted(!this.muted);
-      e.currentTarget.classList.toggle('is-active', this.muted);
-    });
-
-    el.querySelector('[data-solo]').addEventListener('click', (e) => {
-      this.setSoloed(!this.soloed);
-      e.currentTarget.classList.toggle('is-active', this.soloed);
-    });
+    this.headMuteBtn = el.querySelector('[data-mute]');
+    this.headSoloBtn = el.querySelector('[data-solo]');
+    this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
+    this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
     el.querySelector('[data-remove]').addEventListener('click', () => {
       this.dispose();
@@ -14626,11 +14749,15 @@ class Machine {
 
   setMuted(muted) {
     this.muted = muted;
+    this.headMuteBtn?.classList.toggle('is-active', muted);
+    this.onMixerChange?.(); // Mixer-Sheet hält seine Buttons synchron, falls offen
     refreshGates();
   }
 
   setSoloed(soloed) {
     this.soloed = soloed;
+    this.headSoloBtn?.classList.toggle('is-active', soloed);
+    this.onMixerChange?.();
     refreshGates();
   }
 
@@ -14646,6 +14773,7 @@ class Machine {
     this.gate.gain.setTargetAtTime(0, t, 0.02);
     setTimeout(() => {
       this.output.disconnect();
+      this.panner.disconnect();
       this.gate.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
@@ -14749,6 +14877,7 @@ class SubSynth extends Machine {
       params: { ...this.params },
       patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -14766,6 +14895,7 @@ class SubSynth extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptyPattern());
     this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
   }
 
   onTransport(event) {
@@ -14915,7 +15045,7 @@ class SubSynth extends Machine {
       } else if (key === 'resonance') {
         for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
       } else if (key === 'volume') {
-        this.output.gain.setTargetAtTime(val, t, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
     });
     container.appendChild(row);
@@ -15123,8 +15253,16 @@ class BeatBox extends Machine {
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
 
-    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig)
-    this.tracks = TRACK_DEFS.map((def) => ({ ...def, tune: 1, decay: 1, level: 0.9 }));
+    // Spuren tragen die Klang-Parameter (nicht pattern-abhängig). Jede Spur
+    // bekommt eine eigene StereoPannerNode — anders als bei Level (steckt
+    // als Multiplikator in der Hüllkurve, siehe Drum-Synthese oben) gibt es
+    // für Panorama keine "Stelle im Code", an der man ansetzen könnte, ohne
+    // echte Audio-Nodes: jeder Trigger muss durch die Spur-eigene Node.
+    this.tracks = TRACK_DEFS.map((def) => {
+      const panner = engine.ctx.createStereoPanner();
+      panner.connect(this.output);
+      return { ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner };
+    });
 
     // 4 Pattern-Slots (A/B/C/D), je 8 Step-Spuren. A trägt den Start-Groove,
     // B–D starten leer. Die Spuren zeigen per steps-Referenz aufs aktive Slot.
@@ -15175,11 +15313,12 @@ class BeatBox extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
       })),
       // 4 Pattern-Slots (nur Steps)
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -15193,6 +15332,7 @@ class BeatBox extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
+      this.setTrackPan(i, saved.pan ?? 0);
     });
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
@@ -15206,17 +15346,50 @@ class BeatBox extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptySlot());
     this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
     this.#bindSlot();
+    this.setPan(state.pan ?? 0);
+  }
+
+  /* ---------- Mixer: Pegel (BeatBox führt volume separat, nicht in params) ---------- */
+  get level() { return this.volume; }
+  setLevel(v) {
+    v = Math.min(1, Math.max(0, v));
+    this.volume = v;
+    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
+    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
+    if (knob) knob.value = v;
   }
 
   onTransport(event) {
     if (event === 'stop') this.seq?.clearPlayhead();
   }
 
+  /** Basisklasse kennt die Spur-Panner nicht — selbst aufräumen. */
+  disposeAudio() {
+    for (const tr of this.tracks) tr.panner.disconnect();
+  }
+
   #trigger(tr, time) {
     this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
-    // identisch im Audio-Block positioniert (siehe engine.quantizeTime)
-    tr.synth(engine.ctx, engine.quantizeTime(time), this.output, tr);
+    // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
+    // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
+    // damit jede Drum-Spur ihre eigene Stereo-Position hat.
+    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, tr);
+  }
+
+  /* ---------- Mixer: Pegel & Panorama pro Spur ---------- */
+  /** Hält den Panel-Level-Knob synchron, falls diese Spur gerade angezeigt wird. */
+  setTrackLevel(i, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    tr.level = Math.min(1, Math.max(0, v));
+    if (i === this.selected) this.knobs.level.value = tr.level;
+  }
+  setTrackPan(i, v) {
+    const tr = this.tracks[i];
+    if (!tr) return;
+    tr.pan = Math.min(1, Math.max(-1, v));
+    tr.panner.pan.setTargetAtTime(tr.pan, engine.now, 0.01);
   }
 
   /* ---------- UI ---------- */
@@ -15236,8 +15409,7 @@ class BeatBox extends Machine {
       if (!key) return;
       const val = e.detail.value;
       if (key === 'volume') {
-        this.volume = val;
-        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       } else {
         this.tracks[this.selected][key] = val;
       }
@@ -15446,6 +15618,7 @@ class PercSynth extends Machine {
       params: { ...this.params },
       patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -15462,6 +15635,7 @@ class PercSynth extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptyPattern());
     this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
   }
 
   onTransport(event) {
@@ -15536,7 +15710,7 @@ class PercSynth extends Machine {
       const val = e.detail.value;
       this.params[key] = val;
       if (key === 'volume') {
-        this.output.gain.setTargetAtTime(val, engine.now, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
     });
     container.appendChild(row);
@@ -15824,6 +15998,7 @@ function boot() {
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
   wireSongUI(rack);
+  wireMixerUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -16459,6 +16634,102 @@ function wireSongUI(rack) {
   });
 
   $('#btn-song-clear').addEventListener('click', () => song.clear());
+}
+
+/* ---------- Mixer: Pegel/Panorama/Mute/Solo aller Maschinen im Überblick ----------
+ * Steuert dieselben Werte, die auch die Maschinen-Panels selbst zeigen (eine
+ * Quelle der Wahrheit über Machine.setLevel/setPan/setMuted/setSoloed) — der
+ * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel. */
+function wireMixerUI(rack) {
+  const sheet = $('#mixer-sheet');
+  const list = $('#mixer-list');
+
+  /** Ein Kanalzug (Level/Pan/Mute/Solo) für eine Maschine ODER eine
+   *  einzelne Drum-Spur — beide teilen sich dieselben Setter-Namen
+   *  (setLevel/setPan/level/pan), nur Mute/Solo gibt es nur maschinenweit. */
+  const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
+    const strip = document.createElement('div');
+    strip.className = 'mixer-strip' + (compact ? ' mixer-substrip' : '');
+    const head = compact
+      ? `<span class="mixer-substrip__name">${name}</span>`
+      : `<div class="mixer-strip__head">
+           <span class="mixer-strip__stripe"></span>
+           <span class="mixer-strip__name">${name}</span>
+         </div>`;
+    strip.innerHTML = `
+      ${head}
+      <div class="mixer-strip__knobs">
+        <x-knob label="Level" min="0" max="1" value="${target.level}" data-k="level"></x-knob>
+        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      </div>
+      ${withButtons ? `
+      <div class="mixer-strip__buttons">
+        <button class="m-btn m-btn--solo${target.soloed ? ' is-active' : ''}" data-solo>SOLO</button>
+        <button class="m-btn m-btn--mute${target.muted ? ' is-active' : ''}" data-mute>MUTE</button>
+      </div>` : ''}
+    `;
+    strip.querySelector('[data-k="level"]').addEventListener('input', (e) => target.setLevel(e.detail.value));
+    strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => target.setPan(e.detail.value));
+    if (withButtons) {
+      const muteBtn = strip.querySelector('[data-mute]');
+      const soloBtn = strip.querySelector('[data-solo]');
+      muteBtn.addEventListener('click', () => target.setMuted(!target.muted));
+      soloBtn.addEventListener('click', () => target.setSoloed(!target.soloed));
+      // Header-Buttons der Maschine bleiben die Referenz — hält den Mixer
+      // synchron, falls der Zustand von dort (oder programmatisch) ändert
+      target.onMixerChange = () => {
+        muteBtn.classList.toggle('is-active', target.muted);
+        soloBtn.classList.toggle('is-active', target.soloed);
+      };
+    }
+    return strip;
+  };
+
+  const render = () => {
+    list.innerHTML = '';
+    if (!rack.machines.length) {
+      list.innerHTML = '<p class="sheet__empty">Keine Maschinen im Rack.</p>';
+      return;
+    }
+    for (const m of rack.machines) {
+      const { name, color, type } = m.constructor.meta;
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+
+      if (type === 'beatbox') {
+        // Gruppe: Gesamt-Kanalzug (Kit-Bus) + eine Zeile je Drum-Spur
+        const group = document.createElement('div');
+        group.className = 'mixer-group';
+        group.style.setProperty('--m-color', color);
+        group.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.3)`);
+        group.appendChild(buildStrip(m, { name }));
+
+        const subtracks = document.createElement('div');
+        subtracks.className = 'mixer-subtracks';
+        m.tracks.forEach((tr, i) => {
+          const sub = buildStrip(
+            { level: tr.level, pan: tr.pan,
+              setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v) },
+            { name: tr.name, withButtons: false, compact: true },
+          );
+          subtracks.appendChild(sub);
+        });
+        group.appendChild(subtracks);
+        list.appendChild(group);
+        continue;
+      }
+
+      const strip = buildStrip(m, { name });
+      strip.style.setProperty('--m-color', color);
+      list.appendChild(strip);
+    }
+  };
+
+  $('#btn-open-mixer').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    render();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

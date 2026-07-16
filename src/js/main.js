@@ -74,6 +74,7 @@ function boot() {
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
   wireSongUI(rack);
+  wireMixerUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -709,6 +710,102 @@ function wireSongUI(rack) {
   });
 
   $('#btn-song-clear').addEventListener('click', () => song.clear());
+}
+
+/* ---------- Mixer: Pegel/Panorama/Mute/Solo aller Maschinen im Überblick ----------
+ * Steuert dieselben Werte, die auch die Maschinen-Panels selbst zeigen (eine
+ * Quelle der Wahrheit über Machine.setLevel/setPan/setMuted/setSoloed) — der
+ * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel. */
+function wireMixerUI(rack) {
+  const sheet = $('#mixer-sheet');
+  const list = $('#mixer-list');
+
+  /** Ein Kanalzug (Level/Pan/Mute/Solo) für eine Maschine ODER eine
+   *  einzelne Drum-Spur — beide teilen sich dieselben Setter-Namen
+   *  (setLevel/setPan/level/pan), nur Mute/Solo gibt es nur maschinenweit. */
+  const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
+    const strip = document.createElement('div');
+    strip.className = 'mixer-strip' + (compact ? ' mixer-substrip' : '');
+    const head = compact
+      ? `<span class="mixer-substrip__name">${name}</span>`
+      : `<div class="mixer-strip__head">
+           <span class="mixer-strip__stripe"></span>
+           <span class="mixer-strip__name">${name}</span>
+         </div>`;
+    strip.innerHTML = `
+      ${head}
+      <div class="mixer-strip__knobs">
+        <x-knob label="Level" min="0" max="1" value="${target.level}" data-k="level"></x-knob>
+        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
+      </div>
+      ${withButtons ? `
+      <div class="mixer-strip__buttons">
+        <button class="m-btn m-btn--solo${target.soloed ? ' is-active' : ''}" data-solo>SOLO</button>
+        <button class="m-btn m-btn--mute${target.muted ? ' is-active' : ''}" data-mute>MUTE</button>
+      </div>` : ''}
+    `;
+    strip.querySelector('[data-k="level"]').addEventListener('input', (e) => target.setLevel(e.detail.value));
+    strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => target.setPan(e.detail.value));
+    if (withButtons) {
+      const muteBtn = strip.querySelector('[data-mute]');
+      const soloBtn = strip.querySelector('[data-solo]');
+      muteBtn.addEventListener('click', () => target.setMuted(!target.muted));
+      soloBtn.addEventListener('click', () => target.setSoloed(!target.soloed));
+      // Header-Buttons der Maschine bleiben die Referenz — hält den Mixer
+      // synchron, falls der Zustand von dort (oder programmatisch) ändert
+      target.onMixerChange = () => {
+        muteBtn.classList.toggle('is-active', target.muted);
+        soloBtn.classList.toggle('is-active', target.soloed);
+      };
+    }
+    return strip;
+  };
+
+  const render = () => {
+    list.innerHTML = '';
+    if (!rack.machines.length) {
+      list.innerHTML = '<p class="sheet__empty">Keine Maschinen im Rack.</p>';
+      return;
+    }
+    for (const m of rack.machines) {
+      const { name, color, type } = m.constructor.meta;
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+
+      if (type === 'beatbox') {
+        // Gruppe: Gesamt-Kanalzug (Kit-Bus) + eine Zeile je Drum-Spur
+        const group = document.createElement('div');
+        group.className = 'mixer-group';
+        group.style.setProperty('--m-color', color);
+        group.style.setProperty('--m-color-dim', `rgba(${r},${g},${b},.3)`);
+        group.appendChild(buildStrip(m, { name }));
+
+        const subtracks = document.createElement('div');
+        subtracks.className = 'mixer-subtracks';
+        m.tracks.forEach((tr, i) => {
+          const sub = buildStrip(
+            { level: tr.level, pan: tr.pan,
+              setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v) },
+            { name: tr.name, withButtons: false, compact: true },
+          );
+          subtracks.appendChild(sub);
+        });
+        group.appendChild(subtracks);
+        list.appendChild(group);
+        continue;
+      }
+
+      const strip = buildStrip(m, { name });
+      strip.style.setProperty('--m-color', color);
+      list.appendChild(strip);
+    }
+  };
+
+  $('#btn-open-mixer').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    render();
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
 }
 
 /* ---------- 3) Transport-Leiste ---------- */

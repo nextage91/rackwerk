@@ -97,6 +97,7 @@ export class SubSynth extends Machine {
       params: { ...this.params },
       patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
       patternIndex: this.patternIndex,
+      pan: this.pan,
     };
   }
 
@@ -114,6 +115,7 @@ export class SubSynth extends Machine {
     while (this.patterns.length < 4) this.patterns.push(emptyPattern());
     this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
     this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
   }
 
   onTransport(event) {
@@ -263,7 +265,7 @@ export class SubSynth extends Machine {
       } else if (key === 'resonance') {
         for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
       } else if (key === 'volume') {
-        this.output.gain.setTargetAtTime(val, t, 0.01);
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
     });
     container.appendChild(row);
