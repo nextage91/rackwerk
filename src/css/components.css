@@ -255,6 +255,27 @@ x-knob {
   background: var(--m-color-dim, rgba(255,184,77,.3));
 }
 
+/* Kontext-Chip: Kopieren/Einfügen (Langdruck auf A/B/C/D) */
+.pat-chip {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  animation: chip-in .15s ease-out;
+}
+.pat-chip__btn {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+}
+.pat-chip__btn:active { transform: translateY(1px); }
+
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
 

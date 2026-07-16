@@ -793,6 +793,27 @@ x-knob {
   background: var(--m-color-dim, rgba(255,184,77,.3));
 }
 
+/* Kontext-Chip: Kopieren/Einfügen (Langdruck auf A/B/C/D) */
+.pat-chip {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  animation: chip-in .15s ease-out;
+}
+.pat-chip__btn {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+}
+.pat-chip__btn:active { transform: translateY(1px); }
+
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
 
@@ -12576,36 +12597,90 @@ const { createPatternBank } = (() => {
  * pattern-bank — A/B/C/D-Umschalter über dem Step-Sequenzer.
  *
  * Tippen  = Pattern wählen.
- * Halten  = aktuelles Pattern in diesen Slot kopieren (und dorthin wechseln)
- *           — der schnelle Weg, aus einem Groove Variationen zu bauen.
+ * Halten  = Kontext-Chip öffnen (wie beim Löschen von Automationen):
+ *           „⧉ Kopieren" legt das Pattern in die Zwischenablage; hältst du
+ *           danach ein anderes Pattern, erscheint zusätzlich „⇩ Einfügen"
+ *           und überschreibt es. So baust du Varianten (auch zwischen
+ *           gleichartigen Maschinen — Noten-Patterns bzw. Drum-Patterns).
  *
- * Die Bank ist reine UI; die Datenhaltung (4 Pattern-Slots) und das
- * eigentliche Umschalten/Kopieren macht die Maschine über die Callbacks.
+ * Die Bank ist reine UI; Datenhaltung/Umschalten macht die Maschine über
+ * die Callbacks (onSwitch, getSlot, putSlot). `shape` trennt inkompatible
+ * Ablagen (Noten vs. Drums).
  */
 const LETTERS = ['A', 'B', 'C', 'D'];
 const HOLD_MS = 500;
 
-function createPatternBank({ index = 0, onSwitch, onCopy } = {}) {
+/** Geteilte Pattern-Zwischenablage (maschinenübergreifend, shape-getrennt). */
+const clipboard = { shape: null, data: null };
+
+function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}) {
   const el = document.createElement('div');
   el.className = 'patbank';
   el.innerHTML = '<span class="patbank__label">Pattern</span>';
+
+  let chip = null;
+  const dismiss = () => {
+    chip?.remove();
+    chip = null;
+    document.removeEventListener('pointerdown', onOutside, true);
+  };
+  const onOutside = (e) => { if (chip && !chip.contains(e.target)) dismiss(); };
+
+  const openMenu = (i, btn) => {
+    dismiss();
+    chip = document.createElement('div');
+    chip.className = 'pat-chip';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'pat-chip__btn';
+    copyBtn.textContent = '⧉ Kopieren';
+    copyBtn.addEventListener('click', () => {
+      clipboard.shape = shape;
+      clipboard.data = getSlot(i);
+      flash(btns[i]);
+      dismiss();
+    });
+    chip.appendChild(copyBtn);
+
+    if (clipboard.data && clipboard.shape === shape) {
+      const pasteBtn = document.createElement('button');
+      pasteBtn.className = 'pat-chip__btn';
+      pasteBtn.textContent = '⇩ Einfügen';
+      pasteBtn.addEventListener('click', () => {
+        putSlot(i, clipboard.data);
+        setActive(i);
+        flash(btns[i]);
+        dismiss();
+      });
+      chip.appendChild(pasteBtn);
+    }
+
+    document.body.appendChild(chip);
+    // über dem Button platzieren, am Bildschirmrand einklemmen
+    const r = btn.getBoundingClientRect();
+    const left = Math.max(8, Math.min(
+      window.innerWidth - chip.offsetWidth - 8,
+      r.left + r.width / 2 - chip.offsetWidth / 2,
+    ));
+    chip.style.left = `${left}px`;
+    chip.style.top = `${Math.max(8, r.top - chip.offsetHeight - 8)}px`;
+    setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+    clearTimeout(chip.dismissTimer);
+    chip.dismissTimer = setTimeout(dismiss, 4000);
+  };
 
   const btns = LETTERS.map((letter, i) => {
     const b = document.createElement('button');
     b.className = 'patbank__btn' + (i === index ? ' is-active' : '');
     b.textContent = letter;
-    b.setAttribute('aria-label', `Pattern ${letter} (halten: aktuelles hierher kopieren)`);
+    b.setAttribute('aria-label', `Pattern ${letter} (halten: kopieren/einfügen)`);
 
     let holdTimer = null;
     let held = false;
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       held = false;
-      holdTimer = setTimeout(() => {
-        held = true;
-        onCopy?.(i);
-        flash(b);
-      }, HOLD_MS);
+      holdTimer = setTimeout(() => { held = true; openMenu(i, b); }, HOLD_MS);
     });
     const cancel = () => clearTimeout(holdTimer);
     b.addEventListener('pointerup', () => {
@@ -14604,11 +14679,6 @@ class SubSynth extends Machine {
     this.patternBank?.setActive(i);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
-  #copyPattern(i) {
-    this.patterns[i] = this.pattern.map((s) => ({ ...s })); // aktuelles → Slot i
-    this.setPatternIndex(i);
-    song.recordPattern(this.id, i);
-  }
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
@@ -14793,8 +14863,10 @@ class SubSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
+      shape: 'notes',
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      onCopy: (i) => this.#copyPattern(i),
+      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
+      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
     });
     container.appendChild(this.patternBank.el);
 
@@ -15022,11 +15094,8 @@ class BeatBox extends Machine {
     this.seq?.setPattern(this.tracks[this.selected].steps);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
-  #copyPattern(i) {
-    this.patterns[i] = this.patterns[this.patternIndex]
-      .map((steps) => steps.map((s) => ({ on: s.on })));   // aktuelles → Slot i
-    this.setPatternIndex(i);
-    song.recordPattern(this.id, i);
+  #cloneSlot(i) {
+    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
   }
 
   /* ---------- Sequenzer ---------- */
@@ -15165,8 +15234,13 @@ class BeatBox extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
+      shape: 'drums',
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      onCopy: (i) => this.#copyPattern(i),
+      getSlot: (i) => this.#cloneSlot(i),
+      putSlot: (i, data) => {
+        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
+        this.setPatternIndex(i);
+      },
     });
     container.appendChild(this.patternBank.el);
 
@@ -15294,11 +15368,6 @@ class PercSynth extends Machine {
     this.patternBank?.setActive(i);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
-  #copyPattern(i) {
-    this.patterns[i] = this.pattern.map((s) => ({ ...s }));
-    this.setPatternIndex(i);
-    song.recordPattern(this.id, i);
-  }
 
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
@@ -15412,8 +15481,10 @@ class PercSynth extends Machine {
 
     this.patternBank = createPatternBank({
       index: this.patternIndex,
+      shape: 'notes',
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      onCopy: (i) => this.#copyPattern(i),
+      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
+      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
     });
     container.appendChild(this.patternBank.el);
 
