@@ -72,9 +72,6 @@ class Transport {
    */
   #schedule() {
     while (this.#nextStepTime < engine.now + SCHEDULE_AHEAD) {
-      // Taktanfang auf der Audio-Uhr mitführen → Basis für get phase()
-      this.#loopStart = this.#nextStepTime -
-        (this.#step % STEPS_PER_BAR) * this.stepDuration;
       for (const l of this.listeners) {
         l.onStep?.(this.#step, this.#nextStepTime);
       }
@@ -83,17 +80,21 @@ class Transport {
     }
   }
 
-  #loopStart = 0;
-
   /**
-   * Aktuelle Position im 1-Takt-Loop als 0..1 (auf der Audio-Uhr).
-   * Grundlage für Automation-Aufnahme und -Playback.
+   * Position 0..1 über einen Loop von `bars` Takten — Grundlage der
+   * Automation. Rechnet aus dem absoluten Step-Zähler auf der Audio-Uhr
+   * (konsistent auch nach einem Jam-Sync-Sprung, und für Lanes, die
+   * mehrere Takte lang sind).
    */
-  get phase() {
+  phaseOver(bars = 1) {
     if (!this.isPlaying) return 0;
-    const bar = this.stepDuration * STEPS_PER_BAR;
-    return (((engine.now - this.#loopStart) / bar) % 1 + 1) % 1;
+    const total = STEPS_PER_BAR * bars;
+    const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
+    return (((stepFloat % total) + total) % total) / total;
   }
+
+  /** Aktuelle Position im 1-Takt-Loop (0..1). */
+  get phase() { return this.phaseOver(1); }
 
   /** Position als "Takt.Viertel" fürs LCD (grob, UI-Zwecke). */
   get positionLabel() {

@@ -13,6 +13,7 @@ import { transport } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createKeybed } from '../ui/keybed.js';
 import { midiToHz } from '../core/dsp.js';
+import { automation } from '../core/automation.js';
 
 export class SubSynth extends Machine {
   static meta = {
@@ -221,9 +222,12 @@ export class SubSynth extends Machine {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);
+        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
+    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
+    automation.setBars(this.id, this.seq.bars);
 
     container.appendChild(createKeybed({
       onNoteOn: (midi) => this.noteOn(midi),

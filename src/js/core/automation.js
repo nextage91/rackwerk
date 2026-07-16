@@ -22,6 +22,18 @@ import { transport } from './transport.js';
 const RESOLUTION = 128;   // Slots pro Takt
 const TICK_MS = 22;       // ~45 Hz UI-/Playback-Rate
 
+/**
+ * Lane auf eine neue Länge bringen — spiegelt resizePattern der Steps:
+ * Verlängern kachelt den bestehenden Loop (der Automations-Verlauf
+ * wiederholt sich), Verkürzen schneidet hinten ab.
+ */
+function resizeLane(lane, newLen) {
+  if (lane.length === newLen) return lane;
+  const out = new Float32Array(newLen);
+  for (let i = 0; i < newLen; i++) out[i] = lane[i % lane.length];
+  return out;
+}
+
 class Automation {
   constructor() {
     this.armed = false;
@@ -31,6 +43,9 @@ class Automation {
     this.lanes = new Map();
     /** @type {Map<string,{lastIdx:number|null}>} aktuell angefasste Knobs */
     this.grabbed = new Map();
+    /** @type {Map<number,number>} machineId → Länge in Takten (Pattern-Länge).
+     *  Bestimmt, wie lang NEU aufgenommene Lanes werden. */
+    this.bars = new Map();
     this.timer = null;
 
     transport.addListener(this);
@@ -197,6 +212,30 @@ class Automation {
     if (!this.targets.has(key)) this.targets.set(key, { knob, apply });
   }
 
+  /**
+   * Die Pattern-Länge einer Maschine setzen. Neu aufgenommene Lanes
+   * werden dann so lang; bereits vorhandene Lanes der Maschine werden
+   * mitgezogen (kacheln beim Verlängern, abschneiden beim Verkürzen) —
+   * genau wie die Steps. Von den Maschinen bei Aufbau und bei jeder
+   * Längenänderung aufgerufen.
+   */
+  setBars(machineId, bars) {
+    bars = Math.max(1, Math.round(bars));
+    this.bars.set(machineId, bars);
+    const prefix = `${machineId}:`;
+    const newLen = RESOLUTION * bars;
+    for (const [key, lane] of this.lanes) {
+      if (key.startsWith(prefix) && lane.length !== newLen) {
+        this.lanes.set(key, resizeLane(lane, newLen));
+      }
+    }
+  }
+
+  /** Takt-Länge für einen Lane-Schlüssel (machineId steckt vorn). */
+  #barsFor(key) {
+    return this.bars.get(Number(key.split(':')[0])) ?? 1;
+  }
+
   /* ---------- Persistenz ---------- */
   /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
   exportLanes(machineId) {
@@ -223,6 +262,7 @@ class Automation {
 
   unregisterMachine(machineId) {
     this.#dismissChip();
+    this.bars.delete(machineId);
     const prefix = `${machineId}:`;
     for (const key of [...this.targets.keys()]) {
       if (key.startsWith(prefix)) {
@@ -249,21 +289,25 @@ class Automation {
     }
   }
 
-  #ensureLane(key, baseValue) {
+  #ensureLane(key, baseValue, bars) {
     let lane = this.lanes.get(key);
     if (!lane) {
-      lane = new Float32Array(RESOLUTION).fill(baseValue);
+      lane = new Float32Array(RESOLUTION * bars).fill(baseValue);
       this.lanes.set(key, lane);
       this.targets.get(key)?.knob.classList.add('has-auto');
     }
     return lane;
   }
 
-  #tick() {
-    const exact = transport.phase * RESOLUTION;
-    const idx = Math.floor(exact) % RESOLUTION;
+  /** Aktueller Slot-Index einer Lane über ihren eigenen Takt-Loop. */
+  #laneIndex(len) {
+    return Math.floor(transport.phaseOver(len / RESOLUTION) * len) % len;
+  }
 
+  #tick() {
     // ---- Aufnahme: alle angefassten Knobs bei scharfem REC ----
+    // Jede Lane läuft über ihre eigene Länge (Pattern-Takte der Maschine),
+    // deshalb wird der Index pro Lane einzeln bestimmt.
     if (this.armed) {
       for (const [key, state] of this.grabbed) {
         const target = this.targets.get(key);
@@ -275,29 +319,38 @@ class Automation {
         let lane = this.lanes.get(key);
         if (!lane) {
           if (state.startValue == null) state.startValue = value;
-          if (value === state.startValue) { state.lastIdx = idx; continue; }
-          lane = this.#ensureLane(key, state.startValue);
+          const bars = this.#barsFor(key);
+          if (value === state.startValue) {
+            state.lastIdx = this.#laneIndex(RESOLUTION * bars);
+            continue;
+          }
+          lane = this.#ensureLane(key, state.startValue, bars);
           this.#announce(target.knob);
         }
 
+        const len = lane.length;
+        const idx = this.#laneIndex(len);
         // vom letzten Schreibpunkt bis heute füllen (wrap-sicher)
-        let i = state.lastIdx == null ? idx : (state.lastIdx + 1) % RESOLUTION;
-        for (let n = 0; n < RESOLUTION; n++) {
+        let i = state.lastIdx == null ? idx : (state.lastIdx + 1) % len;
+        for (let n = 0; n < len; n++) {
           lane[i] = value;
           if (i === idx) break;
-          i = (i + 1) % RESOLUTION;
+          i = (i + 1) % len;
         }
         state.lastIdx = idx;
       }
     }
 
     // ---- Playback: interpoliert, angefasste Knobs auslassen ----
-    const frac = exact - Math.floor(exact);
-    const i1 = (idx + 1) % RESOLUTION;
     for (const [key, lane] of this.lanes) {
       if (this.grabbed.has(key)) continue;
       const target = this.targets.get(key);
       if (!target) continue;
+      const len = lane.length;
+      const exact = transport.phaseOver(len / RESOLUTION) * len;
+      const idx = Math.floor(exact) % len;
+      const frac = exact - Math.floor(exact);
+      const i1 = (idx + 1) % len;
       target.apply(lane[idx] + (lane[i1] - lane[idx]) * frac);
     }
   }

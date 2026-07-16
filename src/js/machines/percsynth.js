@@ -21,6 +21,7 @@ import { transport } from '../core/transport.js';
 import { noise, autoStop, midiToHz } from '../core/dsp.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createKeybed } from '../ui/keybed.js';
+import { automation } from '../core/automation.js';
 
 export class PercSynth extends Machine {
   static meta = {
@@ -155,9 +156,12 @@ export class PercSynth extends Machine {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);
+        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
+    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
+    automation.setBars(this.id, this.seq.bars);
 
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({
