@@ -312,9 +312,12 @@ export class BeatBox extends Machine {
       onLengthChange: (bars) => {
         for (const tr of this.tracks) resizePattern(tr.steps, bars);
         this.seq.setPattern(this.tracks[this.selected].steps);
+        automation.setBars(this.id, bars); // Spur-Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
+    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
+    automation.setBars(this.id, this.seq.bars);
 
     // Solo-Button für die gewählte Spur in die Grid-Kopfzeile einhängen
     const ctrl = this.seq.el.querySelector('.stepseq__ctrl');

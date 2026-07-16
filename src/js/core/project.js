@@ -31,6 +31,20 @@ export function serializeProject(rack) {
   };
 }
 
+/**
+ * Frische Session: alles auf Werkseinstellung — leeres Rack, 120 BPM,
+ * Master-FX auf Default, dann die Startbesetzung (BeatBox + SubSynth
+ * mit Demo-Groove). Entspricht dem allerersten App-Start.
+ */
+export function newProject(rack) {
+  transport.stop();
+  rack.clear();
+  transport.setBpm(120);
+  masterFX.reset();
+  rack.addMachine(BY_TYPE.beatbox);
+  rack.addMachine(BY_TYPE.subsynth);
+}
+
 export function loadProject(rack, data) {
   transport.stop();
   rack.clear();
