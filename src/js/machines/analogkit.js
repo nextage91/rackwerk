@@ -38,16 +38,21 @@ function bd(ctx, t, dest, p) {
   o.connect(g).connect(dest);
   autoStop(o, t, 0.35 * p.decay, [g]);
 
-  // Attack-Klick: kurzer Dreieck-Ton statt gefiltertem Rauschen (BeatBox) —
-  // klingt "elektronischer", eher wie der 909-typische Anschlag.
+  // Attack-Klick: beim echten 909 kein Ton, sondern ein sehr kurzer,
+  // tiefpassgefilterter Rauschimpuls aus einer eigenen Klick-Schaltung
+  // (separater Rauschgenerator + Filter, mischt sich vor der VCA-Hüllkurve
+  // zum Sinus-Body dazu). Ein reiner Ton an dieser Stelle (die vorherige
+  // Version) klingt wie eine Clave statt wie ein Attack-Transient.
   const snap = p.snap ?? 0.5;
   if (snap > 0.01) {
-    const c = ctx.createOscillator();
-    c.type = 'triangle';
-    c.frequency.value = 1800 * p.tune;
-    const cg = env(ctx, t, snap * p.level, 0.008);
-    c.connect(cg).connect(dest);
-    autoStop(c, t, 0.008, [cg]);
+    const n = ctx.createBufferSource();
+    n.buffer = noise(ctx);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 3800 * p.tune;
+    const cg = env(ctx, t, snap * p.level * 1.6, 0.004);
+    n.connect(lp).connect(cg).connect(dest);
+    autoStop(n, t, 0.004, [lp, cg]);
   }
 }
 
