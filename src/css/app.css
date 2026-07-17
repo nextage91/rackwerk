@@ -139,6 +139,64 @@ button {
    auf .machine wurden die Faceplates sonst abgeschnitten.) */
 .rack > * { flex: 0 0 auto; }
 
+/* ===================== Kompakt-Zeile (EXPERIMENT) =====================
+   Ersetzt die volle Maschinen-Faceplate in der Rack-Liste — nur Name +
+   Mute/Solo + Chevron. Antippen öffnet den Vollbild-Editor (unten). */
+.rack-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 14px;
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.rack-row:active { filter: brightness(1.12); }
+.rack-row__stripe {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 6px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.rack-row__name {
+  flex: 1 1 auto;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.rack-row__actions { display: flex; gap: 6px; }
+.rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
+.rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
+
+/* Vollbild-Editor pro Maschine (EXPERIMENT) — dieselbe Idee wie der
+   Mixer-Vollbild-Sheet, nur pro Maschine statt einmalig. Enthält die
+   UNVERÄNDERTE .machine-Faceplate aus machine.js (Header + Body). */
+.machine-focus {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+}
+.machine-focus[hidden] { display: none; }
+.machine-focus__panel {
+  position: absolute;
+  top: var(--transport-h, 64px);
+  left: 0; right: 0; bottom: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 14px calc(20px + var(--safe-bottom));
+  background: var(--bg-case);
+}
+.machine-focus__back {
+  min-height: 44px;
+  margin-bottom: 10px;
+  padding: 0 14px;
+}
+
 /* Slot »Maschine hinzufügen« */
 .rack__add {
   min-height: 72px;

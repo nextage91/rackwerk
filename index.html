@@ -226,6 +226,64 @@ button {
    auf .machine wurden die Faceplates sonst abgeschnitten.) */
 .rack > * { flex: 0 0 auto; }
 
+/* ===================== Kompakt-Zeile (EXPERIMENT) =====================
+   Ersetzt die volle Maschinen-Faceplate in der Rack-Liste — nur Name +
+   Mute/Solo + Chevron. Antippen öffnet den Vollbild-Editor (unten). */
+.rack-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 14px;
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.rack-row:active { filter: brightness(1.12); }
+.rack-row__stripe {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 6px var(--m-color-glow, rgba(77,195,255,.45));
+}
+.rack-row__name {
+  flex: 1 1 auto;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.rack-row__actions { display: flex; gap: 6px; }
+.rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
+.rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
+
+/* Vollbild-Editor pro Maschine (EXPERIMENT) — dieselbe Idee wie der
+   Mixer-Vollbild-Sheet, nur pro Maschine statt einmalig. Enthält die
+   UNVERÄNDERTE .machine-Faceplate aus machine.js (Header + Body). */
+.machine-focus {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+}
+.machine-focus[hidden] { display: none; }
+.machine-focus__panel {
+  position: absolute;
+  top: var(--transport-h, 64px);
+  left: 0; right: 0; bottom: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 14px calc(20px + var(--safe-bottom));
+  background: var(--bg-case);
+}
+.machine-focus__back {
+  min-height: 44px;
+  margin-bottom: 10px;
+  padding: 0 14px;
+}
+
 /* Slot »Maschine hinzufügen« */
 .rack__add {
   min-height: 72px;
@@ -17550,8 +17608,16 @@ const { Rack, REGISTRY } = (() => {
 /**
  * Rack — verwaltet die Maschinen-Slots.
  *
+ * EXPERIMENT (claude/rack-focused-editor-experiment): statt jede Maschine
+ * mit voller Bedienoberfläche inline zu stapeln, zeigt das Rack nur noch
+ * eine kompakte Zeile pro Maschine (Name, Mute/Solo, Chevron). Antippen
+ * öffnet die volle Oberfläche (Header + Body, unverändert von machine.js
+ * gebaut) als eigenen Vollbild-Screen — dieselbe Sheet-Mechanik wie beim
+ * Mixer, nur pro Maschine statt einmalig. Ziel: weniger Scroll, grössere
+ * Regler pro Maschine (nur eine muss aufs Mal passen statt aller gestapelt).
+ *
  * - Registry: alle verfügbaren Maschinentypen (neue Maschinen hier eintragen)
- * - Rendert die Slot-Liste + den »Maschine hinzufügen«-Slot
+ * - Rendert die Kompakt-Liste + den »Maschine hinzufügen«-Slot
  * - Bottom-Sheet als touch-freundlicher Picker
  */
 
@@ -17560,33 +17626,43 @@ const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit];
 
 class Rack {
   /**
-   * @param {HTMLElement} rackEl   Container für die Slots
-   * @param {HTMLElement} sheetEl  Bottom-Sheet-Element
+   * @param {HTMLElement} rackEl   Container für die Kompakt-Zeilen
+   * @param {HTMLElement} sheetEl  Bottom-Sheet-Element (Maschine hinzufügen)
    */
   constructor(rackEl, sheetEl) {
     this.rackEl = rackEl;
     this.sheetEl = sheetEl;
     /** @type {import('../machines/machine.js').Machine[]} */
     this.machines = [];
+    /** @type {Map<import('../machines/machine.js').Machine, {row:HTMLElement, overlay:HTMLElement, panel:HTMLElement, muteBtn:HTMLElement, soloBtn:HTMLElement}>} */
+    this.views = new Map();
 
     this.#buildAddSlot();
     this.#buildSheet();
 
-    // Maschinen melden ihr Entfernen selbst (Event aus machine.js)
-    this.rackEl.addEventListener('machine:removed', (e) => {
+    // Maschinen melden ihr Entfernen selbst (Event aus machine.js). Die
+    // .machine-Elemente hängen jetzt in eigenen .machine-focus-Overlays
+    // unter document.body statt inline in rackEl — das Event bubbelt also
+    // NICHT mehr durch rackEl. Auf document lauschen, das ist immer ein
+    // Vorfahre, egal wo das Overlay hängt.
+    document.addEventListener('machine:removed', (e) => {
       const { machine, state } = e.detail;
       const index = this.machines.indexOf(machine);
       this.machines = this.machines.filter((m) => m !== machine);
       if (index === -1) return;
+
+      const view = this.views.get(machine);
+      view?.row.remove();
+      view?.overlay.remove();
+      this.views.delete(machine);
 
       const MachineClass = machine.constructor;
       undo.offer(`${MachineClass.meta.name} removed`, () => {
         const restored = new MachineClass();
         if (state) restored.deserialize(state);
         this.machines.splice(index, 0, restored);
-        const refEl = this.machines[index + 1]?.el ?? this.addSlotEl;
-        this.rackEl.insertBefore(restored.render(), refEl);
-        restored.el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+        this.#mount(restored, this.machines[index + 1] ?? null);
+        this.#openFocus(restored);
       });
     });
   }
@@ -17594,17 +17670,101 @@ class Rack {
   /** Alle Maschinen entfernen (z. B. vor dem Laden eines Projekts). */
   clear() {
     for (const m of [...this.machines]) m.dispose();
+    for (const view of this.views.values()) { view.row.remove(); view.overlay.remove(); }
+    this.views.clear();
     this.machines = [];
   }
 
-  addMachine(MachineClass, state = null) {
+  /**
+   * @param {{focus?: boolean}} [opts] focus: Vollbild-Editor direkt öffnen
+   *   (nur beim expliziten Hinzufügen über die Maschinenauswahl sinnvoll —
+   *   beim Massen-Wiederherstellen aus einem Projekt NICHT setzen, sonst
+   *   flackert für jede geladene Maschine kurz ein Vollbild-Editor auf).
+   */
+  addMachine(MachineClass, state = null, { focus = false } = {}) {
     const machine = new MachineClass();
     if (state) machine.deserialize(state);
     this.machines.push(machine);
-    this.rackEl.insertBefore(machine.render(), this.addSlotEl);
-    // neue Maschine ins Bild scrollen
-    machine.el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    this.#mount(machine, null); // null = ans Ende der Liste
+    if (focus) this.#openFocus(machine);
     return machine;
+  }
+
+  /**
+   * Baut Kompakt-Zeile + Vollbild-Editor für eine Maschine und hängt beides
+   * ein — VOR der Kompakt-Zeile/dem Overlay von `beforeMachine` (null = ans
+   * Ende). Beide Elemente werden über DIESELBE Referenz-Maschine platziert,
+   * damit Zeilen-Reihenfolge (sichtbar in der Liste) und Overlay-Reihenfolge
+   * (nur für Dokument-/Tab-Reihenfolge relevant, da immer nur ein Overlay
+   * gleichzeitig sichtbar ist) konsistent bleiben — sonst landet ein Overlay
+   * z. B. nach einem Undo an der falschen Stelle in der Geschwister-Reihenfolge.
+   */
+  #mount(machine, beforeMachine) {
+    const fullEl = machine.render(); // Header + Body wie gehabt, unverändert
+
+    const overlay = document.createElement('div');
+    overlay.className = 'machine-focus';
+    overlay.hidden = true;
+    const panel = document.createElement('div');
+    panel.className = 'machine-focus__panel';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'm-btn machine-focus__back';
+    back.textContent = '‹ Back to Rack';
+    back.addEventListener('click', () => this.#closeFocus(machine));
+    panel.appendChild(back);
+    panel.appendChild(fullEl);
+    overlay.appendChild(panel);
+
+    const { name, color } = machine.constructor.meta;
+    const row = document.createElement('div');
+    row.className = 'rack-row';
+    row.style.setProperty('--m-color', color);
+    row.innerHTML = `
+      <span class="rack-row__stripe"></span>
+      <span class="rack-row__name">${name}</span>
+      <span class="rack-row__actions">
+        <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
+        <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
+      </span>
+      <span class="rack-row__chevron" aria-hidden="true">›</span>
+    `;
+    const muteBtn = row.querySelector('[data-mute]');
+    const soloBtn = row.querySelector('[data-solo]');
+    soloBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      machine.setSoloed(!machine.soloed);
+      soloBtn.classList.toggle('is-active', machine.soloed);
+    });
+    muteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      machine.setMuted(!machine.muted);
+      muteBtn.classList.toggle('is-active', machine.muted);
+    });
+    row.addEventListener('click', () => this.#openFocus(machine));
+
+    const beforeView = beforeMachine ? this.views.get(beforeMachine) : null;
+    document.body.insertBefore(overlay, beforeView?.overlay ?? null);
+    this.rackEl.insertBefore(row, beforeView?.row ?? this.addSlotEl);
+
+    this.views.set(machine, { row, overlay, panel, muteBtn, soloBtn });
+  }
+
+  #openFocus(machine) {
+    const view = this.views.get(machine);
+    if (!view) return;
+    view.overlay.hidden = false;
+    view.panel.scrollTop = 0;
+  }
+
+  #closeFocus(machine) {
+    const view = this.views.get(machine);
+    if (!view) return;
+    view.overlay.hidden = true;
+    // Mute/Solo können sich im Vollbild-Editor geändert haben (eigene
+    // Header-Buttons dort) — Kompakt-Zeile beim Schliessen nachziehen.
+    view.muteBtn.classList.toggle('is-active', machine.muted);
+    view.soloBtn.classList.toggle('is-active', machine.soloed);
   }
 
   /* ---------- »+«-Slot ---------- */
@@ -17633,7 +17793,7 @@ class Rack {
         </span>
       `;
       item.addEventListener('click', () => {
-        this.addMachine(MachineClass);
+        this.addMachine(MachineClass, null, { focus: true });
         this.#closeSheet();
       });
       list.appendChild(item);
