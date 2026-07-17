@@ -86,6 +86,24 @@
 }
 .machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
 
+/* Panel einklappen (nur Kopfzeile sichtbar) — Titel-Block ist der Toggle,
+   grosses Touch-Ziel statt eines zusätzlichen kleinen Icon-Buttons. */
+.machine__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;         /* Touch-Ziel, auch wenn der Text kleiner ist */
+  cursor: pointer;
+}
+.machine__chevron {
+  font-size: 9px;
+  color: var(--ink-faint);
+  transition: transform .15s ease;
+  flex-shrink: 0;
+}
+.machine.is-collapsed .machine__chevron { transform: rotate(-90deg); }
+.machine.is-collapsed .machine__body { display: none; }
+
 .m-btn {
   min-width: var(--tap-min);
   min-height: 36px;
@@ -102,7 +120,30 @@
 .m-btn:active { transform: translateY(1px); }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
-.m-btn--remove { color: var(--ink-faint); }
+/* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
+   liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
+   Fortschritt, damit Halten kein Rätselraten ist. */
+.m-btn--remove {
+  color: var(--ink-faint);
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+}
+.m-btn--remove::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255,90,90,.55);
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+  transition: transform .12s ease-out;
+}
+.m-btn--remove.is-holding::before {
+  transition: transform .55s linear;
+  transform: scaleX(1);
+}
+.m-btn--remove.is-holding { color: #fff; }
 
 /* Bedienfeld der Maschine */
 .machine__body { padding: 14px 12px; }
@@ -111,6 +152,26 @@
   flex-wrap: wrap;
   gap: 10px 6px;
   justify-content: flex-start;
+}
+
+/* Spur-Reihe (BeatBox/AnalogKit): eingefärbt + mit Spurname beschriftet,
+   damit sofort klar ist, dass Tune/Decay/Level/Snap/Sends nur die gerade
+   gewählte Spur betreffen — nicht das ganze Kit (das regelt "Kit Volume"
+   in einer eigenen, neutralen Reihe darunter). */
+.machine__row--track {
+  padding: 8px 8px 10px;
+  margin: 0 -8px 4px;
+  border-radius: 8px;
+  background: var(--m-color-tint, rgba(255,255,255,.03));
+  box-shadow: -3px 0 0 var(--m-color, transparent) inset;
+}
+.track-row__label {
+  flex: 1 0 100%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--m-color, var(--ink-dim));
 }
 
 /* ===================== Knob (x-knob) ===================== */
@@ -362,6 +423,17 @@ x-fader {
   letter-spacing: .05em;
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   touch-action: none;                 /* Halten-Geste gehört dem Button */
+  position: relative;
+}
+/* Dezenter Hinweis: Halten öffnet Kopieren/Einfügen. */
+.patbank__btn::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 5px;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .35;
 }
 .patbank__btn:active { transform: translateY(1px); }
 .patbank__btn.is-active {
@@ -469,6 +541,18 @@ x-fader {
   outline: 2px solid var(--lcd-ink);
   outline-offset: -2px;
 }
+/* Dezenter Hinweis auf pitch-fähigen Grids: Step lässt sich vertikal
+   ziehen, um die Tonhöhe zu setzen — verschwindet, sobald der Step an ist
+   (dann zeigt .cell__label die Note). */
+.cell__hint {
+  position: absolute;
+  top: 3px; right: 4px;
+  font-size: 8px;
+  line-height: 1;
+  opacity: .3;
+  pointer-events: none;
+}
+.cell.is-on .cell__hint { display: none; }
 
 /* ===================== BeatBox-Pads ===================== */
 .pads {
@@ -584,6 +668,29 @@ x-knob.has-auto .knob__dial::after {
   font-weight: 700;
 }
 .undo-toast__btn:active { transform: translateY(1px); }
+
+/* Kontextueller Einmal-Hinweis (core/hints.js) — erklärt eine versteckte
+   Geste im Moment, in dem sie zum ersten Mal relevant wird. Breiter/mehr-
+   zeilig als die kurzen Bestätigungs-Toasts, sonst gleicher Look. */
+.hint-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+  pointer-events: none;
+}
 
 /* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
 .seg {

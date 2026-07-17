@@ -193,6 +193,20 @@ button {
 .sheet__name { font-weight: 600; font-size: 15px; }
 .sheet__desc { font-size: 12px; color: var(--ink-dim); }
 
+/* Erste-Hilfe-Sheet: kurze Gesten-Übersicht beim allerersten Start */
+.onboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+.onboard-list b { color: var(--lcd-ink); }
+
 /* ===================== Audio-Unlock ===================== */
 .unlock {
   position: fixed; inset: 0; z-index: 100;
@@ -475,7 +489,7 @@ button {
    darunter den grössten Teil der Höhe bekommt — das ist der Regler, der
    beim Mischen am meisten gebraucht wird. */
 .chstrip {
-  flex: 0 0 116px;
+  flex: 0 0 124px;
   min-height: 0;
   scroll-snap-align: start;
   display: flex;
@@ -525,10 +539,13 @@ button {
 .chstrip__knobs {
   display: flex;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 auto;
 }
-.chstrip__knobs x-knob { --knob-size: 20px; gap: 2px; }
+/* 28px statt der ursprünglichen 20px -- deutlich näher an Apples 44px-
+   Touch-Ziel-Richtwert, ohne dass die drei Regler (Pan+2 Sends) aus dem
+   schmalen Kanalzug rausbrechen. */
+.chstrip__knobs x-knob { --knob-size: 28px; gap: 3px; }
 
 .chstrip__meters {
   flex: 1 1 auto;
@@ -561,7 +578,7 @@ button {
 .chstrip__buttons .m-btn {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   font-size: 9px;
   padding: 0 2px;
 }

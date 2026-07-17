@@ -430,30 +430,31 @@ export class AnalogKit extends Machine {
 
   /* ---------- UI ---------- */
   buildControls(container) {
+    // Spur-Parameter in eigener, eingefärbter Reihe MIT Spurname (s. BeatBox
+    // für die ausführliche Begründung) — Maschinen-Volume separat.
     const row = document.createElement('div');
-    row.className = 'machine__row';
+    row.className = 'machine__row machine__row--track';
     row.innerHTML = `
+      <span class="track-row__label" data-track-label></span>
       <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
-      <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
       const key = e.target.dataset?.p;
       if (!key) return;
       const val = e.detail.value;
-      if (key === 'volume') {
-        this.setLevel(val);
-      } else if (key === 'trackSendDelay' || key === 'trackSendReverb') {
+      if (key === 'trackSendDelay' || key === 'trackSendReverb') {
         this.setTrackSend(this.selected, key === 'trackSendDelay' ? 'delay' : 'reverb', val);
       } else {
         this.tracks[this.selected][key] = val;
       }
     });
     container.appendChild(row);
+    this.trackLabelEl = row.querySelector('[data-track-label]');
     this.knobs = {
       tune: row.querySelector('[data-p="tune"]'),
       decay: row.querySelector('[data-p="decay"]'),
@@ -462,6 +463,14 @@ export class AnalogKit extends Machine {
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
+
+    const volRow = document.createElement('div');
+    volRow.className = 'machine__row';
+    volRow.innerHTML = `<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>`;
+    volRow.addEventListener('input', (e) => {
+      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value);
+    });
+    container.appendChild(volRow);
 
     for (const param of ['tune', 'decay', 'level', 'snap']) {
       const applyForKey = (key, value) => {
@@ -540,6 +549,7 @@ export class AnalogKit extends Machine {
     this.selected = i;
     const tr = this.tracks[i];
     this.padEls.forEach((p, j) => p.classList.toggle('is-selected', j === i));
+    this.trackLabelEl.textContent = tr.name;
     this.seq.setPattern(tr.steps);
     this.knobs.tune.value = tr.tune;
     this.knobs.decay.value = tr.decay;

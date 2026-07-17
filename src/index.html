@@ -176,6 +176,22 @@
     </div>
   </div>
 
+  <!-- ===== Erste Hilfe (einmalig beim allerersten Start) ===== -->
+  <div class="sheet" id="onboarding-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="How RackWerk works">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">How it works</h2>
+      <ul class="onboard-list">
+        <li><b>Tap</b> a step — turn a sound on or off</li>
+        <li><b>Drag</b> a step up/down — set its pitch</li>
+        <li><b>REC</b> — turn a knob or play a note/pad to record it</li>
+        <li><b>Hold</b> a pattern letter or a knob — more options (copy/paste, remove automation)</li>
+      </ul>
+      <button class="m-btn m-btn--wide" id="btn-onboarding-close" data-close>Got it</button>
+    </div>
+  </div>
+
   <!-- Audio-Freischaltung: mobile Browser & WebViews verlangen eine Nutzergeste -->
   <div class="unlock" id="unlock-overlay">
     <button class="unlock__btn" id="btn-unlock">

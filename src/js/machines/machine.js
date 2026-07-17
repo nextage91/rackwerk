@@ -170,35 +170,66 @@ export class Machine {
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
-        <div>
-          <div class="machine__name">${name}</div>
-          <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
+        <div class="machine__title" data-collapse-toggle>
+          <span class="machine__chevron" aria-hidden="true">▾</span>
+          <span>
+            <div class="machine__name">${name}</div>
+            <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
+          </span>
         </div>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
-          <button class="m-btn m-btn--remove" data-remove aria-label="Remove machine">✕</button>
+          <button class="m-btn m-btn--remove" data-remove aria-label="Hold to remove machine">✕</button>
         </div>
       </header>
       <div class="machine__body"></div>
     `;
+
+    // Panel einklappen (nur Header sichtbar) — reduziert Scroll-Distanz bei
+    // mehreren Maschinen im Rack. Rein visuell, kein Datenzustand, deshalb
+    // bewusst nicht in serialize()/deserialize() (wie das Mixer-Pendant
+    // .mixer-group__toggle, das ebenfalls nicht persistiert wird).
+    el.querySelector('[data-collapse-toggle]').addEventListener('click', () => {
+      el.classList.toggle('is-collapsed');
+    });
 
     this.headMuteBtn = el.querySelector('[data-mute]');
     this.headSoloBtn = el.querySelector('[data-solo]');
     this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
-    el.querySelector('[data-remove]').addEventListener('click', () => {
-      const state = this.serialize(); // vor dispose() sichern — für Undo
-      // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
-      // ein bubbling Event auf einem bereits entfernten Knoten erreicht
-      // keine Vorfahren mehr (also auch nicht Racks Listener).
-      el.dispatchEvent(new CustomEvent('machine:removed', {
-        detail: { machine: this, state },
-        bubbles: true,
-      }));
-      this.dispose();
+    // Löschen erst nach kurzem Halten (nicht bei einzelnem Tap) — verse-
+    // hentliches Löschen war der Auslöser für den Undo-Button; ein Hold
+    // mit sichtbarem Füllfortschritt verhindert das schon an der Wurzel.
+    const removeBtn = el.querySelector('[data-remove]');
+    const REMOVE_HOLD_MS = 550;
+    let removeTimer = null;
+    const cancelRemoveHold = () => {
+      clearTimeout(removeTimer);
+      removeTimer = null;
+      removeBtn.classList.remove('is-holding');
+    };
+    removeBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      removeBtn.classList.add('is-holding');
+      removeTimer = setTimeout(() => {
+        removeTimer = null;
+        removeBtn.classList.remove('is-holding');
+        const state = this.serialize(); // vor dispose() sichern — für Undo
+        // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
+        // ein bubbling Event auf einem bereits entfernten Knoten erreicht
+        // keine Vorfahren mehr (also auch nicht Racks Listener).
+        el.dispatchEvent(new CustomEvent('machine:removed', {
+          detail: { machine: this, state },
+          bubbles: true,
+        }));
+        this.dispose();
+      }, REMOVE_HOLD_MS);
     });
+    removeBtn.addEventListener('pointerup', cancelRemoveHold);
+    removeBtn.addEventListener('pointerleave', cancelRemoveHold);
+    removeBtn.addEventListener('pointercancel', cancelRemoveHold);
 
     this.buildControls(el.querySelector('.machine__body'));
 

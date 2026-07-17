@@ -12,6 +12,8 @@
  * die Callbacks (onSwitch, getSlot, putSlot). `shape` trennt inkompatible
  * Ablagen (Noten vs. Drums).
  */
+import { hintOnce, showHintToast } from '../core/hints.js';
+
 const LETTERS = ['A', 'B', 'C', 'D'];
 const HOLD_MS = 500;
 
@@ -32,6 +34,9 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape
   const onOutside = (e) => { if (chip && !chip.contains(e.target)) dismiss(); };
 
   const openMenu = (i, btn) => {
+    hintOnce('patbank-hold', () => showHintToast(
+      'Hold any pattern letter (A–D) anytime to copy or paste it.'
+    ));
     dismiss();
     chip = document.createElement('div');
     chip.className = 'pat-chip';
