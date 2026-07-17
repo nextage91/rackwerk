@@ -173,16 +173,23 @@ button {
 .rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
 .rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
 
-/* Vollbild-Editor pro Maschine (EXPERIMENT) — dieselbe Idee wie der
-   Mixer-Vollbild-Sheet, nur pro Maschine statt einmalig. Enthält die
-   UNVERÄNDERTE .machine-Faceplate aus machine.js (Header + Body). */
+/* Vollbild-Editor pro Maschine — dieselbe Idee wie der Mixer-Vollbild-
+   Sheet, nur pro Maschine statt einmalig. Enthält die UNVERÄNDERTE
+   .machine-Faceplate aus machine.js (Header + Body).
+   .machine-focus selbst deckt (fixed, inset:0) auch den Bereich ÜBER dem
+   Panel ab (die Transport-Leiste bleibt dort bewusst sichtbar) — ohne
+   pointer-events:none würde der leere obere Streifen trotzdem Klicks auf
+   Play/Stop/REC/BPM schlucken, obwohl dort nichts vom Overlay zu sehen
+   ist (identischer Bug + Fix wie bei #mixer-sheet, s. .sheet--console). */
 .machine-focus {
   position: fixed;
   inset: 0;
   z-index: 55;
+  pointer-events: none;
 }
 .machine-focus[hidden] { display: none; }
 .machine-focus__panel {
+  pointer-events: auto;
   position: absolute;
   top: var(--transport-h, 64px);
   left: 0; right: 0; bottom: 0;
