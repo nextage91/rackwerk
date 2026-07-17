@@ -280,6 +280,20 @@ button {
 .sheet__name { font-weight: 600; font-size: 15px; }
 .sheet__desc { font-size: 12px; color: var(--ink-dim); }
 
+/* Erste-Hilfe-Sheet: kurze Gesten-Übersicht beim allerersten Start */
+.onboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+.onboard-list b { color: var(--lcd-ink); }
+
 /* ===================== Audio-Unlock ===================== */
 .unlock {
   position: fixed; inset: 0; z-index: 100;
@@ -562,7 +576,7 @@ button {
    darunter den grössten Teil der Höhe bekommt — das ist der Regler, der
    beim Mischen am meisten gebraucht wird. */
 .chstrip {
-  flex: 0 0 116px;
+  flex: 0 0 124px;
   min-height: 0;
   scroll-snap-align: start;
   display: flex;
@@ -612,10 +626,13 @@ button {
 .chstrip__knobs {
   display: flex;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 auto;
 }
-.chstrip__knobs x-knob { --knob-size: 20px; gap: 2px; }
+/* 28px statt der ursprünglichen 20px -- deutlich näher an Apples 44px-
+   Touch-Ziel-Richtwert, ohne dass die drei Regler (Pan+2 Sends) aus dem
+   schmalen Kanalzug rausbrechen. */
+.chstrip__knobs x-knob { --knob-size: 28px; gap: 3px; }
 
 .chstrip__meters {
   flex: 1 1 auto;
@@ -648,7 +665,7 @@ button {
 .chstrip__buttons .m-btn {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   font-size: 9px;
   padding: 0 2px;
 }
@@ -811,6 +828,24 @@ button {
 }
 .machine__head-actions { margin-left: auto; display: flex; gap: 8px; }
 
+/* Panel einklappen (nur Kopfzeile sichtbar) — Titel-Block ist der Toggle,
+   grosses Touch-Ziel statt eines zusätzlichen kleinen Icon-Buttons. */
+.machine__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;         /* Touch-Ziel, auch wenn der Text kleiner ist */
+  cursor: pointer;
+}
+.machine__chevron {
+  font-size: 9px;
+  color: var(--ink-faint);
+  transition: transform .15s ease;
+  flex-shrink: 0;
+}
+.machine.is-collapsed .machine__chevron { transform: rotate(-90deg); }
+.machine.is-collapsed .machine__body { display: none; }
+
 .m-btn {
   min-width: var(--tap-min);
   min-height: 36px;
@@ -827,7 +862,30 @@ button {
 .m-btn:active { transform: translateY(1px); }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
-.m-btn--remove { color: var(--ink-faint); }
+/* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
+   liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
+   Fortschritt, damit Halten kein Rätselraten ist. */
+.m-btn--remove {
+  color: var(--ink-faint);
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+}
+.m-btn--remove::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255,90,90,.55);
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+  transition: transform .12s ease-out;
+}
+.m-btn--remove.is-holding::before {
+  transition: transform .55s linear;
+  transform: scaleX(1);
+}
+.m-btn--remove.is-holding { color: #fff; }
 
 /* Bedienfeld der Maschine */
 .machine__body { padding: 14px 12px; }
@@ -836,6 +894,26 @@ button {
   flex-wrap: wrap;
   gap: 10px 6px;
   justify-content: flex-start;
+}
+
+/* Spur-Reihe (BeatBox/AnalogKit): eingefärbt + mit Spurname beschriftet,
+   damit sofort klar ist, dass Tune/Decay/Level/Snap/Sends nur die gerade
+   gewählte Spur betreffen — nicht das ganze Kit (das regelt "Kit Volume"
+   in einer eigenen, neutralen Reihe darunter). */
+.machine__row--track {
+  padding: 8px 8px 10px;
+  margin: 0 -8px 4px;
+  border-radius: 8px;
+  background: var(--m-color-tint, rgba(255,255,255,.03));
+  box-shadow: -3px 0 0 var(--m-color, transparent) inset;
+}
+.track-row__label {
+  flex: 1 0 100%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--m-color, var(--ink-dim));
 }
 
 /* ===================== Knob (x-knob) ===================== */
@@ -1087,6 +1165,17 @@ x-fader {
   letter-spacing: .05em;
   box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
   touch-action: none;                 /* Halten-Geste gehört dem Button */
+  position: relative;
+}
+/* Dezenter Hinweis: Halten öffnet Kopieren/Einfügen. */
+.patbank__btn::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 5px;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .35;
 }
 .patbank__btn:active { transform: translateY(1px); }
 .patbank__btn.is-active {
@@ -1194,6 +1283,18 @@ x-fader {
   outline: 2px solid var(--lcd-ink);
   outline-offset: -2px;
 }
+/* Dezenter Hinweis auf pitch-fähigen Grids: Step lässt sich vertikal
+   ziehen, um die Tonhöhe zu setzen — verschwindet, sobald der Step an ist
+   (dann zeigt .cell__label die Note). */
+.cell__hint {
+  position: absolute;
+  top: 3px; right: 4px;
+  font-size: 8px;
+  line-height: 1;
+  opacity: .3;
+  pointer-events: none;
+}
+.cell.is-on .cell__hint { display: none; }
 
 /* ===================== BeatBox-Pads ===================== */
 .pads {
@@ -1309,6 +1410,29 @@ x-knob.has-auto .knob__dial::after {
   font-weight: 700;
 }
 .undo-toast__btn:active { transform: translateY(1px); }
+
+/* Kontextueller Einmal-Hinweis (core/hints.js) — erklärt eine versteckte
+   Geste im Moment, in dem sie zum ersten Mal relevant wird. Breiter/mehr-
+   zeilig als die kurzen Bestätigungs-Toasts, sonst gleicher Look. */
+.hint-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+  pointer-events: none;
+}
 
 /* ===================== Segment-Umschalter (z. B. Filtertyp) ===================== */
 .seg {
@@ -1575,6 +1699,22 @@ x-knob.has-auto .knob__dial::after {
     </div>
   </div>
 
+  <!-- ===== Erste Hilfe (einmalig beim allerersten Start) ===== -->
+  <div class="sheet" id="onboarding-sheet" hidden>
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="How RackWerk works">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">How it works</h2>
+      <ul class="onboard-list">
+        <li><b>Tap</b> a step — turn a sound on or off</li>
+        <li><b>Drag</b> a step up/down — set its pitch</li>
+        <li><b>REC</b> — turn a knob or play a note/pad to record it</li>
+        <li><b>Hold</b> a pattern letter or a knob — more options (copy/paste, remove automation)</li>
+      </ul>
+      <button class="m-btn m-btn--wide" id="btn-onboarding-close" data-close>Got it</button>
+    </div>
+  </div>
+
   <!-- Audio-Freischaltung: mobile Browser & WebViews verlangen eine Nutzergeste -->
   <div class="unlock" id="unlock-overlay">
     <button class="unlock__btn" id="btn-unlock">
@@ -1619,6 +1759,118 @@ const undo = {
 };
 
 return { undo };
+})();
+
+/* ===== js/core/store.js ===== */
+const { store } = (() => {
+/**
+ * store — dünner Wrapper um localStorage mit In-Memory-Fallback.
+ *
+ * In manchen eingebetteten WebViews (z. B. Datei-Previews) ist
+ * localStorage blockiert; dann läuft der Speicher nur für die Sitzung.
+ * `store.persistent` sagt der UI, welcher Fall vorliegt.
+ */
+const PREFIX = 'rackwerk:';
+
+class Store {
+  constructor() {
+    this.mem = new Map();
+    this.persistent = false;
+    try {
+      localStorage.setItem(PREFIX + '__test', '1');
+      localStorage.removeItem(PREFIX + '__test');
+      this.persistent = true;
+    } catch { /* Fallback auf Map */ }
+  }
+
+  get(key) {
+    try {
+      if (this.persistent) return localStorage.getItem(PREFIX + key);
+    } catch { /* fällt durch */ }
+    return this.mem.get(key) ?? null;
+  }
+
+  set(key, value) {
+    try {
+      if (this.persistent) {
+        localStorage.setItem(PREFIX + key, value);
+        return;
+      }
+    } catch { /* fällt durch */ }
+    this.mem.set(key, value);
+  }
+
+  remove(key) {
+    try {
+      if (this.persistent) {
+        localStorage.removeItem(PREFIX + key);
+        return;
+      }
+    } catch { /* fällt durch */ }
+    this.mem.delete(key);
+  }
+
+  /** Alle Schlüssel (ohne Prefix). */
+  keys() {
+    if (this.persistent) {
+      const out = [];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(PREFIX)) out.push(k.slice(PREFIX.length));
+        }
+        return out;
+      } catch { /* fällt durch */ }
+    }
+    return [...this.mem.keys()];
+  }
+}
+
+const store = new Store();
+
+return { store };
+})();
+
+/* ===== js/core/hints.js ===== */
+const { hintOnce, showHintToast, hintSeen, markHintSeen } = (() => {
+/**
+ * hints — kontextuelle Einmal-Hinweise für versteckte Gesten (Long-Press,
+ * REC-Doppelbedeutung, …). Jeder Hinweis feuert genau einmal pro Gerät
+ * (Flag in store, überlebt Reloads) und danach nie wieder — kein Tutorial,
+ * das man wegklicken muss, sondern eine kurze Erklärung im Moment, in dem
+ * die Geste zum ersten Mal relevant wird.
+ */
+
+const hintSeen = (key) => store.get(`hint-seen:${key}`) === '1';
+const markHintSeen = (key) => store.set(`hint-seen:${key}`, '1');
+
+/** Zeigt `show()` nur beim ersten Aufruf für diesen `key` (jemals). */
+function hintOnce(key, show) {
+  if (hintSeen(key)) return;
+  markHintSeen(key);
+  show();
+}
+
+let toastEl = null;
+let hideTimer = null;
+
+/** Kurzer Hinweis-Toast unten im Bild (eigener Stil, länger lesbar als
+ *  die kurzen Bestätigungs-Toasts von Automation/Undo). */
+function showHintToast(text, ms = 5000) {
+  toastEl?.remove();
+  clearTimeout(hideTimer);
+  const el = document.createElement('div');
+  el.className = 'hint-toast';
+  el.textContent = text;
+  document.body.appendChild(el);
+  toastEl = el;
+  hideTimer = setTimeout(() => {
+    el.remove();
+    if (toastEl === el) toastEl = null;
+  }, ms);
+}
+
+return { hintOnce, showHintToast, hintSeen, markHintSeen };
 })();
 
 /* ===== js/ui/knob.js ===== */
@@ -12996,7 +13248,7 @@ class StepSeq {
     this.page = 0;
 
     this.el = document.createElement('div');
-    this.el.className = 'stepseq';
+    this.el.className = 'stepseq' + (this.pitchMode ? ' stepseq--pitch' : '');
     this.el.innerHTML = `
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
@@ -13017,6 +13269,17 @@ class StepSeq {
       const cell = document.createElement('div');
       cell.className = 'cell' + (c % 4 === 0 ? ' cell--beat' : '');
       cell.dataset.cell = c;
+      // Dezenter Hinweis, dass sich der Step vertikal ziehen lässt (Tonhöhe) —
+      // verschwindet, sobald der Step an ist (dann zeigt das Label die Note).
+      if (this.pitchMode) {
+        const hint = document.createElement('span');
+        hint.className = 'cell__hint';
+        hint.textContent = '↕';
+        cell.appendChild(hint);
+      }
+      const label = document.createElement('span');
+      label.className = 'cell__label';
+      cell.appendChild(label);
       this.grid.appendChild(cell);
       this.cells.push(cell);
     }
@@ -13062,7 +13325,7 @@ class StepSeq {
     const st = this.pattern[this.#patIdx(c)];
     const cell = this.cells[c];
     cell.classList.toggle('is-on', !!st?.on);
-    cell.textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
+    cell.querySelector('.cell__label').textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
   }
 
   #renderAll() {
@@ -13186,6 +13449,7 @@ const { createPatternBank } = (() => {
  * die Callbacks (onSwitch, getSlot, putSlot). `shape` trennt inkompatible
  * Ablagen (Noten vs. Drums).
  */
+
 const LETTERS = ['A', 'B', 'C', 'D'];
 const HOLD_MS = 500;
 
@@ -13206,6 +13470,9 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}
   const onOutside = (e) => { if (chip && !chip.contains(e.target)) dismiss(); };
 
   const openMenu = (i, btn) => {
+    hintOnce('patbank-hold', () => showHintToast(
+      'Hold any pattern letter (A–D) anytime to copy or paste it.'
+    ));
     dismiss();
     chip = document.createElement('div');
     chip.className = 'pat-chip';
@@ -13404,76 +13671,6 @@ function createKeybed({ baseMidi = 60, onNoteOn, onNoteOff = () => {} }) {
 }
 
 return { createKeybed };
-})();
-
-/* ===== js/core/store.js ===== */
-const { store } = (() => {
-/**
- * store — dünner Wrapper um localStorage mit In-Memory-Fallback.
- *
- * In manchen eingebetteten WebViews (z. B. Datei-Previews) ist
- * localStorage blockiert; dann läuft der Speicher nur für die Sitzung.
- * `store.persistent` sagt der UI, welcher Fall vorliegt.
- */
-const PREFIX = 'rackwerk:';
-
-class Store {
-  constructor() {
-    this.mem = new Map();
-    this.persistent = false;
-    try {
-      localStorage.setItem(PREFIX + '__test', '1');
-      localStorage.removeItem(PREFIX + '__test');
-      this.persistent = true;
-    } catch { /* Fallback auf Map */ }
-  }
-
-  get(key) {
-    try {
-      if (this.persistent) return localStorage.getItem(PREFIX + key);
-    } catch { /* fällt durch */ }
-    return this.mem.get(key) ?? null;
-  }
-
-  set(key, value) {
-    try {
-      if (this.persistent) {
-        localStorage.setItem(PREFIX + key, value);
-        return;
-      }
-    } catch { /* fällt durch */ }
-    this.mem.set(key, value);
-  }
-
-  remove(key) {
-    try {
-      if (this.persistent) {
-        localStorage.removeItem(PREFIX + key);
-        return;
-      }
-    } catch { /* fällt durch */ }
-    this.mem.delete(key);
-  }
-
-  /** Alle Schlüssel (ohne Prefix). */
-  keys() {
-    if (this.persistent) {
-      const out = [];
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k?.startsWith(PREFIX)) out.push(k.slice(PREFIX.length));
-        }
-        return out;
-      } catch { /* fällt durch */ }
-    }
-    return [...this.mem.keys()];
-  }
-}
-
-const store = new Store();
-
-return { store };
 })();
 
 /* ===== js/core/audio-engine.js ===== */
@@ -14114,7 +14311,8 @@ const { automation } = (() => {
  *   Knob und feuert dessen input-Event — die Parameter laufen also durch
  *   exakt dieselbe Leitung wie eine Handbewegung. Angefasste Knobs werden
  *   übersprungen (Hand schlägt Automation).
- * - Löschen: bei scharfem REC löscht Doppeltipp auf den Knob dessen Lane.
+ * - Löschen: Long-Press (550 ms) auf einen Knob mit Automation zeigt einen
+ *   Lösch-Button für dessen Lane — unabhängig vom REC-Status.
  *
  * Maschinen melden ihre Knobs über register(); der Schlüssel ist
  * `${machineId}:${paramName}`, unregisterMachine() räumt beim Entfernen auf.
@@ -14250,19 +14448,26 @@ class Automation {
 
   #toast = null;
 
-  /** Kurzer Hinweis unten im Bild, sobald eine neue Lane entsteht. */
+  /** Kurzer Hinweis unten im Bild, sobald eine neue Lane entsteht. Beim
+   *  allerersten Mal überhaupt (app-weit) länger und mit Erklärung, wie man
+   *  die Lane wieder los wird — long-press ist sonst nirgends ersichtlich. */
   #announce(knob) {
     const label = knob.getAttribute('label') ?? 'Parameter';
+    const firstTime = !hintSeen('automation-longpress');
+    if (firstTime) markHintSeen('automation-longpress');
+
     this.#toast?.remove();
     const el = document.createElement('div');
     el.className = 'auto-toast';
-    el.textContent = `● Automation recorded: ${label}`;
+    el.textContent = firstTime
+      ? `● Automation recorded: ${label} — hold the knob anytime to remove it`
+      : `● Automation recorded: ${label}`;
     document.body.appendChild(el);
     this.#toast = el;
     setTimeout(() => {
       el.remove();
       if (this.#toast === el) this.#toast = null;
-    }, 1800);
+    }, firstTime ? 3200 : 1800);
   }
 
   #chip = null;
@@ -15175,35 +15380,66 @@ class Machine {
     el.innerHTML = `
       <header class="machine__head">
         <span class="machine__stripe"></span>
-        <div>
-          <div class="machine__name">${name}</div>
-          <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
+        <div class="machine__title" data-collapse-toggle>
+          <span class="machine__chevron" aria-hidden="true">▾</span>
+          <span>
+            <div class="machine__name">${name}</div>
+            <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
+          </span>
         </div>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
-          <button class="m-btn m-btn--remove" data-remove aria-label="Remove machine">✕</button>
+          <button class="m-btn m-btn--remove" data-remove aria-label="Hold to remove machine">✕</button>
         </div>
       </header>
       <div class="machine__body"></div>
     `;
+
+    // Panel einklappen (nur Header sichtbar) — reduziert Scroll-Distanz bei
+    // mehreren Maschinen im Rack. Rein visuell, kein Datenzustand, deshalb
+    // bewusst nicht in serialize()/deserialize() (wie das Mixer-Pendant
+    // .mixer-group__toggle, das ebenfalls nicht persistiert wird).
+    el.querySelector('[data-collapse-toggle]').addEventListener('click', () => {
+      el.classList.toggle('is-collapsed');
+    });
 
     this.headMuteBtn = el.querySelector('[data-mute]');
     this.headSoloBtn = el.querySelector('[data-solo]');
     this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
-    el.querySelector('[data-remove]').addEventListener('click', () => {
-      const state = this.serialize(); // vor dispose() sichern — für Undo
-      // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
-      // ein bubbling Event auf einem bereits entfernten Knoten erreicht
-      // keine Vorfahren mehr (also auch nicht Racks Listener).
-      el.dispatchEvent(new CustomEvent('machine:removed', {
-        detail: { machine: this, state },
-        bubbles: true,
-      }));
-      this.dispose();
+    // Löschen erst nach kurzem Halten (nicht bei einzelnem Tap) — verse-
+    // hentliches Löschen war der Auslöser für den Undo-Button; ein Hold
+    // mit sichtbarem Füllfortschritt verhindert das schon an der Wurzel.
+    const removeBtn = el.querySelector('[data-remove]');
+    const REMOVE_HOLD_MS = 550;
+    let removeTimer = null;
+    const cancelRemoveHold = () => {
+      clearTimeout(removeTimer);
+      removeTimer = null;
+      removeBtn.classList.remove('is-holding');
+    };
+    removeBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      removeBtn.classList.add('is-holding');
+      removeTimer = setTimeout(() => {
+        removeTimer = null;
+        removeBtn.classList.remove('is-holding');
+        const state = this.serialize(); // vor dispose() sichern — für Undo
+        // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
+        // ein bubbling Event auf einem bereits entfernten Knoten erreicht
+        // keine Vorfahren mehr (also auch nicht Racks Listener).
+        el.dispatchEvent(new CustomEvent('machine:removed', {
+          detail: { machine: this, state },
+          bubbles: true,
+        }));
+        this.dispose();
+      }, REMOVE_HOLD_MS);
     });
+    removeBtn.addEventListener('pointerup', cancelRemoveHold);
+    removeBtn.addEventListener('pointerleave', cancelRemoveHold);
+    removeBtn.addEventListener('pointercancel', cancelRemoveHold);
 
     this.buildControls(el.querySelector('.machine__body'));
 
@@ -16008,25 +16244,26 @@ class BeatBox extends Machine {
 
   /* ---------- UI ---------- */
   buildControls(container) {
-    // Spur-Parameter + Maschinen-Volume
+    // Spur-Parameter (Tune/Decay/Level/Snap/Sends) in einer eigenen,
+    // eingefärbten Reihe MIT Spurname — sonst nicht erkennbar, dass diese
+    // Regler nur die aktuell gewählte Spur betreffen und nicht das ganze
+    // Kit. Maschinen-Volume bewusst in einer eigenen, neutralen Reihe.
     const row = document.createElement('div');
-    row.className = 'machine__row';
+    row.className = 'machine__row machine__row--track';
     row.innerHTML = `
+      <span class="track-row__label" data-track-label></span>
       <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.45"  data-p="snap"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
-      <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
       const key = e.target.dataset?.p;
       if (!key) return;
       const val = e.detail.value;
-      if (key === 'volume') {
-        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
-      } else if (key === 'trackSendDelay' || key === 'trackSendReverb') {
+      if (key === 'trackSendDelay' || key === 'trackSendReverb') {
         // eigene Setter (ramp den Send-Gain) statt Rohwert-Zuweisung — sonst
         // bewegt sich der Regler, aber der Effekt bleibt stumm. Eigener
         // data-p-Name (nicht "sendDelay"/"sendReverb") -- die Basisklasse
@@ -16039,6 +16276,7 @@ class BeatBox extends Machine {
       }
     });
     container.appendChild(row);
+    this.trackLabelEl = row.querySelector('[data-track-label]');
     this.knobs = {
       tune: row.querySelector('[data-p="tune"]'),
       decay: row.querySelector('[data-p="decay"]'),
@@ -16047,6 +16285,16 @@ class BeatBox extends Machine {
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
+
+    // Maschinen-weite Lautstärke — eigene Reihe, damit sie nicht mit den
+    // Spur-Reglern oben verwechselt wird.
+    const volRow = document.createElement('div');
+    volRow.className = 'machine__row';
+    volRow.innerHTML = `<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>`;
+    volRow.addEventListener('input', (e) => {
+      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value); // eine Quelle der Wahrheit, auch für den Mixer
+    });
+    container.appendChild(volRow);
 
     // Per-Spur-Automation: Der Lane-Schlüssel entsteht beim Anfassen aus
     // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
@@ -16135,6 +16383,7 @@ class BeatBox extends Machine {
     this.selected = i;
     const tr = this.tracks[i];
     this.padEls.forEach((p, j) => p.classList.toggle('is-selected', j === i));
+    this.trackLabelEl.textContent = tr.name;
     this.seq.setPattern(tr.steps);
     this.knobs.tune.value = tr.tune;
     this.knobs.decay.value = tr.decay;
@@ -17147,30 +17396,31 @@ class AnalogKit extends Machine {
 
   /* ---------- UI ---------- */
   buildControls(container) {
+    // Spur-Parameter in eigener, eingefärbter Reihe MIT Spurname (s. BeatBox
+    // für die ausführliche Begründung) — Maschinen-Volume separat.
     const row = document.createElement('div');
-    row.className = 'machine__row';
+    row.className = 'machine__row machine__row--track';
     row.innerHTML = `
+      <span class="track-row__label" data-track-label></span>
       <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
-      <x-knob label="Volume" min="0" max="1" value="0.8"  data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
       const key = e.target.dataset?.p;
       if (!key) return;
       const val = e.detail.value;
-      if (key === 'volume') {
-        this.setLevel(val);
-      } else if (key === 'trackSendDelay' || key === 'trackSendReverb') {
+      if (key === 'trackSendDelay' || key === 'trackSendReverb') {
         this.setTrackSend(this.selected, key === 'trackSendDelay' ? 'delay' : 'reverb', val);
       } else {
         this.tracks[this.selected][key] = val;
       }
     });
     container.appendChild(row);
+    this.trackLabelEl = row.querySelector('[data-track-label]');
     this.knobs = {
       tune: row.querySelector('[data-p="tune"]'),
       decay: row.querySelector('[data-p="decay"]'),
@@ -17179,6 +17429,14 @@ class AnalogKit extends Machine {
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
+
+    const volRow = document.createElement('div');
+    volRow.className = 'machine__row';
+    volRow.innerHTML = `<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>`;
+    volRow.addEventListener('input', (e) => {
+      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value);
+    });
+    container.appendChild(volRow);
 
     for (const param of ['tune', 'decay', 'level', 'snap']) {
       const applyForKey = (key, value) => {
@@ -17257,6 +17515,7 @@ class AnalogKit extends Machine {
     this.selected = i;
     const tr = this.tracks[i];
     this.padEls.forEach((p, j) => p.classList.toggle('is-selected', j === i));
+    this.trackLabelEl.textContent = tr.name;
     this.seq.setPattern(tr.steps);
     this.knobs.tune.value = tr.tune;
     this.knobs.decay.value = tr.decay;
@@ -17568,6 +17827,7 @@ function boot() {
   wireSongUI(rack);
   wireMixerUI(rack);
   wireUndoUI();
+  wireOnboardingUI();
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -18396,6 +18656,11 @@ function wireTransportUI() {
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
+    if (automation.armed) {
+      hintOnce('rec-armed', () => showHintToast(
+        'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'
+      ));
+    }
   });
 
   // BPM: Tippen ±1, Halten wiederholt (Touch-freundlicher als ein Slider)
@@ -18465,6 +18730,18 @@ function wireUndoUI() {
     toastEl = el;
     hideTimer = setTimeout(hide, 8000);
   });
+}
+
+/* ---------- Erste-Hilfe-Sheet (einmalig) ---------- */
+/** Kurzer Überblick über die wichtigsten Gesten, einmalig beim aller-
+ *  ersten Start gezeigt (hintOnce-Flag) — ergänzt die kontextuellen
+ *  Einzel-Hinweise (REC, Long-Press), die erst im jeweiligen Moment
+ *  greifen, um eine Gesamtübersicht direkt am Anfang. */
+function wireOnboardingUI() {
+  const sheet = $('#onboarding-sheet');
+  sheet.querySelectorAll('[data-close]').forEach((el) =>
+    el.addEventListener('click', () => { sheet.hidden = true; }));
+  hintOnce('onboarding-sheet', () => { sheet.hidden = false; });
 }
 
 })();

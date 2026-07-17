@@ -36,7 +36,7 @@ export class StepSeq {
     this.page = 0;
 
     this.el = document.createElement('div');
-    this.el.className = 'stepseq';
+    this.el.className = 'stepseq' + (this.pitchMode ? ' stepseq--pitch' : '');
     this.el.innerHTML = `
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
@@ -57,6 +57,17 @@ export class StepSeq {
       const cell = document.createElement('div');
       cell.className = 'cell' + (c % 4 === 0 ? ' cell--beat' : '');
       cell.dataset.cell = c;
+      // Dezenter Hinweis, dass sich der Step vertikal ziehen lässt (Tonhöhe) —
+      // verschwindet, sobald der Step an ist (dann zeigt das Label die Note).
+      if (this.pitchMode) {
+        const hint = document.createElement('span');
+        hint.className = 'cell__hint';
+        hint.textContent = '↕';
+        cell.appendChild(hint);
+      }
+      const label = document.createElement('span');
+      label.className = 'cell__label';
+      cell.appendChild(label);
       this.grid.appendChild(cell);
       this.cells.push(cell);
     }
@@ -102,7 +113,7 @@ export class StepSeq {
     const st = this.pattern[this.#patIdx(c)];
     const cell = this.cells[c];
     cell.classList.toggle('is-on', !!st?.on);
-    cell.textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
+    cell.querySelector('.cell__label').textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
   }
 
   #renderAll() {

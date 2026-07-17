@@ -12,7 +12,8 @@
  *   Knob und feuert dessen input-Event — die Parameter laufen also durch
  *   exakt dieselbe Leitung wie eine Handbewegung. Angefasste Knobs werden
  *   übersprungen (Hand schlägt Automation).
- * - Löschen: bei scharfem REC löscht Doppeltipp auf den Knob dessen Lane.
+ * - Löschen: Long-Press (550 ms) auf einen Knob mit Automation zeigt einen
+ *   Lösch-Button für dessen Lane — unabhängig vom REC-Status.
  *
  * Maschinen melden ihre Knobs über register(); der Schlüssel ist
  * `${machineId}:${paramName}`, unregisterMachine() räumt beim Entfernen auf.
@@ -24,6 +25,7 @@
  * Regler-Fahrten UND gespielte Noten, wie bei klassischen Grooveboxen.
  */
 import { transport } from './transport.js';
+import { hintSeen, markHintSeen } from './hints.js';
 
 const RESOLUTION = 128;   // Slots pro Takt
 const TICK_MS = 22;       // ~45 Hz UI-/Playback-Rate
@@ -149,19 +151,26 @@ class Automation {
 
   #toast = null;
 
-  /** Kurzer Hinweis unten im Bild, sobald eine neue Lane entsteht. */
+  /** Kurzer Hinweis unten im Bild, sobald eine neue Lane entsteht. Beim
+   *  allerersten Mal überhaupt (app-weit) länger und mit Erklärung, wie man
+   *  die Lane wieder los wird — long-press ist sonst nirgends ersichtlich. */
   #announce(knob) {
     const label = knob.getAttribute('label') ?? 'Parameter';
+    const firstTime = !hintSeen('automation-longpress');
+    if (firstTime) markHintSeen('automation-longpress');
+
     this.#toast?.remove();
     const el = document.createElement('div');
     el.className = 'auto-toast';
-    el.textContent = `● Automation recorded: ${label}`;
+    el.textContent = firstTime
+      ? `● Automation recorded: ${label} — hold the knob anytime to remove it`
+      : `● Automation recorded: ${label}`;
     document.body.appendChild(el);
     this.#toast = el;
     setTimeout(() => {
       el.remove();
       if (this.#toast === el) this.#toast = null;
-    }, 1800);
+    }, firstTime ? 3200 : 1800);
   }
 
   #chip = null;

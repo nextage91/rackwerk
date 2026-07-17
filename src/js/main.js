@@ -15,6 +15,7 @@ import { jamlink } from './core/jamlink.js';
 import { masterFX } from './core/fx.js';
 import { song } from './core/song.js';
 import { undo } from './core/undo.js';
+import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack } from './rack/rack.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -101,6 +102,7 @@ function boot() {
   wireSongUI(rack);
   wireMixerUI(rack);
   wireUndoUI();
+  wireOnboardingUI();
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -929,6 +931,11 @@ function wireTransportUI() {
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
+    if (automation.armed) {
+      hintOnce('rec-armed', () => showHintToast(
+        'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'
+      ));
+    }
   });
 
   // BPM: Tippen ±1, Halten wiederholt (Touch-freundlicher als ein Slider)
@@ -998,4 +1005,16 @@ function wireUndoUI() {
     toastEl = el;
     hideTimer = setTimeout(hide, 8000);
   });
+}
+
+/* ---------- Erste-Hilfe-Sheet (einmalig) ---------- */
+/** Kurzer Überblick über die wichtigsten Gesten, einmalig beim aller-
+ *  ersten Start gezeigt (hintOnce-Flag) — ergänzt die kontextuellen
+ *  Einzel-Hinweise (REC, Long-Press), die erst im jeweiligen Moment
+ *  greifen, um eine Gesamtübersicht direkt am Anfang. */
+function wireOnboardingUI() {
+  const sheet = $('#onboarding-sheet');
+  sheet.querySelectorAll('[data-close]').forEach((el) =>
+    el.addEventListener('click', () => { sheet.hidden = true; }));
+  hintOnce('onboarding-sheet', () => { sheet.hidden = false; });
 }
