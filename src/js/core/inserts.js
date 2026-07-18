@@ -35,32 +35,73 @@ function makeDriveCurve(amount) {
   return curve;
 }
 
+const dbToLin = (db) => Math.pow(10, db / 20);
+
+/** Feste Schwelle statt Regler — wie beim 1176-Vorbild: kein Threshold-
+ *  Knopf, stattdessen treibt Input den Pegel in einen fest eingestellten
+ *  Kompressor hinein ("drive it hard"). Output macht danach die Lautstärke
+ *  wieder wett. */
+const COMP_FIXED_THRESHOLD_DB = -18;
+
+/** Ratio ist beim 1176 eine Taster-Reihe, kein Drehregler. Kleinere Knee
+ *  bei höherer Ratio = härterer Einsatz; "all" (alle Taster gedrückt, der
+ *  legendäre "British Mode"/Nuke) fährt Ratio+Knee auf Anschlag für den
+ *  krachigsten, am wenigsten transparenten Charakter. */
+const RATIO_MODES = {
+  4:    { ratio: 4,  knee: 24 },
+  8:    { ratio: 8,  knee: 18 },
+  12:   { ratio: 12, knee: 12 },
+  20:   { ratio: 20, knee: 6 },
+  all:  { ratio: 20, knee: 0 },
+};
+export const RATIO_MODE_BUTTONS = [
+  { value: '4', label: '4' },
+  { value: '8', label: '8' },
+  { value: '12', label: '12' },
+  { value: '20', label: '20' },
+  { value: 'all', label: 'ALL' },
+];
+
 const DEFS = {
   comp: {
     name: 'Compressor',
-    defaults: { threshold: -24, ratio: 4, attack: 0.01, release: 0.25, makeup: 1 },
+    // 1176-Style: Input (treibt in die feste Schwelle), Attack, Release,
+    // Ratio-Modus (Taster statt Regler), Output (Makeup) — kein Threshold.
+    defaults: { input: 0, output: 0, attack: 0.003, release: 0.25, ratioMode: '4' },
     build(ctx, p) {
+      const inputGain = ctx.createGain();
+      inputGain.gain.value = dbToLin(p.input);
       const node = ctx.createDynamicsCompressor();
-      node.threshold.value = p.threshold;
-      node.ratio.value = p.ratio;
+      node.threshold.value = COMP_FIXED_THRESHOLD_DB;
+      const mode = RATIO_MODES[p.ratioMode] ?? RATIO_MODES['4'];
+      node.ratio.value = mode.ratio;
+      node.knee.value = mode.knee;
       node.attack.value = p.attack;
       node.release.value = p.release;
-      node.knee.value = 24;
-      const makeup = ctx.createGain();
-      makeup.gain.value = p.makeup;
-      node.connect(makeup);
+      const outputGain = ctx.createGain();
+      outputGain.gain.value = dbToLin(p.output);
+      inputGain.connect(node);
+      node.connect(outputGain);
       return {
-        input: node,
-        output: makeup,
+        input: inputGain,
+        output: outputGain,
         setParam(key, v) {
           const t = engine.now;
-          if (key === 'threshold') node.threshold.setTargetAtTime(v, t, 0.01);
-          else if (key === 'ratio') node.ratio.setTargetAtTime(v, t, 0.01);
+          if (key === 'input') inputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
+          else if (key === 'output') outputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
           else if (key === 'attack') node.attack.setTargetAtTime(v, t, 0.01);
           else if (key === 'release') node.release.setTargetAtTime(v, t, 0.01);
-          else if (key === 'makeup') makeup.gain.setTargetAtTime(v, t, 0.01);
+          else if (key === 'ratioMode') {
+            const m = RATIO_MODES[v] ?? RATIO_MODES['4'];
+            node.ratio.setTargetAtTime(m.ratio, t, 0.01);
+            node.knee.setTargetAtTime(m.knee, t, 0.01);
+          }
         },
-        dispose() { node.disconnect(); makeup.disconnect(); },
+        // Live-Gain-Reduction fürs GR-Meter — Web Audio liefert den Wert
+        // direkt vom nativen Compressor, kein separates Analyse-Tapping
+        // nötig (negative dB, 0 = keine Reduktion).
+        getReductionDb() { return node.reduction ?? 0; },
+        dispose() { inputGain.disconnect(); node.disconnect(); outputGain.disconnect(); },
       };
     },
   },
@@ -123,15 +164,22 @@ export function insertMeta(type) {
   return { name: DEFS[type].name, defaults: { ...DEFS[type].defaults } };
 }
 
+/** Frontplatten-Farbe je Insert-Typ — dieselbe --m-color-Mechanik wie bei
+ *  den Maschinen, macht jedes Modul auf einen Blick unterscheidbar. */
+export const INSERT_COLORS = {
+  comp: '#e8b84b',   // FET-Kompressor: Messing/Gold, wie ein 1176
+  eq: '#4fd1a5',     // Rack-EQ: kühles Teal
+  drive: '#e8643f',  // Sättigung: warmes Glühen
+};
+
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
  *  den DSP-Defaults, weil die UI mehr wissen muss als der Audiograph. */
 export const UI_PARAMS = {
   comp: [
-    { key: 'threshold', label: 'Thresh', min: -60, max: 0, unit: 'dB' },
-    { key: 'ratio', label: 'Ratio', min: 1, max: 20, unit: ':1' },
-    { key: 'attack', label: 'Attack', min: 0.001, max: 0.5, curve: 'log', unit: 's' },
+    { key: 'input', label: 'Input', min: -20, max: 20, unit: 'dB' },
+    { key: 'attack', label: 'Attack', min: 0.0002, max: 0.5, curve: 'log', unit: 's' },
     { key: 'release', label: 'Release', min: 0.02, max: 1, curve: 'log', unit: 's' },
-    { key: 'makeup', label: 'Makeup', min: 0, max: 4, unit: 'x' },
+    { key: 'output', label: 'Output', min: -20, max: 20, unit: 'dB' },
   ],
   eq: [
     { key: 'freq', label: 'Freq', min: 20, max: 20000, curve: 'log', unit: 'Hz' },
@@ -194,6 +242,8 @@ export function createInsert(type, saved = null) {
       params[key] = value;
       effect.setParam(key, value);
     },
+    // Nur beim Compressor vorhanden — UI prüft auf Existenz statt Typ.
+    getReductionDb: effect.getReductionDb ? () => effect.getReductionDb() : undefined,
     setBypass(b) {
       insert.bypassed = b;
       const t = engine.now;

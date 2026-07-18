@@ -746,7 +746,12 @@ x-knob.has-auto .knob__dial::after {
   text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
 
-/* ===================== Insert-FX (frei bestückbare Effektkette) ===================== */
+/* ===================== Insert-FX (frei bestückbare Effektkette) =====================
+   Jeder Insert ist ein eigenes Rack-Modul — nutzt dieselbe .machine-Fassade
+   wie die äussere Maschine (Schrauben, gebürstetes Metall, Farbstreifen),
+   nur mit der Akzentfarbe seines Effekt-Typs (--m-color, s. machine.js
+   insertColorVars()/INSERT_COLORS). So sieht jeder Insert wie ein eigenes
+   Gerät im Mini-Rack aus, kein blosser Listeneintrag. */
 .machine__row--inserts {
   flex-direction: column;
   align-items: stretch;
@@ -754,34 +759,24 @@ x-knob.has-auto .knob__dial::after {
   padding-top: 10px;
   border-top: 1px dashed rgba(255,255,255,.08);
 }
-.inserts { display: flex; flex-direction: column; gap: 8px; }
+.inserts { display: flex; flex-direction: column; gap: 14px; }
 .inserts:empty { display: none; }
-.inserts__add {
-  align-self: flex-start;
-  margin-top: 10px;
-  font-size: 12px;
+.inserts__add { min-height: 52px; margin-top: 4px; font-size: 13px; }
+
+.insert-module { margin: 0; }
+.insert-module.is-bypassed { opacity: .5; }
+.insert-module .machine__title { cursor: default; }
+.insert-module .machine__head {
+  padding: 8px 22px;
+  /* Titel + 4 Aktions-Buttons passen auf sehr schmalen Screens nicht in
+     eine Zeile — die Aktionen rutschen dann rechtsbündig in eine zweite
+     Zeile, statt vom .machine::overflow:hidden abgeschnitten zu werden. */
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
-.insert-row {
-  padding: 8px 10px 10px;
-  border-radius: 8px;
-  background: rgba(255,255,255,.03);
-  box-shadow: 0 1px 0 var(--edge-light) inset;
-}
-.insert-row.is-bypassed { opacity: .5; }
-.insert-row__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.insert-row__name {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 700;
-}
-.insert-row__actions { display: flex; gap: 4px; }
-.insert-row__actions .m-btn {
-  min-width: 30px;
-  padding: 4px 6px;
+.insert-module .machine__head-actions .m-btn {
+  min-width: 28px;
+  padding: 4px 5px;
   font-size: 11px;
 }
 .insert-row__bypass.is-active {
@@ -792,7 +787,61 @@ x-knob.has-auto .knob__dial::after {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 6px;
-  margin-top: 8px;
+}
+
+/* ---- Compressor: 1176-Style GR-Meter + Ratio-Taster statt -Regler ---- */
+.comp-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.comp-meter__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  color: var(--ink-dim);
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
+}
+.comp-meter__vu { flex: 1; margin-left: 0; justify-content: space-between; }
+.comp-ratio { margin-top: 10px; margin-bottom: 0; }
+
+/* ---- EQ: reaktive Mini-Kurve (Silhouette, keine echte Frequenzantwort-
+   Berechnung — reagiert aber live auf Typ/Freq/Gain/Q). ---- */
+.eq-curve {
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,.35);
+  box-shadow: 0 2px 4px rgba(0,0,0,.5) inset;
+}
+.eq-curve__svg { width: 100%; height: 36px; display: block; overflow: visible; }
+.eq-curve__zero { stroke: rgba(255,255,255,.12); stroke-width: 1; }
+.eq-curve__path {
+  fill: none;
+  stroke: var(--m-color, var(--m-subsynth));
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px var(--m-color-glow, transparent));
+}
+
+/* ---- Drive: HEAT-LED, Helligkeit folgt der Drive-Menge ---- */
+.drive-heat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.drive-heat__led {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 9px var(--m-color-glow, var(--lcd-glow));
+}
+.drive-heat__label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
 }
 
 /* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine

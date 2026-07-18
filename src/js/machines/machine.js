@@ -14,8 +14,82 @@
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
-import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES } from '../core/inserts.js';
+import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
 import { masterFX } from '../core/fx.js';
+
+/** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
+ *  getrennt vom kurzen DSP-Namen (insertMeta().name), der bleibt für den
+ *  Picker-Sheet-Eintrag ("Compressor") kurz und knapp. */
+const INSERT_DISPLAY = {
+  comp: { name: '1176-Style Compressor', badge: 'FET-COMP' },
+  eq: { name: 'Parametric EQ', badge: 'RACK-EQ' },
+  drive: { name: 'Drive / Saturation', badge: 'TUBE-DRIVE' },
+};
+
+/** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
+ *  der äusseren Maschine — hier fürs Insert-Modul, eigene Akzentfarbe je
+ *  Effekt-Typ (INSERT_COLORS), damit jedes Modul auf einen Blick als
+ *  eigenes Gerät erkennbar ist. */
+function insertColorVars(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `--m-color:${hex}; --m-color-dim:rgba(${r},${g},${b},.22); `
+    + `--m-color-glow:rgba(${r},${g},${b},.45); --m-color-tint:rgba(${r},${g},${b},.08);`;
+}
+
+/** Kleine reaktive Kurve fürs EQ-Modul — keine echte Frequenzantwort-
+ *  Berechnung, nur eine plausible Silhouette (Shelf/Peak-Form, Position
+ *  nach Frequenz, Auslenkung nach Gain, Breite nach Q), aber sie reagiert
+ *  live auf alle vier Parameter statt nur zu dekorieren. */
+function eqCurvePath(type, freq, gain, q) {
+  const w = 120, h = 36, midY = h / 2;
+  const freqNorm = Math.log(freq / 20) / Math.log(20000 / 20);
+  const x = Math.max(4, Math.min(w - 4, freqNorm * w));
+  const gainNorm = Math.max(-1, Math.min(1, gain / 24));
+  const amp = gainNorm * (h / 2 - 5);
+  const f1 = (n) => n.toFixed(1);
+  if (type === 'lowshelf') {
+    const kx = Math.min(w, x + 26);
+    return `M0,${f1(midY - amp)} L${f1(x)},${f1(midY - amp)} Q${f1(x + 13)},${f1(midY)} ${f1(kx)},${f1(midY)} L${w},${f1(midY)}`;
+  }
+  if (type === 'highshelf') {
+    const kx = Math.max(0, x - 26);
+    return `M0,${f1(midY)} L${f1(kx)},${f1(midY)} Q${f1(x - 13)},${f1(midY)} ${f1(x)},${f1(midY - amp)} L${w},${f1(midY - amp)}`;
+  }
+  const width = Math.max(6, Math.min(40, 46 / Math.max(0.1, q)));
+  const x0 = Math.max(0, x - width), x1 = Math.min(w, x + width);
+  return `M0,${f1(midY)} L${f1(x0)},${f1(midY)} Q${f1(x)},${f1(midY - amp)} ${f1(x1)},${f1(midY)} L${w},${f1(midY)}`;
+}
+
+/** GR-Meter des Compressor-Moduls: pollt den echten `reduction`-Wert des
+ *  nativen DynamicsCompressorNode (Web Audio liefert ihn direkt, kein
+ *  zusätzliches Analyser-Tapping nötig). Selbstbeendend: sobald die Zeile
+ *  aus dem DOM verschwindet (Re-Render bei add/remove/move/bypass),
+ *  bricht die Schleife am isConnected-Check ab — kein Leak, kein
+ *  expliziter Teardown nötig. */
+function startCompMeter(row, insert) {
+  const segs = row.querySelectorAll('.comp-meter__vu .vu__seg');
+  if (!segs.length) return;
+  const RANGE_DB = 24;
+  // reduction pendelt sich auch bei echter digitaler Stille nicht zwingend
+  // exakt bei 0dB ein (browserabhängiges Implementierungsdetail der
+  // nativen Envelope-Nachlaufkurve — gemessen: über 2s stabil bei einem
+  // konstanten, aber je nach Kontext unterschiedlichen Ruhewert, während
+  // der tatsächliche Master-Ausgang nachweislich still bleibt). Statt
+  // einer geraten festen Dead-Zone verfolgt restBaseline den NIEDRIGSTEN
+  // je beobachteten Wert und zieht ihn ab — passt sich also automatisch
+  // an den tatsächlichen Ruhewert an, egal wie hoch der ausfällt.
+  let restBaseline = Infinity;
+  const tick = () => {
+    if (!row.isConnected) return;
+    const raw = Math.abs(insert.getReductionDb?.() ?? 0);
+    if (raw < restBaseline) restBaseline = raw;
+    const gr = Math.max(0, raw - restBaseline);
+    const lit = Math.round(Math.min(1, gr / RANGE_DB) * segs.length);
+    segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 
 let nextId = 1;
 
@@ -372,7 +446,7 @@ export class Machine {
     insertsSection.className = 'machine__row machine__row--inserts';
     insertsSection.innerHTML = `
       <div class="inserts" data-inserts></div>
-      <button type="button" class="m-btn inserts__add" data-add-insert>+ Insert Effect</button>
+      <button type="button" class="rack__add inserts__add" data-add-insert>+  Add Effect</button>
     `;
     insertsSection.querySelector('[data-add-insert]').addEventListener('click', () => {
       openInsertPicker((type) => {
@@ -409,10 +483,14 @@ export class Machine {
     return el;
   }
 
-  /** Baut die komplette Insert-Liste neu aus this.inserts — einfacher als
-   *  gezieltes DOM-Patchen und unkritisch, weil nur bei add/remove/move/
-   *  bypass aufgerufen wird (Knob-Ziehen selbst löst KEIN Re-Render aus,
-   *  bleibt also während des Drags ungestört). */
+  /** Baut die komplette Insert-Liste neu aus this.inserts — jeder Insert
+   *  ein eigenes Rack-Modul (dieselbe .machine-Faceplate wie die äussere
+   *  Maschine: Schrauben, gebürstetes Metall, Farbstreifen — nur mit der
+   *  Akzentfarbe seines Effekt-Typs). Einfacher als gezieltes DOM-Patchen
+   *  und unkritisch, weil nur bei add/remove/move/bypass/Typ-Wechsel
+   *  aufgerufen wird (Knob-Ziehen selbst löst KEIN Re-Render aus, bleibt
+   *  also während des Drags ungestört — dafür patchen eq/drive gezielt
+   *  ihre reaktiven Bits direkt bei jedem Knob-input, s.u.). */
   #renderInserts() {
     if (!this.insertsListEl) return;
     this.insertsListEl.innerHTML = this.inserts.map((insert, idx) => {
@@ -424,36 +502,79 @@ export class Machine {
           ${def.unit ? `unit="${def.unit}"` : ''}
           data-insert-id="${insert.id}" data-insert-param="${def.key}"></x-knob>
       `).join('');
-      const eqTypeHtml = insert.type === 'eq' ? `
-        <div class="seg">
-          ${EQ_TYPES.map((t) => `
-            <button type="button" class="seg__btn${insert.params.type === t.value ? ' is-active' : ''}" data-eq-type="${t.value}">${t.label}</button>
-          `).join('')}
-        </div>
-      ` : '';
+
+      let bodyHtml;
+      if (insert.type === 'comp') {
+        bodyHtml = `
+          <div class="comp-meter">
+            <span class="comp-meter__label">GR</span>
+            <div class="vu comp-meter__vu">
+              ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
+            </div>
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+          <div class="seg comp-ratio">
+            <span class="seg__label">Ratio</span>
+            ${RATIO_MODE_BUTTONS.map((m) => `
+              <button type="button" class="seg__btn${insert.params.ratioMode === m.value ? ' is-active' : ''}" data-ratio-mode="${m.value}">${m.label}</button>
+            `).join('')}
+          </div>
+        `;
+      } else if (insert.type === 'eq') {
+        bodyHtml = `
+          <div class="eq-curve" data-eq-curve>
+            <svg viewBox="0 0 120 36" class="eq-curve__svg" preserveAspectRatio="none">
+              <line x1="0" y1="18" x2="120" y2="18" class="eq-curve__zero"></line>
+              <path class="eq-curve__path" d="${eqCurvePath(insert.params.type, insert.params.freq, insert.params.gain, insert.params.q)}"></path>
+            </svg>
+          </div>
+          <div class="seg">
+            ${EQ_TYPES.map((t) => `
+              <button type="button" class="seg__btn${insert.params.type === t.value ? ' is-active' : ''}" data-eq-type="${t.value}">${t.label}</button>
+            `).join('')}
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+        `;
+      } else {
+        bodyHtml = `
+          <div class="drive-heat">
+            <span class="drive-heat__led" data-drive-heat style="opacity:${0.25 + insert.params.drive * 0.75}"></span>
+            <span class="drive-heat__label">Heat</span>
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+        `;
+      }
+
+      const { name, badge } = INSERT_DISPLAY[insert.type];
       return `
-        <div class="insert-row${insert.bypassed ? ' is-bypassed' : ''}" data-insert-id="${insert.id}">
-          <div class="insert-row__head">
-            <span class="insert-row__name">${insert.name}</span>
-            <div class="insert-row__actions">
+        <section class="machine insert-module${insert.bypassed ? ' is-bypassed' : ''}"
+          data-insert-id="${insert.id}" style="${insertColorVars(INSERT_COLORS[insert.type])}">
+          <header class="machine__head">
+            <span class="machine__stripe"></span>
+            <div class="machine__title">
+              <span>
+                <div class="machine__name">${name}</div>
+                <div class="machine__type">${badge} · #${insert.id}</div>
+              </span>
+            </div>
+            <div class="machine__head-actions">
               <button type="button" class="m-btn insert-row__move" data-move="-1" aria-label="Move up" ${idx === 0 ? 'disabled' : ''}>▲</button>
               <button type="button" class="m-btn insert-row__move" data-move="1" aria-label="Move down" ${idx === this.inserts.length - 1 ? 'disabled' : ''}>▼</button>
               <button type="button" class="m-btn insert-row__bypass${insert.bypassed ? ' is-active' : ''}" data-bypass>BYP</button>
               <button type="button" class="m-btn insert-row__remove" data-remove aria-label="Remove insert">✕</button>
             </div>
-          </div>
-          ${eqTypeHtml}
-          <div class="insert-row__params">${knobsHtml}</div>
-        </div>
+          </header>
+          <div class="machine__body">${bodyHtml}</div>
+        </section>
       `;
     }).join('');
 
-    for (const row of this.insertsListEl.querySelectorAll('.insert-row')) {
+    for (const row of this.insertsListEl.querySelectorAll('.insert-module')) {
       const id = parseInt(row.dataset.insertId, 10);
+      const insert = this.inserts.find((i) => i.id === id);
       row.querySelector('[data-move="-1"]')?.addEventListener('click', () => this.moveInsert(id, -1));
       row.querySelector('[data-move="1"]')?.addEventListener('click', () => this.moveInsert(id, 1));
       row.querySelector('[data-bypass]').addEventListener('click', () => {
-        const insert = this.inserts.find((i) => i.id === id);
         this.setInsertBypass(id, !insert.bypassed);
         this.#renderInserts();
       });
@@ -461,6 +582,13 @@ export class Machine {
       for (const knob of row.querySelectorAll('x-knob[data-insert-param]')) {
         knob.addEventListener('input', (e) => {
           this.setInsertParam(id, knob.dataset.insertParam, e.detail.value);
+          if (insert.type === 'eq') {
+            row.querySelector('.eq-curve__path')?.setAttribute('d',
+              eqCurvePath(insert.params.type, insert.params.freq, insert.params.gain, insert.params.q));
+          } else if (insert.type === 'drive' && knob.dataset.insertParam === 'drive') {
+            const led = row.querySelector('[data-drive-heat]');
+            if (led) led.style.opacity = 0.25 + insert.params.drive * 0.75;
+          }
         });
       }
       for (const btn of row.querySelectorAll('[data-eq-type]')) {
@@ -469,6 +597,13 @@ export class Machine {
           this.#renderInserts();
         });
       }
+      for (const btn of row.querySelectorAll('[data-ratio-mode]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'ratioMode', btn.dataset.ratioMode);
+          this.#renderInserts();
+        });
+      }
+      if (insert.type === 'comp') startCompMeter(row, insert);
     }
   }
 
