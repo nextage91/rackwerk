@@ -2,9 +2,12 @@
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
  * Format (v1):
- * { v: 1, bpm, fx?, machines: [ { type, state, sends?, lanes } ] }
+ * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, lanes } ] }
  *   - state: maschinenspezifisch (machine.serialize/deserialize)
  *   - sends: FX-Send-Pegel der Maschine (Basisklasse)
+ *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
+ *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
+ *     Teil des unterklassen-eigenen state)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
@@ -28,6 +31,7 @@ export function serializeProject(rack) {
       type: m.constructor.meta.type,
       state: m.serialize(),
       sends: { ...m.sends },
+      inserts: m.serializeInserts(),
       lanes: automation.exportLanes(m.id),
     })),
   };
@@ -59,6 +63,7 @@ export function loadProject(rack, data) {
     if (!MachineClass) continue; // unbekannter Typ (z. B. ältere/neuere Version)
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
+    if (md.inserts) machine.deserializeInserts(md.inserts);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
   }
@@ -78,6 +83,7 @@ export function importMachines(rack, data) {
     if (!MachineClass) continue;
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
+    if (md.inserts) machine.deserializeInserts(md.inserts);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
     added.push(machine);

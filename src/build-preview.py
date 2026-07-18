@@ -28,6 +28,7 @@ MODULES = [
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/audio-engine.js", ["engine"]),
     ("js/core/dsp.js",          ["noise", "env", "autoStop", "midiToHz"]),
+    ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "UI_PARAMS", "EQ_TYPES"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR"]),
     ("js/core/fx.js",           ["masterFX"]),
     ("js/core/automation.js",   ["automation"]),
