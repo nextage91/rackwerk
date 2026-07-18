@@ -13613,10 +13613,13 @@ const { createPatternBank } = (() => {
  *           danach ein anderes Pattern, erscheint zusätzlich „⇩ Einfügen"
  *           und überschreibt es. So baust du Varianten (auch zwischen
  *           gleichartigen Maschinen — Noten-Patterns bzw. Drum-Patterns).
+ *           „+ Clip" (falls onAddClip übergeben) legt denselben Inhalt
+ *           zusätzlich als eigenständigen Jam-Clip der Maschine an —
+ *           dieselbe Halten-Geste, ein dritter Zweck.
  *
  * Die Bank ist reine UI; Datenhaltung/Umschalten macht die Maschine über
- * die Callbacks (onSwitch, getSlot, putSlot). `shape` trennt inkompatible
- * Ablagen (Noten vs. Drums).
+ * die Callbacks (onSwitch, getSlot, putSlot, onAddClip). `shape` trennt
+ * inkompatible Ablagen (Noten vs. Drums).
  */
 
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -13625,7 +13628,7 @@ const HOLD_MS = 500;
 /** Geteilte Pattern-Zwischenablage (maschinenübergreifend, shape-getrennt). */
 const clipboard = { shape: null, data: null };
 
-function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}) {
+function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, onAddClip, shape } = {}) {
   const el = document.createElement('div');
   el.className = 'patbank';
   el.innerHTML = '<span class="patbank__label">Pattern</span>';
@@ -13668,6 +13671,18 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}
         dismiss();
       });
       chip.appendChild(pasteBtn);
+    }
+
+    if (onAddClip) {
+      const addClipBtn = document.createElement('button');
+      addClipBtn.className = 'pat-chip__btn';
+      addClipBtn.textContent = '+ Add Clip';
+      addClipBtn.addEventListener('click', () => {
+        onAddClip(i, LETTERS[i]);
+        flash(btns[i]);
+        dismiss();
+      });
+      chip.appendChild(addClipBtn);
     }
 
     document.body.appendChild(chip);
@@ -15807,6 +15822,7 @@ function startCompMeter(row, insert) {
 }
 
 let nextId = 1;
+let nextClipId = 1;
 
 /** Alle lebenden Maschinen — für die Solo-Koordination über das ganze Rack. */
 const machines = new Set();
@@ -15916,6 +15932,10 @@ class Machine {
      *  Output direkt an den Panner. */
     this.inserts = [];
     this.#rewireInsertChain();
+
+    /** @type {Array<{id:number, name:string, shape:string, data:*}>}
+     *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
+    this.clips = [];
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
      *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
@@ -16076,6 +16096,33 @@ class Machine {
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
     this.#renderInserts();
+  }
+
+  /* ---------- Jam-Clips ----------
+   * Ein Clip ist ein benannter Schnappschuss eines Pattern-Slot-Inhalts
+   * (`data`, aus pattern-bank.js' getSlot() — dieselbe Kopie, die auch
+   * Copy/Paste nutzt), plus `shape` ('drums'|'notes'), damit spätere
+   * Wiedergabe weiss, wie er anzuwenden ist. Klips leben NEBEN den vier
+   * A/B/C/D-Pattern-Slots, nicht als fünfter Slot — Hinzufügen ändert
+   * `this.patterns`/`this.patternIndex` nicht.
+   */
+  addClip({ name, shape, data }) {
+    const clip = { id: nextClipId++, name, shape, data };
+    this.clips.push(clip);
+    return clip;
+  }
+
+  removeClip(id) {
+    this.clips = this.clips.filter((c) => c.id !== id);
+  }
+
+  /** Für project.js — analog zu `sends`/`inserts`, als Sibling-Feld. */
+  serializeClips() {
+    return this.clips.map((c) => ({ name: c.name, shape: c.shape, data: c.data }));
+  }
+
+  deserializeClips(list) {
+    this.clips = (list ?? []).map((c) => ({ id: nextClipId++, ...c }));
   }
 
   /* ---------- Faceplate ---------- */
@@ -16501,6 +16548,15 @@ class SubSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.pattern = data;
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
@@ -16695,6 +16751,9 @@ class SubSynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+      },
     });
     container.appendChild(this.patternBank.el);
 
@@ -16946,10 +17005,13 @@ class BeatBox extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Die steps-Referenzen der Spuren aufs aktive Slot zeigen lassen. */
-  #bindSlot() {
-    const slot = this.patterns[this.patternIndex];
+  /** Die steps-Referenzen der Spuren auf beliebige Daten zeigen lassen
+   *  (nicht zwingend this.patterns — auch von bindClipData genutzt). */
+  #bindData(slot) {
     this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
+  }
+  #bindSlot() {
+    this.#bindData(this.patterns[this.patternIndex]);
   }
   /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
   setPatternIndex(i) {
@@ -16961,6 +17023,15 @@ class BeatBox extends Machine {
   }
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
+  }
+
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.#bindData(data);
+    this.seq?.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -17226,6 +17297,9 @@ class BeatBox extends Machine {
         this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
         this.setPatternIndex(i);
       },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
+      },
     });
     container.appendChild(this.patternBank.el);
 
@@ -17352,6 +17426,15 @@ class PercSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.pattern = data;
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length;
@@ -17470,6 +17553,9 @@ class PercSynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+      },
     });
     container.appendChild(this.patternBank.el);
 
@@ -17578,6 +17664,15 @@ class PolySynth extends Machine {
     this.pattern = this.patterns[i];
     this.seq?.setPattern(this.pattern);
     this.patternBank?.setActive(i);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.pattern = data;
+    this.seq?.setPattern(this.pattern);
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
@@ -17823,6 +17918,9 @@ class PolySynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+      },
     });
     container.appendChild(this.patternBank.el);
 
@@ -18164,9 +18262,13 @@ class AnalogKit extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  #bindSlot() {
-    const slot = this.patterns[this.patternIndex];
+  /** Die steps-Referenzen der Spuren auf beliebige Daten zeigen lassen
+   *  (nicht zwingend this.patterns — auch von bindClipData genutzt). */
+  #bindData(slot) {
     this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
+  }
+  #bindSlot() {
+    this.#bindData(this.patterns[this.patternIndex]);
   }
   setPatternIndex(i) {
     this.patternIndex = i;
@@ -18177,6 +18279,15 @@ class AnalogKit extends Machine {
   }
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
+  }
+
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.#bindData(data);
+    this.seq?.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -18405,6 +18516,9 @@ class AnalogKit extends Machine {
       putSlot: (i, data) => {
         this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
         this.setPatternIndex(i);
+      },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
       },
     });
     container.appendChild(this.patternBank.el);
@@ -18680,12 +18794,14 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
  * Format (v1):
- * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, lanes } ] }
+ * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, clips?, lanes } ] }
  *   - state: maschinenspezifisch (machine.serialize/deserialize)
  *   - sends: FX-Send-Pegel der Maschine (Basisklasse)
  *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
  *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
  *     Teil des unterklassen-eigenen state)
+ *   - clips: Jam-Clips der Maschine (Basisklasse), gleiches Sibling-
+ *     Muster wie inserts — fehlt in alten Projekten → keine Clips
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
@@ -18705,6 +18821,7 @@ function serializeProject(rack) {
       state: m.serialize(),
       sends: { ...m.sends },
       inserts: m.serializeInserts(),
+      clips: m.serializeClips(),
       lanes: automation.exportLanes(m.id),
     })),
   };
@@ -18737,6 +18854,7 @@ function loadProject(rack, data) {
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
     if (md.inserts) machine.deserializeInserts(md.inserts);
+    if (md.clips) machine.deserializeClips(md.clips);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
   }
@@ -18757,6 +18875,7 @@ function importMachines(rack, data) {
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
     if (md.inserts) machine.deserializeInserts(md.inserts);
+    if (md.clips) machine.deserializeClips(md.clips);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
     added.push(machine);

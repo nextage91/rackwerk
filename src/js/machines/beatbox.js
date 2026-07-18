@@ -229,10 +229,13 @@ export class BeatBox extends Machine {
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Die steps-Referenzen der Spuren aufs aktive Slot zeigen lassen. */
-  #bindSlot() {
-    const slot = this.patterns[this.patternIndex];
+  /** Die steps-Referenzen der Spuren auf beliebige Daten zeigen lassen
+   *  (nicht zwingend this.patterns — auch von bindClipData genutzt). */
+  #bindData(slot) {
     this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
+  }
+  #bindSlot() {
+    this.#bindData(this.patterns[this.patternIndex]);
   }
   /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
   setPatternIndex(i) {
@@ -244,6 +247,15 @@ export class BeatBox extends Machine {
   }
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
+  }
+
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.#bindData(data);
+    this.seq?.setPattern(this.tracks[this.selected].steps);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
   /* ---------- Sequenzer ---------- */
@@ -508,6 +520,9 @@ export class BeatBox extends Machine {
       putSlot: (i, data) => {
         this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
         this.setPatternIndex(i);
+      },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
       },
     });
     container.appendChild(this.patternBank.el);

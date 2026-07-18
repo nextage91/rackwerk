@@ -7,10 +7,13 @@
  *           danach ein anderes Pattern, erscheint zusätzlich „⇩ Einfügen"
  *           und überschreibt es. So baust du Varianten (auch zwischen
  *           gleichartigen Maschinen — Noten-Patterns bzw. Drum-Patterns).
+ *           „+ Clip" (falls onAddClip übergeben) legt denselben Inhalt
+ *           zusätzlich als eigenständigen Jam-Clip der Maschine an —
+ *           dieselbe Halten-Geste, ein dritter Zweck.
  *
  * Die Bank ist reine UI; Datenhaltung/Umschalten macht die Maschine über
- * die Callbacks (onSwitch, getSlot, putSlot). `shape` trennt inkompatible
- * Ablagen (Noten vs. Drums).
+ * die Callbacks (onSwitch, getSlot, putSlot, onAddClip). `shape` trennt
+ * inkompatible Ablagen (Noten vs. Drums).
  */
 import { hintOnce, showHintToast } from '../core/hints.js';
 
@@ -20,7 +23,7 @@ const HOLD_MS = 500;
 /** Geteilte Pattern-Zwischenablage (maschinenübergreifend, shape-getrennt). */
 const clipboard = { shape: null, data: null };
 
-export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape } = {}) {
+export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, onAddClip, shape } = {}) {
   const el = document.createElement('div');
   el.className = 'patbank';
   el.innerHTML = '<span class="patbank__label">Pattern</span>';
@@ -63,6 +66,18 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, shape
         dismiss();
       });
       chip.appendChild(pasteBtn);
+    }
+
+    if (onAddClip) {
+      const addClipBtn = document.createElement('button');
+      addClipBtn.className = 'pat-chip__btn';
+      addClipBtn.textContent = '+ Add Clip';
+      addClipBtn.addEventListener('click', () => {
+        onAddClip(i, LETTERS[i]);
+        flash(btns[i]);
+        dismiss();
+      });
+      chip.appendChild(addClipBtn);
     }
 
     document.body.appendChild(chip);

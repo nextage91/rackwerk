@@ -66,6 +66,15 @@ export class PercSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.pattern = data;
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length;
@@ -184,6 +193,9 @@ export class PercSynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+      },
     });
     container.appendChild(this.patternBank.el);
 
