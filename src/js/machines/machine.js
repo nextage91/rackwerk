@@ -92,6 +92,7 @@ function startCompMeter(row, insert) {
 }
 
 let nextId = 1;
+let nextClipId = 1;
 
 /** Alle lebenden Maschinen — für die Solo-Koordination über das ganze Rack. */
 const machines = new Set();
@@ -201,6 +202,10 @@ export class Machine {
      *  Output direkt an den Panner. */
     this.inserts = [];
     this.#rewireInsertChain();
+
+    /** @type {Array<{id:number, name:string, shape:string, data:*}>}
+     *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
+    this.clips = [];
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
      *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
@@ -361,6 +366,33 @@ export class Machine {
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
     this.#renderInserts();
+  }
+
+  /* ---------- Jam-Clips ----------
+   * Ein Clip ist ein benannter Schnappschuss eines Pattern-Slot-Inhalts
+   * (`data`, aus pattern-bank.js' getSlot() — dieselbe Kopie, die auch
+   * Copy/Paste nutzt), plus `shape` ('drums'|'notes'), damit spätere
+   * Wiedergabe weiss, wie er anzuwenden ist. Klips leben NEBEN den vier
+   * A/B/C/D-Pattern-Slots, nicht als fünfter Slot — Hinzufügen ändert
+   * `this.patterns`/`this.patternIndex` nicht.
+   */
+  addClip({ name, shape, data }) {
+    const clip = { id: nextClipId++, name, shape, data };
+    this.clips.push(clip);
+    return clip;
+  }
+
+  removeClip(id) {
+    this.clips = this.clips.filter((c) => c.id !== id);
+  }
+
+  /** Für project.js — analog zu `sends`/`inserts`, als Sibling-Feld. */
+  serializeClips() {
+    return this.clips.map((c) => ({ name: c.name, shape: c.shape, data: c.data }));
+  }
+
+  deserializeClips(list) {
+    this.clips = (list ?? []).map((c) => ({ id: nextClipId++, ...c }));
   }
 
   /* ---------- Faceplate ---------- */
