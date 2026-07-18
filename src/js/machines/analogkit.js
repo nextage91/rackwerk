@@ -516,6 +516,25 @@ export class AnalogKit extends Machine {
       }
     }
 
+    // Spur-Sends genauso automatisierbar wie Tune/Decay/Level/Snap — eigener
+    // Apply-Pfad über setTrackSend() statt Rohwert-Zuweisung, damit der
+    // Send-Gain-Node beim Abspielen einer Lane auch wirklich rampt.
+    for (const [param, which] of [['sendDelay', 'delay'], ['sendReverb', 'reverb']]) {
+      const applyForKey = (key, value) => {
+        const trIdx = parseInt(key.split(':')[1], 10);
+        this.setTrackSend(trIdx, which, value);
+      };
+      automation.registerDynamic(
+        this.knobs[param],
+        () => `${this.id}:${this.selected}:${param}`,
+        applyForKey,
+      );
+      for (let ti = 0; ti < this.tracks.length; ti++) {
+        const key = `${this.id}:${ti}:${param}`;
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+      }
+    }
+
     const pads = document.createElement('div');
     pads.className = 'pads';
     this.padEls = this.tracks.map((tr, i) => {
@@ -584,7 +603,7 @@ export class AnalogKit extends Machine {
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
