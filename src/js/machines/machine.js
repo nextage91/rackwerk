@@ -220,6 +220,11 @@ export class Machine {
     this.sendReverb.connect(engine.reverbBus);
 
     machines.add(this);
+    // Reicht die neue Maschine die hörbare Menge wieder von "niemand" auf
+    // "jemand" (z. B. New Session direkt nach dem letzten dispose(), das
+    // die Master-FX-Rückführung geschlossen hat) -- sonst bliebe sie ohne
+    // einen manuellen Mute/Solo-Klick für immer stumm geschaltet.
+    refreshGates();
 
     /** @type {HTMLElement|null} */
     this.el = null;

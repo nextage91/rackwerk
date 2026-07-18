@@ -60,6 +60,11 @@ class MasterFX {
     this.params = { ...FX_DEFAULTS };
     this.el = null;
     this.#irTimer = null;
+    // Letzter von setReturnAudible() gesetzter Sollzustand -- flushTails()
+    // muss NACH dem Neuaufbau genau dorthin zurückkehren, nicht blind auf
+    // 1 (sonst hebelt ein Flush, der GENAU WEIL "niemand mehr hörbar"
+    // ausgelöst wurde, dieses Schließen sofort wieder auf).
+    this.#audible = true;
   }
 
   /** Auf Werkseinstellung zurück (für „Neue Session"). */
@@ -68,6 +73,7 @@ class MasterFX {
   }
 
   #irTimer;
+  #audible;
 
   /** Nach engine.unlock() aufrufen — baut die Effekt-Ketten an die Busse. */
   init() {
@@ -149,7 +155,10 @@ class MasterFX {
       engine.reverbBus.disconnect(this.convolver);
       this.#buildDelayChain(ctx);
       this.#buildReverbChain(ctx);
-      this.returnGate.gain.setTargetAtTime(1, engine.now, 0.008);
+      // Zurück auf den AKTUELLEN Sollzustand, nicht blind auf 1 -- sonst
+      // hebelt ein Flush, der gerade WEIL "niemand mehr hörbar" ausgelöst
+      // wurde (s. machine.js#refreshGates), das Schließen sofort wieder aus.
+      this.returnGate.gain.setTargetAtTime(this.#audible ? 1 : 0, engine.now, 0.008);
     }, 60);
   }
 
@@ -199,6 +208,7 @@ class MasterFX {
   /** Von machine.js' refreshGates() bei jeder Mute/Solo-Änderung aufgerufen
    *  — schließt die Rückführung, sobald keine Maschine mehr hörbar ist. */
   setReturnAudible(audible) {
+    this.#audible = audible;
     this.returnGate?.gain.setTargetAtTime(audible ? 1 : 0, engine.now, 0.02);
   }
 
