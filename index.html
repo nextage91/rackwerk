@@ -925,6 +925,8 @@ button {
   touch-action: manipulation;
 }
 .m-btn:active { transform: translateY(1px); }
+.m-btn:disabled { opacity: .35; }
+.m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
@@ -1550,6 +1552,59 @@ x-knob.has-auto .knob__dial::after {
   margin-right: 2px;
   text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
+
+/* ===================== Insert-FX (frei bestückbare Effektkette) ===================== */
+.machine__row--inserts {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.inserts { display: flex; flex-direction: column; gap: 8px; }
+.inserts:empty { display: none; }
+.inserts__add {
+  align-self: flex-start;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.insert-row {
+  padding: 8px 10px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  box-shadow: 0 1px 0 var(--edge-light) inset;
+}
+.insert-row.is-bypassed { opacity: .5; }
+.insert-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.insert-row__name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+}
+.insert-row__actions { display: flex; gap: 4px; }
+.insert-row__actions .m-btn {
+  min-width: 30px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.insert-row__bypass.is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+.insert-row__params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 6px;
+  margin-top: 8px;
+}
+
+/* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
+   (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */
+.sheet--insert-picker { z-index: 60; }
 
 /* ===================== VU-Meter (LED-Kette im Master-Header) ===================== */
 .vu {
@@ -13901,6 +13956,227 @@ const midiToHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
 return { noise, env, autoStop, midiToHz };
 })();
 
+/* ===== js/core/inserts.js ===== */
+const { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES } = (() => {
+/**
+ * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
+ * (Compressor, EQ, Drive/Saturation).
+ *
+ * Jeder Insert ist ein eigenständiger Mini-Graph mit eingebautem
+ * Dry/Wet-Bypass:
+ *
+ *   input ─┬─ dryGain ────────────────┬─ output
+ *          └─ [Effekt-Kette] ─ wetGain┘
+ *
+ * setBypass() schaltet nur dry/wet um — die AUSSENVERKABELUNG (wie die
+ * Insert-Kette in machine.js hintereinandergehängt wird) bleibt dabei
+ * unberührt, das Rewiring der Kette passiert nur beim Hinzufügen/
+ * Entfernen/Verschieben eines Inserts, nicht beim Bypass-Toggle.
+ */
+
+/** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
+ *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
+ *  Harmonische), bei amount=1 volle Sättigung (K=30, praktisch hartes
+ *  Clipping). Ein reiner `tanh(k*x)` mit k über amount skaliert (k=1
+ *  bei amount=0) klingt schon bei niedrigem amount hörbar verzerrt, weil
+ *  selbst k=1 spürbar von der Identität abweicht — das Blending macht
+ *  den Regler über den ganzen Bereich nutzbar, von ganz sauber bis hart. */
+function makeDriveCurve(amount) {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const K = 30;
+  const norm = Math.tanh(K);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    const driven = Math.tanh(K * x) / norm;
+    curve[i] = (1 - amount) * x + amount * driven;
+  }
+  return curve;
+}
+
+const DEFS = {
+  comp: {
+    name: 'Compressor',
+    defaults: { threshold: -24, ratio: 4, attack: 0.01, release: 0.25, makeup: 1 },
+    build(ctx, p) {
+      const node = ctx.createDynamicsCompressor();
+      node.threshold.value = p.threshold;
+      node.ratio.value = p.ratio;
+      node.attack.value = p.attack;
+      node.release.value = p.release;
+      node.knee.value = 24;
+      const makeup = ctx.createGain();
+      makeup.gain.value = p.makeup;
+      node.connect(makeup);
+      return {
+        input: node,
+        output: makeup,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'threshold') node.threshold.setTargetAtTime(v, t, 0.01);
+          else if (key === 'ratio') node.ratio.setTargetAtTime(v, t, 0.01);
+          else if (key === 'attack') node.attack.setTargetAtTime(v, t, 0.01);
+          else if (key === 'release') node.release.setTargetAtTime(v, t, 0.01);
+          else if (key === 'makeup') makeup.gain.setTargetAtTime(v, t, 0.01);
+        },
+        dispose() { node.disconnect(); makeup.disconnect(); },
+      };
+    },
+  },
+  eq: {
+    name: 'EQ',
+    // Bewusst EIN Band (nicht fest 3-bandig) — die freie Kette erlaubt es,
+    // bei Bedarf mehrere EQ-Instanzen zu stapeln (Low-Shelf + Peak + High-
+    // Shelf), passt zur gewählten "flexiblen Kette" statt einer festen.
+    defaults: { type: 'peaking', freq: 1000, gain: 0, q: 1 },
+    build(ctx, p) {
+      const node = ctx.createBiquadFilter();
+      node.type = p.type;
+      node.frequency.value = p.freq;
+      node.gain.value = p.gain;
+      node.Q.value = p.q;
+      return {
+        input: node,
+        output: node,
+        setParam(key, v) {
+          if (key === 'type') node.type = v;
+          else if (key === 'freq') node.frequency.setTargetAtTime(v, engine.now, 0.01);
+          else if (key === 'gain') node.gain.setTargetAtTime(v, engine.now, 0.01);
+          else if (key === 'q') node.Q.setTargetAtTime(v, engine.now, 0.01);
+        },
+        dispose() { node.disconnect(); },
+      };
+    },
+  },
+  drive: {
+    name: 'Drive',
+    defaults: { drive: 0.4, tone: 0.6, level: 0.8 },
+    build(ctx, p) {
+      const shaper = ctx.createWaveShaper();
+      shaper.oversample = '4x';
+      shaper.curve = makeDriveCurve(p.drive);
+      const tone = ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.Q.value = 0.7;
+      tone.frequency.value = 400 * Math.pow(12000 / 400, p.tone);
+      const level = ctx.createGain();
+      level.gain.value = p.level;
+      shaper.connect(tone);
+      tone.connect(level);
+      return {
+        input: shaper,
+        output: level,
+        setParam(key, v) {
+          if (key === 'drive') shaper.curve = makeDriveCurve(v);
+          else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
+          else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
+        },
+        dispose() { shaper.disconnect(); tone.disconnect(); level.disconnect(); },
+      };
+    },
+  },
+};
+
+const INSERT_TYPES = Object.keys(DEFS);
+function insertMeta(type) {
+  return { name: DEFS[type].name, defaults: { ...DEFS[type].defaults } };
+}
+
+/** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
+ *  den DSP-Defaults, weil die UI mehr wissen muss als der Audiograph. */
+const UI_PARAMS = {
+  comp: [
+    { key: 'threshold', label: 'Thresh', min: -60, max: 0, unit: 'dB' },
+    { key: 'ratio', label: 'Ratio', min: 1, max: 20, unit: ':1' },
+    { key: 'attack', label: 'Attack', min: 0.001, max: 0.5, curve: 'log', unit: 's' },
+    { key: 'release', label: 'Release', min: 0.02, max: 1, curve: 'log', unit: 's' },
+    { key: 'makeup', label: 'Makeup', min: 0, max: 4, unit: 'x' },
+  ],
+  eq: [
+    { key: 'freq', label: 'Freq', min: 20, max: 20000, curve: 'log', unit: 'Hz' },
+    { key: 'gain', label: 'Gain', min: -24, max: 24, unit: 'dB' },
+    { key: 'q', label: 'Q', min: 0.1, max: 10, curve: 'log', unit: '' },
+  ],
+  drive: [
+    { key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' },
+    { key: 'tone', label: 'Tone', min: 0, max: 1, unit: '' },
+    { key: 'level', label: 'Level', min: 0, max: 2, unit: '' },
+  ],
+};
+
+/** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
+const EQ_TYPES = [
+  { value: 'lowshelf', label: 'Low Shelf' },
+  { value: 'peaking', label: 'Peak' },
+  { value: 'highshelf', label: 'High Shelf' },
+];
+
+let nextInsertId = 1;
+
+/**
+ * Baut einen Insert. `saved` (optional) = { params, bypassed } aus einem
+ * vorher gespeicherten Projekt — fehlende Parameter fallen auf die
+ * Effekt-Defaults zurück (z. B. wenn ein neuer Parameter dazukommt).
+ */
+function createInsert(type, saved = null) {
+  const def = DEFS[type];
+  if (!def) throw new Error(`Unbekannter Insert-Typ: ${type}`);
+  const ctx = engine.ctx;
+  const params = { ...def.defaults, ...saved?.params };
+  const bypassed = saved?.bypassed ?? false;
+
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const dryGain = ctx.createGain();
+  const wetGain = ctx.createGain();
+  // Direkt setzen (nicht rampen) — beim Bau steht noch nichts an, ein
+  // Ramp würde nur unnötig verzögern, wann der Insert "fertig" ist.
+  dryGain.gain.value = bypassed ? 1 : 0;
+  wetGain.gain.value = bypassed ? 0 : 1;
+  const effect = def.build(ctx, params);
+
+  input.connect(dryGain);
+  dryGain.connect(output);
+  input.connect(effect.input);
+  effect.output.connect(wetGain);
+  wetGain.connect(output);
+
+  const insert = {
+    id: nextInsertId++,
+    type,
+    name: def.name,
+    params,
+    bypassed,
+    input,
+    output,
+    setParam(key, value) {
+      params[key] = value;
+      effect.setParam(key, value);
+    },
+    setBypass(b) {
+      insert.bypassed = b;
+      const t = engine.now;
+      dryGain.gain.setTargetAtTime(b ? 1 : 0, t, 0.01);
+      wetGain.gain.setTargetAtTime(b ? 0 : 1, t, 0.01);
+    },
+    serialize() {
+      return { type, params: { ...params }, bypassed: insert.bypassed };
+    },
+    dispose() {
+      input.disconnect();
+      output.disconnect();
+      dryGain.disconnect();
+      wetGain.disconnect();
+      effect.dispose();
+    },
+  };
+
+  return insert;
+}
+
+return { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES };
+})();
+
 /* ===== js/core/transport.js ===== */
 const { transport, STEPS_PER_BAR } = (() => {
 /**
@@ -15295,6 +15571,44 @@ let nextId = 1;
 /** Alle lebenden Maschinen — für die Solo-Koordination über das ganze Rack. */
 const machines = new Set();
 
+/** Eine einzige, wiederverwendete Sheet-Instanz für "+ Insert Effect" —
+ *  jede Maschine bräuchte sonst ihr eigenes Picker-Markup, dabei kann
+ *  ohnehin nie mehr als eines gleichzeitig offen sein (modal). */
+let insertPickerEl = null;
+function openInsertPicker(onPick) {
+  if (!insertPickerEl) {
+    insertPickerEl = document.createElement('div');
+    insertPickerEl.className = 'sheet sheet--insert-picker';
+    insertPickerEl.hidden = true;
+    insertPickerEl.innerHTML = `
+      <div class="sheet__backdrop" data-close></div>
+      <div class="sheet__panel" role="dialog" aria-label="Insert effect">
+        <div class="sheet__grip"></div>
+        <h2 class="sheet__title">Insert Effect</h2>
+        <div class="sheet__list">
+          ${INSERT_TYPES.map((type) => `
+            <button type="button" class="sheet__item" data-type="${type}">
+              <span class="sheet__name">${insertMeta(type).name}</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(insertPickerEl);
+    insertPickerEl.querySelector('[data-close]').addEventListener('click', () => {
+      insertPickerEl.hidden = true;
+    });
+    insertPickerEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-type]');
+      if (!btn) return;
+      insertPickerEl.hidden = true;
+      insertPickerEl._onPick?.(btn.dataset.type);
+    });
+  }
+  insertPickerEl._onPick = onPick;
+  insertPickerEl.hidden = false;
+}
+
 /**
  * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
  * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
@@ -15328,9 +15642,15 @@ class Machine {
     /** @type {GainNode} Mute/Solo-Gate — getrennt vom Volume, damit
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
-    this.output.connect(this.panner);
     this.panner.connect(this.gate);
     this.gate.connect(engine.masterBus);
+
+    /** @type {Array<ReturnType<typeof createInsert>>} Insert-FX-Kette
+     *  zwischen Output und Panner — frei bestückbar (0..n Instanzen,
+     *  beliebige Reihenfolge). Leer verbindet #rewireInsertChain()
+     *  Output direkt an den Panner. */
+    this.inserts = [];
+    this.#rewireInsertChain();
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
      *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
@@ -15429,6 +15749,70 @@ class Machine {
     if (rk) rk.value = reverb;
   }
 
+  /* ---------- Insert-FX ---------- */
+
+  /** Verbindet Output -> insert[0] -> insert[1] -> ... -> Panner neu.
+   *  output/insert-outputs haben immer nur EIN Ziel, disconnect() ohne
+   *  Argument trennt also genau die eine bestehende Verbindung. */
+  #rewireInsertChain() {
+    this.output.disconnect();
+    for (const insert of this.inserts) insert.output.disconnect();
+    let prev = this.output;
+    for (const insert of this.inserts) {
+      prev.connect(insert.input);
+      prev = insert.output;
+    }
+    prev.connect(this.panner);
+  }
+
+  addInsert(type) {
+    const insert = createInsert(type);
+    this.inserts.push(insert);
+    this.#rewireInsertChain();
+    this.#renderInserts();
+    return insert;
+  }
+
+  removeInsert(id) {
+    const idx = this.inserts.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const [insert] = this.inserts.splice(idx, 1);
+    this.#rewireInsertChain();
+    insert.dispose();
+    this.#renderInserts();
+  }
+
+  moveInsert(id, dir) {
+    const idx = this.inserts.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const j = idx + dir;
+    if (j < 0 || j >= this.inserts.length) return;
+    [this.inserts[idx], this.inserts[j]] = [this.inserts[j], this.inserts[idx]];
+    this.#rewireInsertChain();
+    this.#renderInserts();
+  }
+
+  setInsertBypass(id, bypassed) {
+    this.inserts.find((i) => i.id === id)?.setBypass(bypassed);
+  }
+
+  setInsertParam(id, key, value) {
+    this.inserts.find((i) => i.id === id)?.setParam(key, value);
+  }
+
+  /** Für project.js — analog zu `sends`, als Sibling-Feld serialisiert,
+   *  nicht Teil der Unterklassen-eigenen serialize()/deserialize(). */
+  serializeInserts() {
+    return this.inserts.map((i) => i.serialize());
+  }
+
+  deserializeInserts(list) {
+    for (const insert of this.inserts) insert.dispose();
+    this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
+    this.#rewireInsertChain();
+    this.#renderInserts();
+  }
+
   /* ---------- Faceplate ---------- */
   render() {
     const { name, type, color, model = 'RW-00' } = this.constructor.meta;
@@ -15523,6 +15907,23 @@ class Machine {
     });
     el.querySelector('.machine__body').appendChild(sendsRow);
 
+    // Insert-FX — frei bestückbare Effektkette zwischen Output und Panner,
+    // gilt automatisch für jede Maschine (generisch in der Basisklasse).
+    const insertsSection = document.createElement('div');
+    insertsSection.className = 'machine__row machine__row--inserts';
+    insertsSection.innerHTML = `
+      <div class="inserts" data-inserts></div>
+      <button type="button" class="m-btn inserts__add" data-add-insert>+ Insert Effect</button>
+    `;
+    insertsSection.querySelector('[data-add-insert]').addEventListener('click', () => {
+      openInsertPicker((type) => {
+        this.addInsert(type);
+      });
+    });
+    el.querySelector('.machine__body').appendChild(insertsSection);
+    this.insertsListEl = insertsSection.querySelector('[data-inserts]');
+    this.#renderInserts();
+
     // Knob-Stellungen mit dem (ggf. geladenen) Zustand synchronisieren —
     // die value-Attribute im Markup sind nur die Werks-Defaults
     for (const knob of el.querySelectorAll('x-knob[data-p]')) {
@@ -15547,6 +15948,69 @@ class Machine {
     this.el = el;
     this.ledEl = el.querySelector('[data-led]');
     return el;
+  }
+
+  /** Baut die komplette Insert-Liste neu aus this.inserts — einfacher als
+   *  gezieltes DOM-Patchen und unkritisch, weil nur bei add/remove/move/
+   *  bypass aufgerufen wird (Knob-Ziehen selbst löst KEIN Re-Render aus,
+   *  bleibt also während des Drags ungestört). */
+  #renderInserts() {
+    if (!this.insertsListEl) return;
+    this.insertsListEl.innerHTML = this.inserts.map((insert, idx) => {
+      const paramDefs = UI_PARAMS[insert.type] ?? [];
+      const knobsHtml = paramDefs.map((def) => `
+        <x-knob label="${def.label}" min="${def.min}" max="${def.max}"
+          value="${insert.params[def.key]}"
+          ${def.curve ? `curve="${def.curve}"` : ''}
+          ${def.unit ? `unit="${def.unit}"` : ''}
+          data-insert-id="${insert.id}" data-insert-param="${def.key}"></x-knob>
+      `).join('');
+      const eqTypeHtml = insert.type === 'eq' ? `
+        <div class="seg">
+          ${EQ_TYPES.map((t) => `
+            <button type="button" class="seg__btn${insert.params.type === t.value ? ' is-active' : ''}" data-eq-type="${t.value}">${t.label}</button>
+          `).join('')}
+        </div>
+      ` : '';
+      return `
+        <div class="insert-row${insert.bypassed ? ' is-bypassed' : ''}" data-insert-id="${insert.id}">
+          <div class="insert-row__head">
+            <span class="insert-row__name">${insert.name}</span>
+            <div class="insert-row__actions">
+              <button type="button" class="m-btn insert-row__move" data-move="-1" aria-label="Move up" ${idx === 0 ? 'disabled' : ''}>▲</button>
+              <button type="button" class="m-btn insert-row__move" data-move="1" aria-label="Move down" ${idx === this.inserts.length - 1 ? 'disabled' : ''}>▼</button>
+              <button type="button" class="m-btn insert-row__bypass${insert.bypassed ? ' is-active' : ''}" data-bypass>BYP</button>
+              <button type="button" class="m-btn insert-row__remove" data-remove aria-label="Remove insert">✕</button>
+            </div>
+          </div>
+          ${eqTypeHtml}
+          <div class="insert-row__params">${knobsHtml}</div>
+        </div>
+      `;
+    }).join('');
+
+    for (const row of this.insertsListEl.querySelectorAll('.insert-row')) {
+      const id = parseInt(row.dataset.insertId, 10);
+      row.querySelector('[data-move="-1"]')?.addEventListener('click', () => this.moveInsert(id, -1));
+      row.querySelector('[data-move="1"]')?.addEventListener('click', () => this.moveInsert(id, 1));
+      row.querySelector('[data-bypass]').addEventListener('click', () => {
+        const insert = this.inserts.find((i) => i.id === id);
+        this.setInsertBypass(id, !insert.bypassed);
+        this.#renderInserts();
+      });
+      row.querySelector('[data-remove]').addEventListener('click', () => this.removeInsert(id));
+      for (const knob of row.querySelectorAll('x-knob[data-insert-param]')) {
+        knob.addEventListener('input', (e) => {
+          this.setInsertParam(id, knob.dataset.insertParam, e.detail.value);
+        });
+      }
+      for (const btn of row.querySelectorAll('[data-eq-type]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'type', btn.dataset.eqType);
+          this.#renderInserts();
+        });
+      }
+    }
   }
 
   #ledTimer;
@@ -15616,6 +16080,7 @@ class Machine {
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
       this.#meterAnalyser?.disconnect();
+      for (const insert of this.inserts) insert.dispose();
     }, 120);
     this.el?.remove();
   }
@@ -17889,9 +18354,12 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
  * Format (v1):
- * { v: 1, bpm, fx?, machines: [ { type, state, sends?, lanes } ] }
+ * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, lanes } ] }
  *   - state: maschinenspezifisch (machine.serialize/deserialize)
  *   - sends: FX-Send-Pegel der Maschine (Basisklasse)
+ *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
+ *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
+ *     Teil des unterklassen-eigenen state)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
@@ -17910,6 +18378,7 @@ function serializeProject(rack) {
       type: m.constructor.meta.type,
       state: m.serialize(),
       sends: { ...m.sends },
+      inserts: m.serializeInserts(),
       lanes: automation.exportLanes(m.id),
     })),
   };
@@ -17941,6 +18410,7 @@ function loadProject(rack, data) {
     if (!MachineClass) continue; // unbekannter Typ (z. B. ältere/neuere Version)
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
+    if (md.inserts) machine.deserializeInserts(md.inserts);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
   }
@@ -17960,6 +18430,7 @@ function importMachines(rack, data) {
     if (!MachineClass) continue;
     const machine = rack.addMachine(MachineClass, md.state);
     if (md.sends) machine.setSends(md.sends);
+    if (md.inserts) machine.deserializeInserts(md.inserts);
     automation.importLanes(machine.id, md.lanes);
     machine.onLanesImported?.();
     added.push(machine);

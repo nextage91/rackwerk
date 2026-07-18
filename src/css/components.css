@@ -118,6 +118,8 @@
   touch-action: manipulation;
 }
 .m-btn:active { transform: translateY(1px); }
+.m-btn:disabled { opacity: .35; }
+.m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
@@ -743,6 +745,59 @@ x-knob.has-auto .knob__dial::after {
   margin-right: 2px;
   text-shadow: 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07);
 }
+
+/* ===================== Insert-FX (frei bestückbare Effektkette) ===================== */
+.machine__row--inserts {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.inserts { display: flex; flex-direction: column; gap: 8px; }
+.inserts:empty { display: none; }
+.inserts__add {
+  align-self: flex-start;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.insert-row {
+  padding: 8px 10px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  box-shadow: 0 1px 0 var(--edge-light) inset;
+}
+.insert-row.is-bypassed { opacity: .5; }
+.insert-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.insert-row__name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+}
+.insert-row__actions { display: flex; gap: 4px; }
+.insert-row__actions .m-btn {
+  min-width: 30px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.insert-row__bypass.is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+.insert-row__params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 6px;
+  margin-top: 8px;
+}
+
+/* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
+   (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */
+.sheet--insert-picker { z-index: 60; }
 
 /* ===================== VU-Meter (LED-Kette im Master-Header) ===================== */
 .vu {
