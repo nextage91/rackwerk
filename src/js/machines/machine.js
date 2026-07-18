@@ -134,6 +134,10 @@ function openInsertPicker(onPick) {
   insertPickerEl.hidden = false;
 }
 
+/** Zuletzt hörbare Maschinen — Vergleichsbasis, um zu erkennen, ob ein
+ *  Mute/Solo-Wechsel die hörbare Menge SCHRUMPFEN lässt (s. refreshGates). */
+let lastAudible = new Set();
+
 /**
  * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
  * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
@@ -141,19 +145,32 @@ function openInsertPicker(onPick) {
  * Schließt zusätzlich die gemeinsame Master-FX-Rückführung (masterFX.
  * setReturnAudible), sobald KEINE Maschine mehr hörbar ist — sonst bliebe
  * ein bereits angeregter Delay-/Reverb-Schwanz weiterspielen, obwohl schon
- * alles gemutet (bzw. nichts soloed) ist ("solo in place").
+ * alles gemutet (bzw. nichts soloed) ist.
+ *
+ * Schrumpft die hörbare Menge nur (z. B. eine von mehreren spielenden
+ * Maschinen wird soloed, ohne dass am Ende NIEMAND mehr hörbar ist —
+ * setReturnAudible allein greift dann nicht), flusht flushTails() Delay
+ * und Reverb komplett: sonst hört man beim Soloen weiter den Nachhall
+ * der gerade stumm gewordenen Spuren mit ("solo in place"). Wächst die
+ * Menge nur (z. B. Entmuten), ist nichts Störendes drin — kein Flush,
+ * das würde nur einen gerade legitim ausklingenden Nachhall unnötig
+ * unterbrechen.
  */
 function refreshGates() {
   const soloActive = [...machines].some((m) => m.soloed);
   const t = engine.now;
   let anyAudible = false;
+  const audibleNow = new Set();
   for (const m of machines) {
     const open = !m.muted && (!soloActive || m.soloed);
-    if (open) anyAudible = true;
+    if (open) { anyAudible = true; audibleNow.add(m); }
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
   }
   masterFX.setReturnAudible(anyAudible);
+  const shrank = [...lastAudible].some((m) => !audibleNow.has(m));
+  if (shrank) masterFX.flushTails();
+  lastAudible = audibleNow;
 }
 
 export class Machine {
