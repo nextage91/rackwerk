@@ -63,11 +63,19 @@ function sd(ctx, t, dest, p) {
   // "Ping". Beim Original bekommt jeder Oszillator eine EIGENE Hüllkurve,
   // und der tiefere Ton (mehr "Fell") klingt spürbar länger nach als der
   // höhere ("Ping") — nicht ein gemeinsamer Bus mit einer Hüllkurve.
-  for (const { f, durMul, mix } of [{ f: 180, durMul: 1.0, mix: 0.32 }, { f: 330, durMul: 0.6, mix: 0.24 }]) {
+  //
+  // Pegel-Balance (gemessen per gleitendem 50ms-RMS-Fenster gegen BD): SD
+  // lag ~10dB unter der Kick — hörbar zu leise im Kit. Body-/Rausch-Dauern
+  // etwas gestreckt (mehr wahrgenommene Lautheit ohne den Attack-Peak zu
+  // erhöhen, da env() unabhängig von der Dauer denselben Spitzenwert hat)
+  // plus moderater Pegel-Nachschlag — SD hat wenig Peak-Headroom (mehrere
+  // gleichzeitig einsetzende Schichten), daher hier bewusst zurückhaltender
+  // als bei den anderen leisen Stimmen unten.
+  for (const { f, durMul, mix } of [{ f: 180, durMul: 1.0, mix: 0.38 }, { f: 330, durMul: 0.6, mix: 0.28 }]) {
     const o = ctx.createOscillator();
     o.type = 'triangle';
     o.frequency.value = f * p.tune;
-    const dur = 0.12 * p.decay * durMul;
+    const dur = 0.17 * p.decay * durMul;
     const g = env(ctx, t, mix * p.level, dur);
     o.connect(g).connect(dest);
     autoStop(o, t, dur, [g]);
@@ -82,18 +90,18 @@ function sd(ctx, t, dest, p) {
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
-  const lpg = env(ctx, t, 0.4 * p.level, 0.15 * p.decay);
+  const lpg = env(ctx, t, 0.46 * p.level, 0.2 * p.decay);
   nLow.connect(lp).connect(lpg).connect(dest);
-  autoStop(nLow, t, 0.15 * p.decay, [lp, lpg]);
+  autoStop(nLow, t, 0.2 * p.decay, [lp, lpg]);
 
   const nHigh = ctx.createBufferSource();
   nHigh.buffer = noise(ctx);
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
-  const hpg = env(ctx, t, 0.4 * p.level, 0.08 * p.decay);
+  const hpg = env(ctx, t, 0.46 * p.level, 0.1 * p.decay);
   nHigh.connect(hp).connect(hpg).connect(dest);
-  autoStop(nHigh, t, 0.08 * p.decay, [hp, hpg]);
+  autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg]);
 }
 
 function rs(ctx, t, dest, p) {
@@ -104,21 +112,30 @@ function rs(ctx, t, dest, p) {
   // gleichzeitig "angeschlagene" Resonanzen. Das ergibt den mehrschichtigen
   // Klack statt eines einzelnen Buzz-Tons.
   const RS_RESONANCES = [520, 1200, 2400];
-  const dur = 0.02 * p.decay;
+  // Etwas länger als das "reine" 909-Original klingen lassen (0.02 → 0.08s
+  // Basisdauer) — kostet keinen zusätzlichen Peak (env() erreicht denselben
+  // Spitzenwert unabhängig von der Ausklingzeit), gibt dem Rimshot im Kit
+  // aber spürbar mehr wahrgenommene Lautheit/Präsenz gegen die Kick.
+  const dur = 0.08 * p.decay;
   const n = ctx.createBufferSource();
   n.buffer = noise(ctx);
   const nodes = [];
-  // Makeup-Gain: ein enges Q=12-Bandpass lässt von breitbandigem Rauschen
-  // nur einen schmalen Frequenzausschnitt durch (anders als vorher, wo ein
+  // Makeup-Gain: ein enges Bandpass lässt von breitbandigem Rauschen nur
+  // einen schmalen Frequenzausschnitt durch (anders als vorher, wo ein
   // Oszillator exakt auf der Resonanz sass) — ohne Kompensation war der
-  // Rimshot fast unhörbar leise (gemessen: Peak 0.048 statt der 0.267 hier,
-  // per OfflineAudioContext gegen die 3 Filter kalibriert).
+  // Rimshot fast unhörbar leise. Q hier bewusst von 12 auf 6 gesenkt: bei
+  // reinem Rauschen als Anregung (statt eines exakt getroffenen Tons)
+  // erzeugt ein sehr enges Filter je nach Zufalls-Buffer teils extreme
+  // Ausreisser (gemessen über 40 unabhängige Rausch-Seeds bei Q=12: Peak
+  // schwankte zwischen 0.95 und 1.78 bei GLEICHEM Gain!). Q=6 dämpft diese
+  // Streuung; Gain=3 hält selbst den schlechtesten von 40 gemessenen Fällen
+  // sicher unter der etablierten Kick-Referenzobergrenze (~1.2).
   for (const f of RS_RESONANCES) {
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = f * p.tune;
-    bp.Q.value = 12;
-    const g = env(ctx, t, 4 * p.level, dur);
+    bp.Q.value = 6;
+    const g = env(ctx, t, 3 * p.level, dur);
     n.connect(bp).connect(g).connect(dest);
     nodes.push(bp, g);
   }
@@ -127,6 +144,9 @@ function rs(ctx, t, dest, p) {
 
 function cp(ctx, t, dest, p) {
   // 4 schnelle Retrigger statt 3 (BeatBox) — etwas dichter/heller gefiltert.
+  // Pegel-Balance: die Retrigger-Peaks sassen im gemessenen Kit weit unten
+  // (Peak nur ~0.26 bei level=0.9, viel Headroom übrig) — Nachschlag ~3x,
+  // damit der Clap im Kit nicht untergeht.
   const n = ctx.createBufferSource();
   n.buffer = noise(ctx);
   const bp = ctx.createBiquadFilter();
@@ -137,10 +157,10 @@ function cp(ctx, t, dest, p) {
   const g = ctx.createGain();
   const dur = 0.044 + 0.22 * p.decay;
   for (let i = 0; i < 4; i++) {
-    g.gain.setValueAtTime(0.85 * p.level, t + i * 0.011);
-    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.011 + 0.008);
+    g.gain.setValueAtTime(2.55 * p.level, t + i * 0.011);
+    g.gain.linearRampToValueAtTime(0.6 * p.level, t + i * 0.011 + 0.008);
   }
-  g.gain.setValueAtTime(0.65 * p.level, t + 0.044);
+  g.gain.setValueAtTime(1.95 * p.level, t + 0.044);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
 
   n.connect(bp).connect(g).connect(dest);
@@ -216,15 +236,17 @@ const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level }
 function rc(ctx, t, dest, p) {
   // Ride: schmaleres Bandpass (mehr "Ping"-Charakter als die Crash) plus
   // ein kurzer Sinus-Ping für einen definierten Attack — sonst verwäscht
-  // die reine Oszillatorsumme zu einem unklaren Rauschband.
+  // die reine Oszillatorsumme zu einem unklaren Rauschband. Beide Pegel
+  // (Metall-Anteil + Ping) moderat angehoben — Ride sass im Kit deutlich
+  // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     freq: 350 * p.tune, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
-    dur: 1.0 * p.decay, level: 0.38 * p.level,
+    dur: 1.0 * p.decay, level: 0.58 * p.level,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
   o.frequency.value = 700 * p.tune;
-  const g = env(ctx, t, 0.3 * p.level, 0.15 * p.decay);
+  const g = env(ctx, t, 0.42 * p.level, 0.15 * p.decay);
   o.connect(g).connect(dest);
   autoStop(o, t, 0.15 * p.decay, [g]);
 }
@@ -239,9 +261,13 @@ const TRACK_DEFS = [
   { name: 'HT', synth: tomVoice(190) },
   { name: 'RS', synth: rs },
   { name: 'CP', synth: cp },
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.06, level: 0.42 }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.35, level: 0.4 }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.5 }) },
+  // Pegel-Balance (gleitendes 50ms-RMS gegen BD gemessen): CH lag ~22dB,
+  // OH ~17dB, CC ~13dB unter der Kick — durMult/level hier angehoben
+  // (CH zusätzlich etwas länger ausklingend statt reinem Klick, kostet
+  // dank env() keinen zusätzlichen Peak), Headroom liess das jeweils zu.
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.84 }) },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.65 }) },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.6 }) },
   { name: 'RC', synth: rc },
 ];
 
