@@ -9,12 +9,17 @@
  * (machine.js) feststellt, dass KEINE Maschine mehr hörbar ist (alles
  * gemutet, oder solo aktiv und nichts soloed) — sonst bliebe ein bereits
  * angeregter Delay-/Reverb-Schwanz auch dann noch hörbar, wenn längst
- * nichts mehr neu in den Bus einspeist ("solo in place": beim Soloen soll
- * nur die soloede Maschine zu hören sein, nicht der Reverb-Nachhall
- * anderer, gerade stummgeschalteter Spuren). Einzelne Sends sind schon
- * VOR dem Bus gegatet (siehe oben) — das reicht nicht, weil ein Delay
- * mit hohem Feedback oder ein langer Reverb-Impuls bereits gespeicherte
- * Energie enthält, die kein Gate am Eingang mehr stoppen kann.
+ * nichts mehr neu in den Bus einspeist.
+ *
+ * Das reicht aber NICHT für "solo in place": schrumpft die hörbare Menge
+ * nur (z. B. eine von mehreren spielenden Maschinen wird soloed, die
+ * anderen dadurch stumm), bleibt returnGate offen — der Delay/Reverb
+ * enthält aber noch den bereits gespeicherten Nachhall der jetzt stummen
+ * Spuren, den kein Gate (weder an den Sends noch an der Rückführung)
+ * nachträglich entfernen kann. Einzige Möglichkeit über die Web-Audio-API:
+ * flushTails() baut Delay- und Reverb-Kette komplett neu (verwirft ihren
+ * inneren Zustand), von refreshGates() aufgerufen, sobald die hörbare
+ * Menge schrumpft.
  *
  * Entscheidungen:
  * - Delay ist tempo-synchron (Notenwerte statt Millisekunden). Die Zeit
@@ -74,7 +79,19 @@ class MasterFX {
     this.returnGate = ctx.createGain();
     this.returnGate.connect(engine.masterBus);
 
-    // Delay: Bus → Delay → Ton-Filter → (Feedback zurück | Level → Return)
+    this.#buildDelayChain(ctx);
+    this.#buildReverbChain(ctx);
+
+    // Delay-Zeit folgt dem Tempo (auch bei BPM vom Jam-Host) — einmalig
+    // registriert, überlebt spätere flushTails()-Neuaufbauten unverändert
+    // (liest bei jedem Aufruf das JEWEILS aktuelle this.delay).
+    transport.addListener({
+      onTransport: (ev) => { if (ev === 'bpm') this.#applyDelayTime(); },
+    });
+  }
+
+  /** Delay: Bus → Delay → Ton-Filter → (Feedback zurück | Level → Return) */
+  #buildDelayChain(ctx) {
     this.delay = ctx.createDelay(4); // reicht bis 1/2 bei 40 BPM (3 s)
     this.toneFilter = ctx.createBiquadFilter();
     this.toneFilter.type = 'lowpass';
@@ -90,22 +107,50 @@ class MasterFX {
     this.fb.connect(this.delay);
     this.toneFilter.connect(this.delayOut);
     this.delayOut.connect(this.returnGate);
+    this.#applyDelayTime();
+  }
 
-    // Reverb: Bus → Convolver → Level → Return
+  /** Reverb: Bus → Convolver → Level → Return */
+  #buildReverbChain(ctx) {
     this.convolver = ctx.createConvolver();
     this.revOut = ctx.createGain();
     this.revOut.gain.value = this.params.revLevel;
     engine.reverbBus.connect(this.convolver);
     this.convolver.connect(this.revOut);
     this.revOut.connect(this.returnGate);
-
-    this.#applyDelayTime();
     this.#buildIR();
+  }
 
-    // Delay-Zeit folgt dem Tempo (auch bei BPM vom Jam-Host)
-    transport.addListener({
-      onTransport: (ev) => { if (ev === 'bpm') this.#applyDelayTime(); },
-    });
+  #flushTimer = null;
+
+  /**
+   * Baut Delay- und Reverb-Kette komplett neu — der einzige Weg, einen
+   * bereits angeregten Feedback-/Convolution-Schwanz über die Web-Audio-
+   * API wirklich zu löschen (ein Gate stoppt nur NEUE Energie, der
+   * gespeicherte Zustand in DelayNode/ConvolverNode bleibt sonst
+   * unberührt). Ein kurzes Ducken übers returnGate maskiert den
+   * Node-Wechsel klickfrei. clearTimeout() am Anfang macht schnelles
+   * Hintereinander-Toggeln sicher: nur der jeweils letzte Aufruf baut
+   * tatsächlich neu, kein doppeltes disconnect() auf bereits ersetzten
+   * Knoten.
+   */
+  flushTails() {
+    if (!this.delay) return; // init() noch nicht gelaufen
+    const ctx = engine.ctx;
+    clearTimeout(this.#flushTimer);
+    this.returnGate.gain.cancelScheduledValues(engine.now);
+    this.returnGate.gain.setTargetAtTime(0, engine.now, 0.008);
+    this.#flushTimer = setTimeout(() => {
+      this.#flushTimer = null;
+      this.delay.disconnect(); this.toneFilter.disconnect();
+      this.fb.disconnect(); this.delayOut.disconnect();
+      engine.delayBus.disconnect(this.delay);
+      this.convolver.disconnect(); this.revOut.disconnect();
+      engine.reverbBus.disconnect(this.convolver);
+      this.#buildDelayChain(ctx);
+      this.#buildReverbChain(ctx);
+      this.returnGate.gain.setTargetAtTime(1, engine.now, 0.008);
+    }, 60);
   }
 
   #applyDelayTime() {
