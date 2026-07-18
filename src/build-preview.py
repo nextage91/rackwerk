@@ -42,6 +42,7 @@ MODULES = [
     ("js/machines/polysynth.js", ["PolySynth"]),
     ("js/machines/analogkit.js", ["AnalogKit"]),
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
+    ("js/rack/jam-view.js",     ["initJamView", "renderJamView"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),
     ("js/main.js",              []),
 ]
