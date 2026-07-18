@@ -2,8 +2,19 @@
  * masterFX — Delay + Reverb als Send-Effekte auf dem Master.
  *
  * Signalfluss (Post-Fader-Sends, Mute/Solo nimmt die Sends mit):
- *   machine.gate ─(sendDelay)──▶ engine.delayBus  ─▶ Delay-Kette ─▶ masterBus
- *               └─(sendReverb)─▶ engine.reverbBus ─▶ Convolver   ─▶ masterBus
+ *   machine.gate ─(sendDelay)──▶ engine.delayBus  ─▶ Delay-Kette ─┐
+ *               └─(sendReverb)─▶ engine.reverbBus ─▶ Convolver   ─┴▶ returnGate ─▶ masterBus
+ *
+ * returnGate schließt die GEMEINSAME Rückführung, sobald refreshGates()
+ * (machine.js) feststellt, dass KEINE Maschine mehr hörbar ist (alles
+ * gemutet, oder solo aktiv und nichts soloed) — sonst bliebe ein bereits
+ * angeregter Delay-/Reverb-Schwanz auch dann noch hörbar, wenn längst
+ * nichts mehr neu in den Bus einspeist ("solo in place": beim Soloen soll
+ * nur die soloede Maschine zu hören sein, nicht der Reverb-Nachhall
+ * anderer, gerade stummgeschalteter Spuren). Einzelne Sends sind schon
+ * VOR dem Bus gegatet (siehe oben) — das reicht nicht, weil ein Delay
+ * mit hohem Feedback oder ein langer Reverb-Impuls bereits gespeicherte
+ * Energie enthält, die kein Gate am Eingang mehr stoppen kann.
  *
  * Entscheidungen:
  * - Delay ist tempo-synchron (Notenwerte statt Millisekunden). Die Zeit
@@ -58,7 +69,12 @@ class MasterFX {
     const ctx = engine.ctx;
     if (!ctx || this.delay) return;
 
-    // Delay: Bus → Delay → Ton-Filter → (Feedback zurück | Level → Master)
+    // Gemeinsame Rückführung beider Effekte — schließt bei "niemand hörbar"
+    // (s. Kommentar oben), sonst identisch zu einer direkten Verbindung.
+    this.returnGate = ctx.createGain();
+    this.returnGate.connect(engine.masterBus);
+
+    // Delay: Bus → Delay → Ton-Filter → (Feedback zurück | Level → Return)
     this.delay = ctx.createDelay(4); // reicht bis 1/2 bei 40 BPM (3 s)
     this.toneFilter = ctx.createBiquadFilter();
     this.toneFilter.type = 'lowpass';
@@ -73,15 +89,15 @@ class MasterFX {
     this.toneFilter.connect(this.fb);
     this.fb.connect(this.delay);
     this.toneFilter.connect(this.delayOut);
-    this.delayOut.connect(engine.masterBus);
+    this.delayOut.connect(this.returnGate);
 
-    // Reverb: Bus → Convolver → Level → Master
+    // Reverb: Bus → Convolver → Level → Return
     this.convolver = ctx.createConvolver();
     this.revOut = ctx.createGain();
     this.revOut.gain.value = this.params.revLevel;
     engine.reverbBus.connect(this.convolver);
     this.convolver.connect(this.revOut);
-    this.revOut.connect(engine.masterBus);
+    this.revOut.connect(this.returnGate);
 
     this.#applyDelayTime();
     this.#buildIR();
@@ -133,6 +149,12 @@ class MasterFX {
       for (let i = 0; i < len; i++) data[i] *= scale;
     }
     this.convolver.buffer = buf;
+  }
+
+  /** Von machine.js' refreshGates() bei jeder Mute/Solo-Änderung aufgerufen
+   *  — schließt die Rückführung, sobald keine Maschine mehr hörbar ist. */
+  setReturnAudible(audible) {
+    this.returnGate?.gain.setTargetAtTime(audible ? 1 : 0, engine.now, 0.02);
   }
 
   setParam(key, val) {

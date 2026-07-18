@@ -15,6 +15,7 @@ import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
 import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES } from '../core/inserts.js';
+import { masterFX } from '../core/fx.js';
 
 let nextId = 1;
 
@@ -62,15 +63,23 @@ function openInsertPicker(onPick) {
 /**
  * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
  * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
+ *
+ * Schließt zusätzlich die gemeinsame Master-FX-Rückführung (masterFX.
+ * setReturnAudible), sobald KEINE Maschine mehr hörbar ist — sonst bliebe
+ * ein bereits angeregter Delay-/Reverb-Schwanz weiterspielen, obwohl schon
+ * alles gemutet (bzw. nichts soloed) ist ("solo in place").
  */
 function refreshGates() {
   const soloActive = [...machines].some((m) => m.soloed);
   const t = engine.now;
+  let anyAudible = false;
   for (const m of machines) {
     const open = !m.muted && (!soloActive || m.soloed);
+    if (open) anyAudible = true;
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
   }
+  masterFX.setReturnAudible(anyAudible);
 }
 
 export class Machine {
