@@ -78,6 +78,7 @@
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
         <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song Timeline</button>
         <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
+        <button class="m-btn m-btn--wide" id="btn-open-jam">🕹️ Jam</button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -173,6 +174,17 @@
         <button class="m-btn console__close" id="btn-mixer-close" aria-label="Close mixer" data-close>✕</button>
       </div>
       <div class="mixer-console" id="mixer-list"></div>
+    </div>
+  </div>
+
+  <!-- ===== Jam (Bottom Sheet) ===== -->
+  <div class="sheet sheet--console" id="jam-sheet" hidden>
+    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Jam">
+      <div class="console__head">
+        <h2 class="sheet__title">Jam</h2>
+        <button class="m-btn console__close" id="btn-jam-close" aria-label="Close jam view" data-close>✕</button>
+      </div>
+      <div class="jam-console" id="jam-list"></div>
     </div>
   </div>
 

@@ -717,3 +717,214 @@ button {
 }
 .jam-beat__hint { margin: 0; }
 .sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ===================== Jam: Live-Performance-Konsole ===================== */
+/* Gleiches Grundgerüst wie #mixer-sheet (volles Sheet unter der Transport-
+   Leiste, seitlich scrollende Spalten) -- hier trägt jede Spalte zusätzlich
+   Clip-Liste, X/Y-Pad und die kuratierten Makro-Regler. */
+#jam-sheet .sheet__panel {
+  pointer-events: auto;
+  position: absolute;
+  top: var(--transport-h, 64px);
+  left: 0; right: 0; bottom: 0;
+  border-radius: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px calc(10px + var(--safe-bottom));
+}
+
+.jam-console {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 4px 10px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Eine Spalte pro Maschine: Kopf, dynamische Clip-Liste, STOP, X/Y-Pad,
+   dann Solo/Mute + Fader + 4 Makro-Knobs -- wie ein eigener Kanalzug mit
+   Clip-Launcher obendrauf. */
+.channel {
+  flex: 0 0 156px;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+}
+.channel__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.channel__stripe {
+  width: 4px; height: 18px; flex: 0 0 auto;
+  border-radius: 2px;
+  background: var(--ch-color, var(--lcd-ink));
+  box-shadow: 0 0 6px var(--ch-glow, transparent);
+}
+.channel__name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  line-height: 1.2;
+}
+.channel__name small {
+  display: block;
+  font-weight: 500;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.clips {
+  flex: 1 1 auto;
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+}
+.clips-empty {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-faint);
+  padding: 8px;
+}
+/* Clip-Chip: gleiche Grundoptik wie .patbank__btn/.m-btn, aber als Liste
+   statt fixem A/B/C/D-Raster -- Anzahl ist dynamisch (0..n). */
+.clip {
+  position: relative;
+  flex: 0 0 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: none;               /* Ziehen zum Umsortieren gehört dem Clip */
+  overflow: hidden;
+}
+.clip__label {
+  position: relative;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clip[data-state="playing"] {
+  box-shadow: 0 0 0 2px var(--ch-color, var(--led-play)) inset, 0 2px 4px rgba(0,0,0,.4);
+}
+.clip[data-state="playing"] .clip__label { color: var(--ch-color, var(--led-play)); }
+.clip[data-state="queued"] { animation: clip-queue-pulse .6s ease-in-out infinite; }
+@keyframes clip-queue-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px transparent inset, 0 2px 4px rgba(0,0,0,.4); }
+  50%      { box-shadow: 0 0 0 2px var(--ch-color, var(--lcd-ink)) inset, 0 2px 4px rgba(0,0,0,.4); }
+}
+.clip.is-dragging { z-index: 5; box-shadow: 0 6px 18px rgba(0,0,0,.65); }
+
+.clip-stop {
+  flex: 0 0 auto;
+  min-height: 36px;
+  border-radius: 6px;
+  background: linear-gradient(#3a2622, #271a17);
+  color: #ff8a8a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.clip-stop:active { transform: translateY(1px); }
+
+/* Feste Höhe statt flex:1 -- sonst frisst das Pad den ganzen restlichen
+   Platz und drängt Solo/Mute/Fader/Makros aus der Spalte (schon einmal
+   passiert, s. Verlauf). */
+.xy-wrap { flex: none; height: 108px; }
+.xypad {
+  position: relative;
+  width: 100%; height: 100%;
+  border-radius: var(--r-ctl);
+  background: var(--bg-panel-deep);
+  box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
+  touch-action: none;
+  overflow: hidden;
+}
+.xypad__grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,236,190,.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,236,190,.06) 1px, transparent 1px);
+  background-size: 25% 25%;
+}
+.xypad__dot {
+  position: absolute;
+  width: 14px; height: 14px; margin: -7px;
+  border-radius: 50%;
+  background: var(--ch-color, var(--lcd-ink));
+  box-shadow: 0 0 10px var(--ch-glow, var(--lcd-glow));
+  pointer-events: none;
+}
+.xypad__axis {
+  position: absolute;
+  font-size: 8px;
+  letter-spacing: .1em;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+.xypad__axis--x { right: 4px; bottom: 3px; }
+.xypad__axis--y { left: 4px; top: 3px; }
+
+.strip { flex: none; display: flex; flex-direction: column; gap: 6px; }
+.strip__row { display: flex; gap: 4px; }
+.msbtn {
+  flex: 1 1 0;
+  min-height: 32px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #272219);
+  color: var(--ink-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.msbtn:active { transform: translateY(1px); }
+.msbtn.is-solo.is-active { color: #0f130f; background: linear-gradient(#7fe28e, #4faf5f); }
+.msbtn.is-mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
+
+.fader-row { flex: none; height: 142px; display: flex; align-items: stretch; gap: 8px; }
+.fader-row x-fader { flex: 0 0 44px; }
+
+.macros {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 2px 4px;
+  place-items: center;
+}
+.macros x-knob { --knob-size: 30px; gap: 3px; }
+
+.channel__track {
+  text-align: center;
+  font-size: 10px;
+  color: var(--ink-faint);
+  letter-spacing: .04em;
+}

@@ -17,6 +17,7 @@ import { song } from './core/song.js';
 import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack } from './rack/rack.js';
+import { initJamView, renderJamView } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -80,6 +81,10 @@ function boot() {
     icon: '🎬', label: 'Song Timeline', color: '#ff4d3d',
     onOpen: () => $('#btn-open-song').click(),
   }));
+  $('#rack').appendChild(buildRackShortcut({
+    icon: '🕹️', label: 'Jam', color: '#ffb84d',
+    onOpen: () => $('#btn-open-jam').click(),
+  }));
 
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
@@ -101,6 +106,8 @@ function boot() {
   const jam = wireJamUI(rack);
   wireSongUI(rack);
   wireMixerUI(rack);
+  initJamView(rack);
+  wireJamViewUI();
   wireUndoUI();
   wireOnboardingUI();
 
@@ -913,6 +920,19 @@ function wireMixerUI(rack) {
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
     stopMeters();
+  });
+}
+
+/* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
+function wireJamViewUI() {
+  const sheet = $('#jam-sheet');
+  $('#btn-open-jam').addEventListener('click', () => {
+    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
+    renderJamView($('#jam-list'));
+    sheet.hidden = false;
+  });
+  sheet.querySelector('[data-close]').addEventListener('click', () => {
+    sheet.hidden = true;
   });
 }
 
