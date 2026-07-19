@@ -32,3 +32,15 @@ export function autoStop(src, t, dur, nodes) {
 }
 
 export const midiToHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+/**
+ * Filterhüllkurve (SubSynth + PolySynth, identisch): startet envAmt Oktaven
+ * über dem Cutoff (bis +4 Okt.) und fällt exponentiell auf den Cutoff
+ * zurück — der klassische Pluck/Acid-Charakter. Gilt für Keybed- und
+ * Sequenzer-Stimmen gleich.
+ */
+export function applyFilterEnv(filter, t, params) {
+  const peak = Math.min(16000, params.cutoff * Math.pow(2, params.envAmt * 4));
+  filter.frequency.setValueAtTime(peak, t);
+  filter.frequency.setTargetAtTime(params.cutoff, t, Math.max(0.01, params.fDecay) / 3);
+}

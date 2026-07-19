@@ -9,16 +9,15 @@
  *
  * Der Transpose-Knob (automatisierbar) verschiebt die ganze Voicing in
  * Halbtonschritten — auch live, für bereits klingende (gehaltene) Noten.
+ *
+ * Pattern-Bank/Step-Grid/Jam-Clip-Bindung sitzen in StepSequencedSynth —
+ * hier bleibt nur, was den PolySynth-Klangcharakter (Chord-Voicing) und
+ * die gehaltenen Keybed-Stimmen ausmacht.
  */
-import { Machine } from './machine.js';
+import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
-import { StepSeq, resizePattern } from '../ui/step-seq.js';
-import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz } from '../core/dsp.js';
-import { automation } from '../core/automation.js';
-import { song } from '../core/song.js';
+import { midiToHz, applyFilterEnv } from '../core/dsp.js';
 
 /** Chord-Voicings als Halbtonabstände zur Root-Note. */
 const CHORDS = {
@@ -31,17 +30,13 @@ const CHORDS = {
   sus4:   { label: 'Sus4',   offsets: [0, 5, 7] },
 };
 
-/** Leeres 1-Takt-Pattern (16 Steps aus). */
-const emptyPattern = (len = 16) =>
-  Array.from({ length: len }, () => ({ on: false, midi: 48 }));
-
 /** Headroom pro Einzelstimme — durch Wurzel(Stimmenzahl) geteilt, damit ein
  *  4-stimmiger Maj7 nicht deutlich lauter ist als ein Single-Voicing (grobe
  *  RMS-Kompensation für die Summe unkorrelierter Oszillatoren). Basiswert
  *  wie bei SubSynth (dort ausführlich gegen den Rest des Kits austariert). */
 const VOICE_HEADROOM = 0.6;
 
-export class PolySynth extends Machine {
+export class PolySynth extends StepSequencedSynth {
   static meta = {
     type: 'polysynth',
     name: 'PolySynth',
@@ -69,68 +64,19 @@ export class PolySynth extends Machine {
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
      *  ohne vorprogrammierte Steps. */
-    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }
 
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.pattern = this.patterns[i];
-    this.seq?.setPattern(this.pattern);
-    this.patternBank?.setActive(i);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.pattern = data;
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
-  onStep(step, time) {
-    const idx = step % this.pattern.length;
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    const st = this.pattern[idx];
-    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
-  }
-
+  /* ---------- Persistenz: chordType kommt oben drauf ---------- */
   serialize() {
-    return {
-      params: { ...this.params },
-      chordType: this.chordType,
-      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
+    return { ...super.serialize(), chordType: this.chordType };
   }
 
   deserialize(state) {
-    Object.assign(this.params, state.params);
+    super.deserialize(state);
     if (state.chordType && CHORDS[state.chordType]) this.chordType = state.chordType;
-    if (state.patterns) {
-      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.pattern) {
-      const a = state.pattern.map((s) => ({ ...s }));
-      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
-    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
-    this.output.gain.value = this.params.volume;
-    this.setPan(state.pan ?? 0);
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
   }
 
   /* ---------- Ein-Stimmen-Aufbau (geteilt zwischen Sequenzer & Keybed) ---------- */
@@ -145,7 +91,7 @@ export class PolySynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, t);
+    applyFilterEnv(filter, t, p);
 
     return { osc, filter };
   }
@@ -230,15 +176,6 @@ export class PolySynth extends Machine {
 
   disposeAudio() {
     this.allNotesOff();
-  }
-
-  /** Filterhüllkurve — wie bei SubSynth: startet über dem Cutoff, fällt
-   *  darauf zurück. Gilt für jede Stimme einzeln, gleich wie beim Filter. */
-  #applyFilterEnv(filter, t) {
-    const p = this.params;
-    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
-    filter.frequency.setValueAtTime(peak, t);
-    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
   }
 
   /* ---------- UI ---------- */
@@ -328,28 +265,7 @@ export class PolySynth extends Machine {
     });
     container.appendChild(row);
 
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'notes',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
-      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.pattern, {
-      onLengthChange: (bars) => {
-        resizePattern(this.pattern, bars);
-        this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars);
-      },
-    });
-    container.appendChild(this.seq.el);
-    this.seq.el.querySelector('.stepseq__title').textContent = '';
-    automation.setBars(this.id, this.seq.bars);
+    this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
       onNoteOn: (midi) => this.noteOn(midi),

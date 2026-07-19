@@ -145,15 +145,24 @@ const DEFS = {
       level.gain.value = p.level;
       shaper.connect(tone);
       tone.connect(level);
+      // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
+      // Audio-Thread, das zudem bei aktivem Signal hörbar knackst, weil
+      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- der Knob
+      // feuert aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
+      // Gleiches Entprellen wie fx.js' #buildIR() für den Reverb-Impuls.
+      let driveTimer = null;
       return {
         input: shaper,
         output: level,
         setParam(key, v) {
-          if (key === 'drive') shaper.curve = makeDriveCurve(v);
+          if (key === 'drive') {
+            clearTimeout(driveTimer);
+            driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(v); }, 60);
+          }
           else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
           else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
         },
-        dispose() { shaper.disconnect(); tone.disconnect(); level.disconnect(); },
+        dispose() { clearTimeout(driveTimer); shaper.disconnect(); tone.disconnect(); level.disconnect(); },
       };
     },
   },
