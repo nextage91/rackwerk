@@ -16130,7 +16130,11 @@ let lastAudible = new Set();
 
 /**
  * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
- * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
+ * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer. Zusätzlich
+ * fließt `m.jamGateOpen` ein (s. setJamGate) — von der Jam-Ansicht
+ * gesetzt, unabhängig von Mute/Solo, damit "nur Spuren mit aktivem Clip
+ * klingen" sich genau wie ein weiterer, automatischer Mute-Grund verhält
+ * (inklusive Sends/Tail-Handling unten).
  *
  * Schließt zusätzlich die gemeinsame Master-FX-Rückführung (masterFX.
  * setReturnAudible), sobald KEINE Maschine mehr hörbar ist — sonst bliebe
@@ -16152,7 +16156,7 @@ function refreshGates() {
   let anyAudible = false;
   const audibleNow = new Set();
   for (const m of machines) {
-    const open = !m.muted && (!soloActive || m.soloed);
+    const open = !m.muted && (!soloActive || m.soloed) && m.jamGateOpen;
     if (open) { anyAudible = true; audibleNow.add(m); }
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
@@ -16170,6 +16174,9 @@ class Machine {
     this.id = nextId++;
     this.muted = false;
     this.soloed = false;
+    /** Von der Jam-Ansicht gesetzt (s. setJamGate) — unabhängig von Mute/
+     *  Solo. Default offen: solange niemand jammt, keine Einschränkung. */
+    this.jamGateOpen = true;
 
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
@@ -16697,6 +16704,17 @@ class Machine {
     this.soloed = soloed;
     this.headSoloBtn?.classList.toggle('is-active', soloed);
     this.onMixerChange?.();
+    refreshGates();
+  }
+
+  /** Von der Jam-Ansicht aufgerufen (jam-view.js#refreshJamGates) — eine
+   *  zusätzliche, unabhängige Gate-Bedingung neben Mute/Solo. Bewusst KEIN
+   *  eigenes UI/keine eigene Persistenz: kein neuer Nutzer-sichtbarer
+   *  Zustand, nur eine automatische Folge davon, ob irgendwo ein Clip
+   *  läuft (s. dortigen Kommentar für die genaue Regel). */
+  setJamGate(open) {
+    if (this.jamGateOpen === open) return;
+    this.jamGateOpen = open;
     refreshGates();
   }
 
@@ -18634,6 +18652,14 @@ const { initJamView, renderJamView } = (() => {
  *   Ableton Live Session View, nur ohne eigenen Zähler pro Spur.
  * - Läuft der Transport gerade NICHT, wird sofort gebunden (kein Warten
  *   auf einen Taktanfang, der nicht kommt).
+ * - "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
+ *   Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch still
+ *   (machine.setJamGate(), s. dort — ein zusätzliches, unabhängiges Gate
+ *   neben Mute/Solo, kein persistenter Zustand). Läuft NIRGENDS ein Clip,
+ *   ist niemand eingeschränkt — normales Mehrspur-Rack-Verhalten, bis man
+ *   anfängt zu jammen. Mehrere gleichzeitig laufende Clips auf
+ *   verschiedenen Spuren bleiben dabei bewusst zusammen hörbar (layern),
+ *   s. refreshJamGates().
  * - Reglerwerte (Fader/Pan/Sends/Makro-Knobs) laufen über dieselben
  *   Setter/Custom-Elemente wie überall sonst in der App (x-knob/x-fader,
  *   setLevel/setSend/…) — keine Parallel-Implementierung.
@@ -18729,6 +18755,24 @@ function promoteQueuedClip(machine, st) {
   st.queuedClipId = null;
   if (clip) machine.bindClipData(clip.data);
   refreshClipStates(machine);
+  refreshJamGates();
+}
+
+/** "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
+ *  Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch
+ *  stummgeschaltet (über machine.setJamGate — unabhängig von Mute/Solo,
+ *  kein persistenter Zustand). Läuft gerade NIRGENDS ein Clip, ist
+ *  niemand eingeschränkt (normales Rack-Verhalten, bevor überhaupt
+ *  gejammt wird). Mehrere Clips auf verschiedenen Spuren bleiben dabei
+ *  weiterhin gleichzeitig hörbar (layern) — nur Spuren, die GAR keinen
+ *  Clip fahren, werden stumm. Nach jeder Clip-Start/-Stop-Aktion neu
+ *  ausgewertet. */
+function refreshJamGates() {
+  const list = boundRack?.machines ?? [];
+  const jamActive = list.some((m) => stateFor(m).activeClipId != null);
+  for (const m of list) {
+    m.setJamGate(!jamActive || stateFor(m).activeClipId != null);
+  }
 }
 
 /** Clip antippen: läuft er bereits, sofortiger Stop (kein Warten auf
@@ -18759,6 +18803,7 @@ function stopClip(machine) {
   st.queuedClipId = null;
   machine.setPatternIndex(machine.patternIndex);
   refreshClipStates(machine);
+  refreshJamGates();
 }
 
 function refreshClipStates(machine) {
@@ -18975,6 +19020,11 @@ function renderJamView(listEl) {
   for (const machine of boundRack?.machines ?? []) {
     listEl.appendChild(buildColumn(machine));
   }
+  // Fängt z. B. eine Maschine ab, die WÄHREND laufender Clip-Wiedergabe neu
+  // ins Rack kam (setJamGate() lief für sie noch nie) — beim (Wieder-)
+  // Öffnen des Sheets bekommt jede Maschine garantiert den aktuell
+  // korrekten Gate-Zustand.
+  refreshJamGates();
 }
 
 return { initJamView, renderJamView };

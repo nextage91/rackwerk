@@ -12,6 +12,14 @@
  *   Ableton Live Session View, nur ohne eigenen Zähler pro Spur.
  * - Läuft der Transport gerade NICHT, wird sofort gebunden (kein Warten
  *   auf einen Taktanfang, der nicht kommt).
+ * - "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
+ *   Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch still
+ *   (machine.setJamGate(), s. dort — ein zusätzliches, unabhängiges Gate
+ *   neben Mute/Solo, kein persistenter Zustand). Läuft NIRGENDS ein Clip,
+ *   ist niemand eingeschränkt — normales Mehrspur-Rack-Verhalten, bis man
+ *   anfängt zu jammen. Mehrere gleichzeitig laufende Clips auf
+ *   verschiedenen Spuren bleiben dabei bewusst zusammen hörbar (layern),
+ *   s. refreshJamGates().
  * - Reglerwerte (Fader/Pan/Sends/Makro-Knobs) laufen über dieselben
  *   Setter/Custom-Elemente wie überall sonst in der App (x-knob/x-fader,
  *   setLevel/setSend/…) — keine Parallel-Implementierung.
@@ -108,6 +116,24 @@ function promoteQueuedClip(machine, st) {
   st.queuedClipId = null;
   if (clip) machine.bindClipData(clip.data);
   refreshClipStates(machine);
+  refreshJamGates();
+}
+
+/** "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
+ *  Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch
+ *  stummgeschaltet (über machine.setJamGate — unabhängig von Mute/Solo,
+ *  kein persistenter Zustand). Läuft gerade NIRGENDS ein Clip, ist
+ *  niemand eingeschränkt (normales Rack-Verhalten, bevor überhaupt
+ *  gejammt wird). Mehrere Clips auf verschiedenen Spuren bleiben dabei
+ *  weiterhin gleichzeitig hörbar (layern) — nur Spuren, die GAR keinen
+ *  Clip fahren, werden stumm. Nach jeder Clip-Start/-Stop-Aktion neu
+ *  ausgewertet. */
+function refreshJamGates() {
+  const list = boundRack?.machines ?? [];
+  const jamActive = list.some((m) => stateFor(m).activeClipId != null);
+  for (const m of list) {
+    m.setJamGate(!jamActive || stateFor(m).activeClipId != null);
+  }
 }
 
 /** Clip antippen: läuft er bereits, sofortiger Stop (kein Warten auf
@@ -138,6 +164,7 @@ function stopClip(machine) {
   st.queuedClipId = null;
   machine.setPatternIndex(machine.patternIndex);
   refreshClipStates(machine);
+  refreshJamGates();
 }
 
 function refreshClipStates(machine) {
@@ -354,4 +381,9 @@ export function renderJamView(listEl) {
   for (const machine of boundRack?.machines ?? []) {
     listEl.appendChild(buildColumn(machine));
   }
+  // Fängt z. B. eine Maschine ab, die WÄHREND laufender Clip-Wiedergabe neu
+  // ins Rack kam (setJamGate() lief für sie noch nie) — beim (Wieder-)
+  // Öffnen des Sheets bekommt jede Maschine garantiert den aktuell
+  // korrekten Gate-Zustand.
+  refreshJamGates();
 }
