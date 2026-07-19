@@ -38,6 +38,14 @@ const MACRO_PARAMS = {
 };
 const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit']);
 
+/** Bewegungsschwelle Tippen-vs-Ziehen (px) -- dieselbe wie step-seq.js'
+ *  TAP_THRESHOLD für Pitch-Drag: ein echter Finger-Tap hat auf dem Handy
+ *  fast immer ein paar Pixel unwillkürliches Zittern. Mit dem alten Wert
+ *  von 6px kippte ein normaler Tap regelmäßig fälschlich in den Dragmodus
+ *  (unterdrückt dann den Click, s. makeReorderable) -- genau das Symptom
+ *  "Clip startet nicht beim Antippen" auf einem echten Gerät. */
+const TAP_THRESHOLD = 8;
+
 /** Ändert einen Parameter über den ECHTEN Knob im Maschinen-Panel — löst
  *  denselben `input`-Pfad aus, den auch Handbewegung/Automation nutzen
  *  (kein `knob-grab` davor, also greift auch kein Trim/keine Aufnahme). */
@@ -187,7 +195,7 @@ function makeReorderable(clipsEl, machine) {
     if (!dragEl || e.pointerId !== pointerId) return;
     const dy = e.clientY - startY;
     if (!dragEl.classList.contains('is-dragging')) {
-      if (Math.abs(dy) < 6) return;
+      if (Math.abs(dy) < TAP_THRESHOLD) return;
       dragEl.classList.add('is-dragging');
       dragEl.setPointerCapture(pointerId);
     }

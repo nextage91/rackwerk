@@ -100,6 +100,11 @@ button {
 }
 .t-btn:active { transform: translateY(1px); filter: brightness(1.15); }
 .t-btn--play svg { width: 22px; height: 22px; fill: var(--led-play); }
+/* Browser wenden ihr UA-Standardstyle für [hidden] (display:none) auf SVG-
+   Elemente nicht zuverlässig an -- ohne diese Regel zeigt der Button IMMER
+   beide Icons gleichzeitig übereinander, egal ob gerade "play" oder "stop"
+   markiert ist (per iconPlay.hidden/iconStop.hidden in main.js gesetzt). */
+.t-btn--play svg[hidden] { display: none; }
 .t-btn--play.is-playing { box-shadow: 0 0 12px rgba(102,224,122,.35), var(--shadow-panel); }
 
 /* ===================== Rack ===================== */
