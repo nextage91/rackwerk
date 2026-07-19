@@ -16726,478 +16726,29 @@ class Machine {
 return { Machine };
 })();
 
-/* ===== js/machines/subsynth.js ===== */
-const { SubSynth } = (() => {
+/* ===== js/machines/tracked-drum-machine.js ===== */
+const { TrackedDrumMachine } = (() => {
 /**
- * SubSynth — erste Beispielmaschine, damit das Rack von Anfang an klingt.
+ * TrackedDrumMachine — gemeinsames Chassis für mehrspurige, synthetisierte
+ * Drum-Machines mit Pad-Auswahl, gemeinsamem 16-Step-Grid und A/B/C/D-
+ * Pattern-Bank (BeatBox, AnalogKit). Unterklassen liefern nur noch:
+ *   static meta       — Registry/Faceplate-Angaben (type/name/desc/color/model)
+ *   static TRACK_DEFS — [{ name, synth(ctx,t,dest,params), snap? }, ...]
+ * plus ihre eigenen Klangerzeuger-Funktionen (kick/snare/… bzw. bd/sd/…)
+ * und optional seedDemo() (nur BeatBox nutzt das für die Startbesetzung,
+ * s. project.js#newProject — AnalogKit startet immer leer).
  *
- * Signalfluss pro Stimme:
- *   Oscillator (Saw) → Lowpass-Filter → Hüllkurven-Gain → machine.output
- *
- * Ein Touch-Keybed (eine Oktave) mit Glissando-Unterstützung dient als
- * Spielfläche; später ersetzt/ergänzt durch den Pattern-Sequenzer.
+ * Der komplette Rest — Bind/Serialize/Sequenzer/Automation/UI — hängt
+ * nicht vom konkreten Klangcharakter ab und war zuvor 1:1 zwischen
+ * BeatBox und AnalogKit dupliziert.
  */
 
-/** Leeres 1-Takt-Pattern (16 Steps aus). */
-const emptyPattern = (len = 16) =>
-  Array.from({ length: len }, () => ({ on: false, midi: 48 }));
-
-/**
- * Headroom für die Amp-Hüllkurve: Ohne diese Skalierung ramp(t) immer bis
- * 1 (volle Aussteuerung) — anders als bei der BeatBox, wo jeder Drum-Klang
- * intern schon gegen die anderen austariert ist (Kick 1.0, Snare-Körper
- * 0.5, Hats 0.45 …). Gemessen (OfflineAudioContext, RMS über 0.6 s nach
- * Trigger, jeweils an Default-Einstellungen): eine gehaltene SubSynth-Note
- * lag ohne Headroom 7 dB über einem einzelnen Kick und 13 dB über der
- * Snare — ein Sequenzer-Bass drängt sich damit permanent vor den Rest des
- * Kits, weil er (anders als ein perkussiver Klang) die ganze Notenlänge
- * über nahe der Spitzenlautstärke gehalten wird statt abzuklingen.
- */
-const VOICE_HEADROOM = 0.6;
-
-class SubSynth extends Machine {
-  static meta = {
-    type: 'subsynth',
-    name: 'SubSynth',
-    desc: 'Subtractive synth with lowpass filter',
-    color: '#6fb8d6',
-    model: 'RW-01',
-  };
-
-  buildAudio() {
-    this.params = {
-      cutoff: 1800,       // Hz (Basis, auf die die Hüllkurve zurückfällt)
-      resonance: 4,       // Q
-      envAmt: 0.3,        // Filterhüllkurve: 0..1 ≙ 0..+4 Oktaven über Cutoff
-      fDecay: 0.18,       // s — Abklingzeit der Filterhüllkurve
-      attack: 0.005,      // s (Amp)
-      release: 0.25,      // s (Amp)
-      volume: 0.7,
-      filterType: 'lowpass',
-    };
-    /** aktive Stimmen: midi → {osc, filter, env} */
-    this.voices = new Map();
-    this.output.gain.value = this.params.volume;
-
-    /** 4 leere Pattern-Slots (A/B/C/D), {on, midi} pro Step. `this.pattern`
-     *  zeigt aufs aktive Slot. Die Demo-Line kommt nicht von hier, sondern
-     *  optional über seedDemo() (s. dort). */
-    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
-    this.patternIndex = 0;
-    this.pattern = this.patterns[0];
-  }
-
-  /**
-   * Kleine Acid-Line in Slot A einfüllen — nur von der Startbesetzung einer
-   * neuen Session genutzt (project.js#newProject), damit die App sofort
-   * klingt. Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
-   */
-  seedDemo() {
-    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 };
-    for (const [step, midi] of Object.entries(seed)) {
-      this.patterns[0][step].on = true;
-      this.patterns[0][step].midi = midi;
-    }
-    if (this.patternIndex === 0) this.seq?.setPattern(this.pattern);
-  }
-
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Aktives Pattern setzen. Auch von der Song-Wiedergabe aufgerufen —
-   *  ohne selbst wieder aufzunehmen. */
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.pattern = this.patterns[i];
-    this.seq?.setPattern(this.pattern);
-    this.patternBank?.setActive(i);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.pattern = data;
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
-  onStep(step, time) {
-    const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    const st = this.pattern[idx];
-    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
-  }
-
-  serialize() {
-    return {
-      params: { ...this.params },
-      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
-  }
-
-  deserialize(state) {
-    Object.assign(this.params, state.params);
-    if (state.patterns) {
-      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.pattern) {
-      // Altes Format (ein Pattern): in Slot A, B–D leer in gleicher Länge
-      const a = state.pattern.map((s) => ({ ...s }));
-      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
-    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
-    this.output.gain.value = this.params.volume;
-    this.setPan(state.pan ?? 0);
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
-  }
-
-  /**
-   * Fire-and-forget-Stimme für den Sequenzer — sample-genau bei `time`
-   * geplant, unabhängig von den gehaltenen Keybed-Stimmen.
-   */
-  playNote(midi, time, dur) {
-    time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
-    this.pulse(time);
-    const ctx = engine.ctx;
-    const p = this.params;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
-    applyFilterEnv(filter, time, p);
-
-    const env = ctx.createGain();
-    const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
-    env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
-    env.gain.setTargetAtTime(0, time + dur, p.release / 4);
-
-    osc.connect(filter).connect(env).connect(this.output);
-    osc.start(time);
-    osc.stop(time + dur + p.release + 0.1);
-    osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
-  }
-
-  /* ---------- Stimmenverwaltung ---------- */
-  noteOn(midi) {
-    if (this.voices.has(midi)) return;
-    this.pulse();
-    if (this.isLiveRecording) {
-      const idx = this.liveStepIndex(this.pattern.length);
-      this.pattern[idx] = { on: true, midi };
-      this.seq?.refreshStep(idx);
-    }
-    const ctx = engine.ctx;
-    const t = ctx.currentTime;
-    const p = this.params;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
-    applyFilterEnv(filter, t, p);
-
-    const env = ctx.createGain();
-    env.gain.setValueAtTime(0, t);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
-
-    osc.connect(filter).connect(env).connect(this.output);
-    osc.start(t);
-
-    this.voices.set(midi, { osc, filter, env });
-  }
-
-  noteOff(midi) {
-    const v = this.voices.get(midi);
-    if (!v) return;
-    this.voices.delete(midi);
-
-    const t = engine.ctx.currentTime;
-    const rel = this.params.release;
-    v.env.gain.cancelScheduledValues(t);
-    v.env.gain.setTargetAtTime(0, t, rel / 4);
-    v.osc.stop(t + rel + 0.1);
-    v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
-  }
-
-  allNotesOff() {
-    for (const midi of [...this.voices.keys()]) this.noteOff(midi);
-  }
-
-  disposeAudio() {
-    this.allNotesOff();
-  }
-
-  /* ---------- UI ---------- */
-  buildControls(container) {
-    // Filtertyp: LP / HP / BP — wirkt sofort auch auf klingende Stimmen
-    const seg = document.createElement('div');
-    seg.className = 'seg';
-    seg.innerHTML = `
-      <span class="seg__label">Filter</span>
-      <button class="seg__btn" data-ft="lowpass">LP</button>
-      <button class="seg__btn" data-ft="highpass">HP</button>
-      <button class="seg__btn" data-ft="bandpass">BP</button>
-    `;
-    seg.querySelectorAll('.seg__btn').forEach((b) =>
-      b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
-    seg.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-ft]');
-      if (!btn) return;
-      this.params.filterType = btn.dataset.ft;
-      seg.querySelectorAll('.seg__btn').forEach((b) =>
-        b.classList.toggle('is-active', b === btn));
-      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
-    });
-    container.appendChild(seg);
-
-    const row = document.createElement('div');
-    row.className = 'machine__row';
-    row.innerHTML = `
-      <x-knob label="Cutoff" min="80" max="12000" value="1800" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
-      <x-knob label="Reso"   min="0.5" max="20"  value="4"  data-p="resonance" data-auto></x-knob>
-      <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
-      <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
-      <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
-    `;
-    row.addEventListener('input', (e) => {
-      const key = e.target.dataset?.p;
-      if (!key) return;
-      const val = e.detail.value;
-      this.params[key] = val;
-
-      // Live-Parameter direkt auf laufende Stimmen anwenden
-      const t = engine.ctx.currentTime;
-      if (key === 'cutoff') {
-        for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
-      } else if (key === 'resonance') {
-        for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
-      } else if (key === 'volume') {
-        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
-      }
-    });
-    container.appendChild(row);
-
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'notes',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
-      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.pattern, {
-      onLengthChange: (bars) => {
-        resizePattern(this.pattern, bars);
-        this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
-      },
-    });
-    container.appendChild(this.seq.el);
-    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
-    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
-    automation.setBars(this.id, this.seq.bars);
-
-    container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
-    }));
-  }
-
-}
-
-return { SubSynth };
-})();
-
-/* ===== js/machines/beatbox.js ===== */
-const { BeatBox } = (() => {
-/**
- * BeatBox — 8-Spur-Drum-Machine mit synthetisierten Sounds (808-Stil).
- *
- * Keine Sample-Dateien: Alle Drums werden bei jedem Trigger aus
- * Oszillatoren + Rauschen gebaut. Das hält das Projekt asset-frei
- * (läuft offline im Capacitor-WebView) und macht Tune/Decay echt
- * parametrisch statt nur Playback-Tricks.
- *
- * UI-Konzept (Touch-first statt 8×16-Matrix, die auf Phones zu klein wird):
- * - 8 Pads: Tippen spielt den Sound an UND wählt die Spur aus
- * - Ein gemeinsames 16-Step-Grid zeigt immer die gewählte Spur
- * - Tune/Decay/Level-Knobs wirken auf die gewählte Spur
- */
-
-/* ================= Drum-Synthese ================= */
-
-/* Jede Drum: (ctx, t, dest, {tune, decay, level}) */
-
-function kick(ctx, t, dest, p) {
-  // Körper: Sinus mit Pitch-Hüllkurve. Zielfrequenz nach unten begrenzen —
-  // unter ~30 Hz ist auf Phone-Lautsprechern nichts mehr hörbar und der
-  // Anschlag zerfällt in Artefakte.
-  const f0 = Math.max(60, 160 * p.tune);
-  const f1 = Math.max(30, 45 * p.tune);
-  const o = ctx.createOscillator();
-  o.type = 'sine';
-  o.frequency.setValueAtTime(f0, t);
-  o.frequency.exponentialRampToValueAtTime(f1, t + 0.1);
-  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay);
-  o.connect(g).connect(dest);
-  autoStop(o, t, 0.4 * p.decay, [g]);
-
-  // Klick: 12 ms Hochpass-Rauschen als Attack-Transient. Startet immer an
-  // derselben Buffer-Position → klingt bei jedem Anschlag identisch und
-  // hält den Punch unabhängig von der Stimmung konstant. Anteil über
-  // den Snap-Regler der Kick-Spur; bei 0 wird er ganz weggelassen.
-  const snap = p.snap ?? 0.45;
-  if (snap > 0.01) {
-    const n = ctx.createBufferSource();
-    n.buffer = noise(ctx);
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 1500;
-    const cg = env(ctx, t, snap * p.level, 0.012);
-    n.connect(hp).connect(cg).connect(dest);
-    autoStop(n, t, 0.012, [hp, cg]);
-  }
-}
-
-function snare(ctx, t, dest, p) {
-  // Körper (Ton) + Teppich (Rauschen)
-  const o = ctx.createOscillator();
-  o.type = 'triangle';
-  o.frequency.value = 190 * p.tune;
-  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay);
-  o.connect(og).connect(dest);
-  autoStop(o, t, 0.1 * p.decay, [og]);
-
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 1800 * p.tune;
-  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay);
-  n.connect(bp).connect(ng).connect(dest);
-  autoStop(n, t, 0.18 * p.decay, [bp, ng]);
-}
-
-function clap(ctx, t, dest, p) {
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 1100 * p.tune;
-  bp.Q.value = 1.5;
-
-  // 3 schnelle Retrigger, dann Ausklang — der typische Clap
-  const g = ctx.createGain();
-  const dur = 0.036 + 0.2 * p.decay;
-  for (let i = 0; i < 3; i++) {
-    g.gain.setValueAtTime(0.9 * p.level, t + i * 0.012);
-    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.012 + 0.01);
-  }
-  g.gain.setValueAtTime(0.7 * p.level, t + 0.036);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-
-  n.connect(bp).connect(g).connect(dest);
-  autoStop(n, t, dur, [bp, g]);
-}
-
-const hat = (baseDur) => (ctx, t, dest, p) => {
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const hp = ctx.createBiquadFilter();
-  hp.type = 'highpass';
-  hp.frequency.value = 7000 * p.tune;
-  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay);
-  n.connect(hp).connect(g).connect(dest);
-  autoStop(n, t, baseDur * p.decay, [hp, g]);
-};
-
-const tom = (mult) => (ctx, t, dest, p) => {
-  const o = ctx.createOscillator();
-  o.type = 'sine';
-  const f = 150 * mult * p.tune;
-  o.frequency.setValueAtTime(f, t);
-  o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.15);
-  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay);
-  o.connect(g).connect(dest);
-  autoStop(o, t, 0.3 * p.decay, [g]);
-};
-
-function perc(ctx, t, dest, p) {
-  // Zwei verstimmte Rechtecke durch Bandpass ≈ Cowbell
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 900 * p.tune;
-  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay);
-  bp.connect(g).connect(dest);
-  for (const f of [540, 810]) {
-    const o = ctx.createOscillator();
-    o.type = 'square';
-    o.frequency.value = f * p.tune;
-    o.connect(bp);
-    autoStop(o, t, 0.18 * p.decay, [bp, g]);
-  }
-}
-
-/* ================= Die Maschine ================= */
-
-const TRACK_DEFS = [
-  { name: 'Kick',  synth: kick, snap: 0.45 },
-  { name: 'Snare', synth: snare },
-  { name: 'Clap',  synth: clap },
-  { name: 'HH cl', synth: hat(0.05) },
-  { name: 'HH op', synth: hat(0.4) },
-  { name: 'Tom L', synth: tom(0.7) },
-  { name: 'Tom H', synth: tom(1.4) },
-  { name: 'Perc',  synth: perc },
-];
-
-/** Leeres Pattern-Slot: 8 Spuren × 16 leere Steps. */
-const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
-
-// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat — nur für
-// die Startbesetzung einer neuen Session genutzt (project.js#newProject),
-// nicht automatisch beim Hinzufügen über "+ Add Machine" (die soll leer
-// starten, s. seedDemo()).
-const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
-
-class BeatBox extends Machine {
+class TrackedDrumMachine extends Machine {
   getParamForKnob(key) {
     // volume liegt hier nicht in params — alles andere (z. B. die
     // FX-Sends) beantwortet die Basisklasse
     return key === 'volume' ? this.volume : super.getParamForKnob(key);
   }
-
-  static meta = {
-    type: 'beatbox',
-    name: 'BeatBox',
-    desc: '8-track drum machine, synthesized sounds',
-    color: '#ff8c42',
-    model: 'RW-02',
-  };
 
   buildAudio() {
     this.volume = 0.8;
@@ -17208,15 +16759,16 @@ class BeatBox extends Machine {
 
     // Spuren tragen die Klang-Parameter (nicht pattern-abhängig). Jede Spur
     // bekommt eine eigene StereoPannerNode — anders als bei Level (steckt
-    // als Multiplikator in der Hüllkurve, siehe Drum-Synthese oben) gibt es
-    // für Panorama keine "Stelle im Code", an der man ansetzen könnte, ohne
-    // echte Audio-Nodes: jeder Trigger muss durch die Spur-eigene Node.
-    // Jede Spur bekommt zusätzlich ihre eigenen Send-Gains zu Delay/Reverb —
-    // parallel zum trockenen Pfad (panner -> this.output), nicht dahinter.
-    // Dadurch bleiben Spur-Sends unabhängig von Mute/Solo der Maschine
-    // (bewusst: ein gemuteter Kit-Bus soll trotzdem noch in den Effekt
-    // "nachklingen" können, wie bei einem Send-Only-Trick am echten Pult).
-    this.tracks = TRACK_DEFS.map((def) => {
+    // als Multiplikator in der Hüllkurve, siehe Drum-Synthese der Unter-
+    // klasse) gibt es für Panorama keine "Stelle im Code", an der man
+    // ansetzen könnte, ohne echte Audio-Nodes: jeder Trigger muss durch
+    // die Spur-eigene Node. Jede Spur bekommt zusätzlich ihre eigenen
+    // Send-Gains zu Delay/Reverb — parallel zum trockenen Pfad (panner ->
+    // this.output), nicht dahinter. Dadurch bleiben Spur-Sends unabhängig
+    // von Mute/Solo der Maschine (bewusst: ein gemuteter Kit-Bus soll
+    // trotzdem noch in den Effekt "nachklingen" können, wie bei einem
+    // Send-Only-Trick am echten Pult).
+    this.tracks = this.constructor.TRACK_DEFS.map((def) => {
       const panner = engine.ctx.createStereoPanner();
       panner.connect(this.output);
       const sendDelayNode = engine.ctx.createGain();
@@ -17233,27 +16785,27 @@ class BeatBox extends Machine {
       };
     });
 
-    // 4 leere Pattern-Slots (A/B/C/D), je 8 Step-Spuren. Die Spuren zeigen
-    // per steps-Referenz aufs aktive Slot. Der Start-Groove kommt nicht von
-    // hier, sondern optional über seedDemo() (s. dort).
-    this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
+    // 4 leere Pattern-Slots (A/B/C/D), je ein Slot pro TRACK_DEFS-Eintrag.
+    // Die Spuren zeigen per steps-Referenz aufs aktive Slot. Ein Start-
+    // Groove kommt nicht von hier, sondern optional über seedDemo() der
+    // Unterklasse.
+    this.patterns = [this.emptySlot(), this.emptySlot(), this.emptySlot(), this.emptySlot()];
     this.patternIndex = 0;
     // Binden hier inline: buildAudio läuft aus dem Basis-Konstruktor, private
     // Methoden der Unterklasse sind da noch nicht verfügbar.
     this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
   }
 
-  /**
-   * Start-Groove in Slot A einfüllen — nur von der Startbesetzung einer neuen
-   * Session genutzt (project.js#newProject), damit die App sofort klingt.
-   * Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
-   */
-  seedDemo() {
-    for (const [name, steps] of Object.entries(SEED)) {
-      const ti = this.tracks.findIndex((t) => t.name === name);
-      for (const s of steps) this.patterns[0][ti][s].on = true;
-    }
-    if (this.patternIndex === 0) this.seq?.setPattern(this.tracks[this.selected].steps);
+  /** Leeres Pattern-Slot: eine leere 16-Step-Spur je TRACK_DEFS-Eintrag.
+   *  Bewusst KEIN privates Feld (kein #): buildAudio() ruft das aus dem
+   *  Konstruktor der Basisklasse Machine heraus auf, bevor die privaten
+   *  Elemente DIESER Zwischenklasse (TrackedDrumMachine) initialisiert
+   *  sind -- das passiert laut Spec erst, nachdem der super()-Aufruf
+   *  dieser Klasse zurückgekehrt ist, also NACH Machine's Konstruktor.
+   *  Ein #privates emptySlot() wirft an der Stelle "Receiver must be an
+   *  instance of class TrackedDrumMachine" (real reproduziert). */
+  emptySlot() {
+    return this.constructor.TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -17339,16 +16891,16 @@ class BeatBox extends Machine {
     } else if (state.tracks?.some((t) => t.steps)) {
       // Altes Format: Steps lagen in tracks[].steps → Slot A, B–D leer
       const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
-      this.patterns = [slotA, emptySlot(), emptySlot(), emptySlot()];
+      this.patterns = [slotA, this.emptySlot(), this.emptySlot(), this.emptySlot()];
       this.patternIndex = 0;
     }
-    while (this.patterns.length < 4) this.patterns.push(emptySlot());
+    while (this.patterns.length < 4) this.patterns.push(this.emptySlot());
     this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
     this.#bindSlot();
     this.setPan(state.pan ?? 0);
   }
 
-  /* ---------- Mixer: Pegel (BeatBox führt volume separat, nicht in params) ---------- */
+  /* ---------- Mixer: Pegel (Volume separat, nicht in params) ---------- */
   get level() { return this.volume; }
   setLevel(v) {
     v = Math.min(1, Math.max(0, v));
@@ -17434,7 +16986,7 @@ class BeatBox extends Machine {
       <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
-      <x-knob label="Snap"  min="0" max="1" value="0.45"  data-p="snap"></x-knob>
+      <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
     `;
@@ -17614,6 +17166,543 @@ class BeatBox extends Machine {
   }
 }
 
+return { TrackedDrumMachine };
+})();
+
+/* ===== js/machines/step-sequenced-synth.js ===== */
+const { StepSequencedSynth } = (() => {
+/**
+ * StepSequencedSynth — gemeinsame Basis für notengetriebene Pattern-Synths
+ * (SubSynth, PercSynth, PolySynth): 4 A/B/C/D-Pattern-Slots mit {on, midi}
+ * pro Step, Pattern-Bank + Step-Grid im Panel, Jam-Clip-Bindung.
+ *
+ * Unterklassen liefern weiterhin selbst:
+ *   static meta         — Registry/Faceplate-Angaben
+ *   static DEFAULT_MIDI — Vorbelegung für neue/leere Pattern-Steps
+ *                         (Default 48, PercSynth überschreibt auf 76)
+ *   buildAudio()         — eigene params + this.patterns/this.pattern setzen
+ *   playNote(midi, time, dur?) — Klangerzeugung (Sequenzer-Trigger)
+ *   buildControls()      — eigenes Panel; ruft buildPatternControls() für
+ *                          den gemeinsamen Pattern-Bank/Grid-Teil auf
+ * Stimmenverwaltung (gehaltene Keybed-Noten via noteOn/noteOff) bleibt
+ * bewusst in den Unterklassen: PercSynth ist rein fire-and-forget ohne
+ * gehaltene Stimmen, SubSynth/PolySynth halten Noten — zu unterschiedlich
+ * für eine gemeinsame Basis.
+ */
+
+class StepSequencedSynth extends Machine {
+  static DEFAULT_MIDI = 48;
+
+  /** Leeres 1-Takt-Pattern (16 Steps aus). Bewusst KEIN privates Feld
+   *  (kein #): buildAudio() ruft das aus dem Konstruktor der Basisklasse
+   *  Machine heraus auf, bevor private Elemente dieser Zwischenklasse
+   *  initialisiert sind (dieselbe Falle wie bei TrackedDrumMachine#
+   *  emptySlot, real reproduziert: "Receiver must be an instance of
+   *  class ..."). */
+  emptyPattern(len = 16) {
+    return Array.from({ length: len }, () => ({ on: false, midi: this.constructor.DEFAULT_MIDI }));
+  }
+
+  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
+  /** Aktives Pattern setzen. Auch von der Song-Wiedergabe aufgerufen —
+   *  ohne selbst wieder aufzunehmen. */
+  setPatternIndex(i) {
+    this.patternIndex = i;
+    this.pattern = this.patterns[i];
+    this.seq?.setPattern(this.pattern);
+    this.patternBank?.setActive(i);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
+  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
+   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
+   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
+  bindClipData(data) {
+    this.pattern = data;
+    this.seq?.setPattern(this.pattern);
+    automation.setBars(this.id, this.seq?.bars ?? 1);
+  }
+
+  /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
+  onStep(step, time) {
+    const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
+    const delayMs = (time - engine.now) * 1000;
+    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
+
+    const st = this.pattern[idx];
+    // dur-Argument wird von playNote()-Implementierungen ohne Halte-Dauer
+    // (z. B. PercSynth, deren Hüllkurve rein aus params.decay kommt) einfach
+    // ignoriert — kein Sonderfall pro Unterklasse nötig.
+    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
+  }
+
+  onTransport(event) {
+    if (event === 'stop') this.seq?.clearPlayhead();
+  }
+
+  serialize() {
+    return {
+      params: { ...this.params },
+      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
+      patternIndex: this.patternIndex,
+      pan: this.pan,
+    };
+  }
+
+  deserialize(state) {
+    Object.assign(this.params, state.params);
+    if (state.patterns) {
+      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
+      this.patternIndex = state.patternIndex ?? 0;
+    } else if (state.pattern) {
+      // Altes Format (ein Pattern): in Slot A, B–D leer in gleicher Länge
+      const a = state.pattern.map((s) => ({ ...s }));
+      this.patterns = [a, this.emptyPattern(a.length), this.emptyPattern(a.length), this.emptyPattern(a.length)];
+      this.patternIndex = 0;
+    }
+    while (this.patterns.length < 4) this.patterns.push(this.emptyPattern());
+    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
+    this.output.gain.value = this.params.volume;
+    this.setPan(state.pan ?? 0);
+  }
+
+  /** Pattern-Bank (A/B/C/D) + gemeinsames Step-Grid in den Body bauen —
+   *  identisch für alle notengetriebenen Synths. Erwartet this.patterns/
+   *  this.pattern/this.patternIndex bereits aus buildAudio() gesetzt.
+   *  Unterklassen rufen das aus buildControls() auf, VOR/NACH ihren
+   *  eigenen Reglern/Keybed, je nach gewünschter Panel-Reihenfolge. */
+  buildPatternControls(container) {
+    this.patternBank = createPatternBank({
+      index: this.patternIndex,
+      shape: 'notes',
+      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
+      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
+      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
+      onAddClip: (i, letter) => {
+        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+      },
+    });
+    container.appendChild(this.patternBank.el);
+
+    this.seq = new StepSeq(this.pattern, {
+      onLengthChange: (bars) => {
+        resizePattern(this.pattern, bars);
+        this.seq.setPattern(this.pattern);
+        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
+      },
+    });
+    container.appendChild(this.seq.el);
+    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
+    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
+    automation.setBars(this.id, this.seq.bars);
+  }
+}
+
+return { StepSequencedSynth };
+})();
+
+/* ===== js/machines/subsynth.js ===== */
+const { SubSynth } = (() => {
+/**
+ * SubSynth — erste Beispielmaschine, damit das Rack von Anfang an klingt.
+ *
+ * Signalfluss pro Stimme:
+ *   Oscillator (Saw) → Lowpass-Filter → Hüllkurven-Gain → machine.output
+ *
+ * Ein Touch-Keybed (eine Oktave) mit Glissando-Unterstützung dient als
+ * Spielfläche; später ersetzt/ergänzt durch den Pattern-Sequenzer.
+ *
+ * Pattern-Bank/Step-Grid/Jam-Clip-Bindung sitzen in StepSequencedSynth —
+ * hier bleibt nur, was den SubSynth-Klangcharakter und die gehaltenen
+ * Keybed-Stimmen ausmacht.
+ */
+
+/**
+ * Headroom für die Amp-Hüllkurve: Ohne diese Skalierung ramp(t) immer bis
+ * 1 (volle Aussteuerung) — anders als bei der BeatBox, wo jeder Drum-Klang
+ * intern schon gegen die anderen austariert ist (Kick 1.0, Snare-Körper
+ * 0.5, Hats 0.45 …). Gemessen (OfflineAudioContext, RMS über 0.6 s nach
+ * Trigger, jeweils an Default-Einstellungen): eine gehaltene SubSynth-Note
+ * lag ohne Headroom 7 dB über einem einzelnen Kick und 13 dB über der
+ * Snare — ein Sequenzer-Bass drängt sich damit permanent vor den Rest des
+ * Kits, weil er (anders als ein perkussiver Klang) die ganze Notenlänge
+ * über nahe der Spitzenlautstärke gehalten wird statt abzuklingen.
+ */
+const VOICE_HEADROOM = 0.6;
+
+class SubSynth extends StepSequencedSynth {
+  static meta = {
+    type: 'subsynth',
+    name: 'SubSynth',
+    desc: 'Subtractive synth with lowpass filter',
+    color: '#6fb8d6',
+    model: 'RW-01',
+  };
+
+  buildAudio() {
+    this.params = {
+      cutoff: 1800,       // Hz (Basis, auf die die Hüllkurve zurückfällt)
+      resonance: 4,       // Q
+      envAmt: 0.3,        // Filterhüllkurve: 0..1 ≙ 0..+4 Oktaven über Cutoff
+      fDecay: 0.18,       // s — Abklingzeit der Filterhüllkurve
+      attack: 0.005,      // s (Amp)
+      release: 0.25,      // s (Amp)
+      volume: 0.7,
+      filterType: 'lowpass',
+    };
+    /** aktive Stimmen: midi → {osc, filter, env} */
+    this.voices = new Map();
+    this.output.gain.value = this.params.volume;
+
+    /** 4 leere Pattern-Slots (A/B/C/D), {on, midi} pro Step. `this.pattern`
+     *  zeigt aufs aktive Slot. Die Demo-Line kommt nicht von hier, sondern
+     *  optional über seedDemo() (s. dort). */
+    this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
+    this.patternIndex = 0;
+    this.pattern = this.patterns[0];
+  }
+
+  /**
+   * Kleine Acid-Line in Slot A einfüllen — nur von der Startbesetzung einer
+   * neuen Session genutzt (project.js#newProject), damit die App sofort
+   * klingt. Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    const seed = { 0: 36, 3: 48, 6: 36, 8: 39, 11: 48, 14: 46 };
+    for (const [step, midi] of Object.entries(seed)) {
+      this.patterns[0][step].on = true;
+      this.patterns[0][step].midi = midi;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.pattern);
+  }
+
+  /**
+   * Fire-and-forget-Stimme für den Sequenzer — sample-genau bei `time`
+   * geplant, unabhängig von den gehaltenen Keybed-Stimmen.
+   */
+  playNote(midi, time, dur) {
+    time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
+    this.pulse(time);
+    const ctx = engine.ctx;
+    const p = this.params;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = midiToHz(midi);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = p.filterType;
+    filter.Q.value = p.resonance;
+    applyFilterEnv(filter, time, p);
+
+    const env = ctx.createGain();
+    const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
+    env.gain.setValueAtTime(0, time);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
+    env.gain.setTargetAtTime(0, time + dur, p.release / 4);
+
+    osc.connect(filter).connect(env).connect(this.output);
+    osc.start(time);
+    osc.stop(time + dur + p.release + 0.1);
+    osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
+  }
+
+  /* ---------- Stimmenverwaltung ---------- */
+  noteOn(midi) {
+    if (this.voices.has(midi)) return;
+    this.pulse();
+    if (this.isLiveRecording) {
+      const idx = this.liveStepIndex(this.pattern.length);
+      this.pattern[idx] = { on: true, midi };
+      this.seq?.refreshStep(idx);
+    }
+    const ctx = engine.ctx;
+    const t = ctx.currentTime;
+    const p = this.params;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = midiToHz(midi);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = p.filterType;
+    filter.Q.value = p.resonance;
+    applyFilterEnv(filter, t, p);
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
+
+    osc.connect(filter).connect(env).connect(this.output);
+    osc.start(t);
+
+    this.voices.set(midi, { osc, filter, env });
+  }
+
+  noteOff(midi) {
+    const v = this.voices.get(midi);
+    if (!v) return;
+    this.voices.delete(midi);
+
+    const t = engine.ctx.currentTime;
+    const rel = this.params.release;
+    v.env.gain.cancelScheduledValues(t);
+    v.env.gain.setTargetAtTime(0, t, rel / 4);
+    v.osc.stop(t + rel + 0.1);
+    v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
+  }
+
+  allNotesOff() {
+    for (const midi of [...this.voices.keys()]) this.noteOff(midi);
+  }
+
+  disposeAudio() {
+    this.allNotesOff();
+  }
+
+  /* ---------- UI ---------- */
+  buildControls(container) {
+    // Filtertyp: LP / HP / BP — wirkt sofort auch auf klingende Stimmen
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.innerHTML = `
+      <span class="seg__label">Filter</span>
+      <button class="seg__btn" data-ft="lowpass">LP</button>
+      <button class="seg__btn" data-ft="highpass">HP</button>
+      <button class="seg__btn" data-ft="bandpass">BP</button>
+    `;
+    seg.querySelectorAll('.seg__btn').forEach((b) =>
+      b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ft]');
+      if (!btn) return;
+      this.params.filterType = btn.dataset.ft;
+      seg.querySelectorAll('.seg__btn').forEach((b) =>
+        b.classList.toggle('is-active', b === btn));
+      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
+    });
+    container.appendChild(seg);
+
+    const row = document.createElement('div');
+    row.className = 'machine__row';
+    row.innerHTML = `
+      <x-knob label="Cutoff" min="80" max="12000" value="1800" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
+      <x-knob label="Reso"   min="0.5" max="20"  value="4"  data-p="resonance" data-auto></x-knob>
+      <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="2" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
+    `;
+    row.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (!key) return;
+      const val = e.detail.value;
+      this.params[key] = val;
+
+      // Live-Parameter direkt auf laufende Stimmen anwenden
+      const t = engine.ctx.currentTime;
+      if (key === 'cutoff') {
+        for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'resonance') {
+        for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'volume') {
+        this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
+      }
+    });
+    container.appendChild(row);
+
+    this.buildPatternControls(container);
+
+    container.appendChild(createKeybed({
+      onNoteOn: (midi) => this.noteOn(midi),
+      onNoteOff: (midi) => this.noteOff(midi),
+    }));
+  }
+
+}
+
+return { SubSynth };
+})();
+
+/* ===== js/machines/beatbox.js ===== */
+const { BeatBox } = (() => {
+/**
+ * BeatBox — 8-Spur-Drum-Machine mit synthetisierten Sounds (808-Stil).
+ *
+ * Keine Sample-Dateien: Alle Drums werden bei jedem Trigger aus
+ * Oszillatoren + Rauschen gebaut. Das hält das Projekt asset-frei
+ * (läuft offline im Capacitor-WebView) und macht Tune/Decay echt
+ * parametrisch statt nur Playback-Tricks.
+ *
+ * UI-Konzept (Touch-first statt 8×16-Matrix, die auf Phones zu klein wird):
+ * - 8 Pads: Tippen spielt den Sound an UND wählt die Spur aus
+ * - Ein gemeinsames 16-Step-Grid zeigt immer die gewählte Spur
+ * - Tune/Decay/Level-Knobs wirken auf die gewählte Spur
+ *
+ * Das komplette Chassis (Bind/Serialize/Sequenzer/Automation/UI) sitzt in
+ * TrackedDrumMachine — hier bleibt nur, was den BeatBox-Klangcharakter
+ * ausmacht: die Drum-Synthese-Funktionen und TRACK_DEFS.
+ */
+
+/* ================= Drum-Synthese ================= */
+
+/* Jede Drum: (ctx, t, dest, {tune, decay, level}) */
+
+function kick(ctx, t, dest, p) {
+  // Körper: Sinus mit Pitch-Hüllkurve. Zielfrequenz nach unten begrenzen —
+  // unter ~30 Hz ist auf Phone-Lautsprechern nichts mehr hörbar und der
+  // Anschlag zerfällt in Artefakte.
+  const f0 = Math.max(60, 160 * p.tune);
+  const f1 = Math.max(30, 45 * p.tune);
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f1, t + 0.1);
+  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay);
+  o.connect(g).connect(dest);
+  autoStop(o, t, 0.4 * p.decay, [g]);
+
+  // Klick: 12 ms Hochpass-Rauschen als Attack-Transient. Startet immer an
+  // derselben Buffer-Position → klingt bei jedem Anschlag identisch und
+  // hält den Punch unabhängig von der Stimmung konstant. Anteil über
+  // den Snap-Regler der Kick-Spur; bei 0 wird er ganz weggelassen.
+  const snap = p.snap ?? 0.45;
+  if (snap > 0.01) {
+    const n = ctx.createBufferSource();
+    n.buffer = noise(ctx);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1500;
+    const cg = env(ctx, t, snap * p.level, 0.012);
+    n.connect(hp).connect(cg).connect(dest);
+    autoStop(n, t, 0.012, [hp, cg]);
+  }
+}
+
+function snare(ctx, t, dest, p) {
+  // Körper (Ton) + Teppich (Rauschen)
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.value = 190 * p.tune;
+  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay);
+  o.connect(og).connect(dest);
+  autoStop(o, t, 0.1 * p.decay, [og]);
+
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1800 * p.tune;
+  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay);
+  n.connect(bp).connect(ng).connect(dest);
+  autoStop(n, t, 0.18 * p.decay, [bp, ng]);
+}
+
+function clap(ctx, t, dest, p) {
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1100 * p.tune;
+  bp.Q.value = 1.5;
+
+  // 3 schnelle Retrigger, dann Ausklang — der typische Clap
+  const g = ctx.createGain();
+  const dur = 0.036 + 0.2 * p.decay;
+  for (let i = 0; i < 3; i++) {
+    g.gain.setValueAtTime(0.9 * p.level, t + i * 0.012);
+    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.012 + 0.01);
+  }
+  g.gain.setValueAtTime(0.7 * p.level, t + 0.036);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+  n.connect(bp).connect(g).connect(dest);
+  autoStop(n, t, dur, [bp, g]);
+}
+
+const hat = (baseDur) => (ctx, t, dest, p) => {
+  const n = ctx.createBufferSource();
+  n.buffer = noise(ctx);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 7000 * p.tune;
+  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay);
+  n.connect(hp).connect(g).connect(dest);
+  autoStop(n, t, baseDur * p.decay, [hp, g]);
+};
+
+const tom = (mult) => (ctx, t, dest, p) => {
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  const f = 150 * mult * p.tune;
+  o.frequency.setValueAtTime(f, t);
+  o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.15);
+  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay);
+  o.connect(g).connect(dest);
+  autoStop(o, t, 0.3 * p.decay, [g]);
+};
+
+function perc(ctx, t, dest, p) {
+  // Zwei verstimmte Rechtecke durch Bandpass ≈ Cowbell
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 900 * p.tune;
+  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay);
+  bp.connect(g).connect(dest);
+  for (const f of [540, 810]) {
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.value = f * p.tune;
+    o.connect(bp);
+    autoStop(o, t, 0.18 * p.decay, [bp, g]);
+  }
+}
+
+/* ================= Die Maschine ================= */
+
+const TRACK_DEFS = [
+  { name: 'Kick',  synth: kick, snap: 0.45 },
+  { name: 'Snare', synth: snare },
+  { name: 'Clap',  synth: clap },
+  { name: 'HH cl', synth: hat(0.05) },
+  { name: 'HH op', synth: hat(0.4) },
+  { name: 'Tom L', synth: tom(0.7) },
+  { name: 'Tom H', synth: tom(1.4) },
+  { name: 'Perc',  synth: perc },
+];
+
+// Start-Groove: Kick 4-to-the-floor, Snare auf 2+4, Hats offbeat — nur für
+// die Startbesetzung einer neuen Session genutzt (project.js#newProject),
+// nicht automatisch beim Hinzufügen über "+ Add Machine" (die soll leer
+// starten, s. seedDemo()).
+const SEED = { Kick: [0, 4, 8, 12], Snare: [4, 12], 'HH cl': [2, 6, 10, 14] };
+
+class BeatBox extends TrackedDrumMachine {
+  static TRACK_DEFS = TRACK_DEFS;
+
+  static meta = {
+    type: 'beatbox',
+    name: 'BeatBox',
+    desc: '8-track drum machine, synthesized sounds',
+    color: '#ff8c42',
+    model: 'RW-02',
+  };
+
+  /**
+   * Start-Groove in Slot A einfüllen — nur von der Startbesetzung einer neuen
+   * Session genutzt (project.js#newProject), damit die App sofort klingt.
+   * Über "+ Add Machine" hinzugefügte Maschinen bleiben leer.
+   */
+  seedDemo() {
+    for (const [name, steps] of Object.entries(SEED)) {
+      const ti = this.tracks.findIndex((t) => t.name === name);
+      for (const s of steps) this.patterns[0][ti][s].on = true;
+    }
+    if (this.patternIndex === 0) this.seq?.setPattern(this.tracks[this.selected].steps);
+  }
+}
+
 return { BeatBox };
 })();
 
@@ -17635,13 +17724,14 @@ const { PercSynth } = (() => {
  *   Noise  — Rauschanteil im Anschlag
  *
  * Noten kommen aus dem Pitch-Step-Grid (wie SubSynth) oder vom Keybed.
+ * Rein fire-and-forget (kein noteOff/gehaltene Stimmen wie bei SubSynth/
+ * PolySynth) — Pattern-Bank/Step-Grid/Jam-Clip-Bindung sitzen in
+ * StepSequencedSynth.
  */
 
-/** Leeres 1-Takt-Pattern (16 Steps aus). */
-const emptyPattern = (len = 16) =>
-  Array.from({ length: len }, () => ({ on: false, midi: 76 }));
+class PercSynth extends StepSequencedSynth {
+  static DEFAULT_MIDI = 76;
 
-class PercSynth extends Machine {
   static meta = {
     type: 'percsynth',
     name: 'PercSynth',
@@ -17663,67 +17753,9 @@ class PercSynth extends Machine {
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
      *  ohne vorprogrammierte Steps. */
-    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
-  }
-
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.pattern = this.patterns[i];
-    this.seq?.setPattern(this.pattern);
-    this.patternBank?.setActive(i);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.pattern = data;
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer ---------- */
-  onStep(step, time) {
-    const idx = step % this.pattern.length;
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    const st = this.pattern[idx];
-    if (st.on) this.playNote(st.midi, time);
-  }
-
-  serialize() {
-    return {
-      params: { ...this.params },
-      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
-  }
-
-  deserialize(state) {
-    Object.assign(this.params, state.params);
-    if (state.patterns) {
-      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.pattern) {
-      const a = state.pattern.map((s) => ({ ...s }));
-      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
-    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
-    this.output.gain.value = this.params.volume;
-    this.setPan(state.pan ?? 0);
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
@@ -17799,29 +17831,7 @@ class PercSynth extends Machine {
     });
     container.appendChild(row);
 
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'notes',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
-      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.pattern, {
-      onLengthChange: (bars) => {
-        resizePattern(this.pattern, bars);
-        this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
-      },
-    });
-    container.appendChild(this.seq.el);
-    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
-    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
-    automation.setBars(this.id, this.seq.bars);
+    this.buildPatternControls(container);
 
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({
@@ -17854,6 +17864,10 @@ const { PolySynth } = (() => {
  *
  * Der Transpose-Knob (automatisierbar) verschiebt die ganze Voicing in
  * Halbtonschritten — auch live, für bereits klingende (gehaltene) Noten.
+ *
+ * Pattern-Bank/Step-Grid/Jam-Clip-Bindung sitzen in StepSequencedSynth —
+ * hier bleibt nur, was den PolySynth-Klangcharakter (Chord-Voicing) und
+ * die gehaltenen Keybed-Stimmen ausmacht.
  */
 
 /** Chord-Voicings als Halbtonabstände zur Root-Note. */
@@ -17867,17 +17881,13 @@ const CHORDS = {
   sus4:   { label: 'Sus4',   offsets: [0, 5, 7] },
 };
 
-/** Leeres 1-Takt-Pattern (16 Steps aus). */
-const emptyPattern = (len = 16) =>
-  Array.from({ length: len }, () => ({ on: false, midi: 48 }));
-
 /** Headroom pro Einzelstimme — durch Wurzel(Stimmenzahl) geteilt, damit ein
  *  4-stimmiger Maj7 nicht deutlich lauter ist als ein Single-Voicing (grobe
  *  RMS-Kompensation für die Summe unkorrelierter Oszillatoren). Basiswert
  *  wie bei SubSynth (dort ausführlich gegen den Rest des Kits austariert). */
 const VOICE_HEADROOM = 0.6;
 
-class PolySynth extends Machine {
+class PolySynth extends StepSequencedSynth {
   static meta = {
     type: 'polysynth',
     name: 'PolySynth',
@@ -17905,68 +17915,19 @@ class PolySynth extends Machine {
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
      *  ohne vorprogrammierte Steps. */
-    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
   }
 
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.pattern = this.patterns[i];
-    this.seq?.setPattern(this.pattern);
-    this.patternBank?.setActive(i);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.pattern = data;
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
-  onStep(step, time) {
-    const idx = step % this.pattern.length;
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    const st = this.pattern[idx];
-    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
-  }
-
+  /* ---------- Persistenz: chordType kommt oben drauf ---------- */
   serialize() {
-    return {
-      params: { ...this.params },
-      chordType: this.chordType,
-      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
+    return { ...super.serialize(), chordType: this.chordType };
   }
 
   deserialize(state) {
-    Object.assign(this.params, state.params);
+    super.deserialize(state);
     if (state.chordType && CHORDS[state.chordType]) this.chordType = state.chordType;
-    if (state.patterns) {
-      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.pattern) {
-      const a = state.pattern.map((s) => ({ ...s }));
-      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
-    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
-    this.output.gain.value = this.params.volume;
-    this.setPan(state.pan ?? 0);
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
   }
 
   /* ---------- Ein-Stimmen-Aufbau (geteilt zwischen Sequenzer & Keybed) ---------- */
@@ -18155,28 +18116,7 @@ class PolySynth extends Machine {
     });
     container.appendChild(row);
 
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'notes',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
-      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.pattern, {
-      onLengthChange: (bars) => {
-        resizePattern(this.pattern, bars);
-        this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars);
-      },
-    });
-    container.appendChild(this.seq.el);
-    this.seq.el.querySelector('.stepseq__title').textContent = '';
-    automation.setBars(this.id, this.seq.bars);
+    this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
       onNoteOn: (midi) => this.noteOn(midi),
@@ -18193,7 +18133,8 @@ const { AnalogKit } = (() => {
 /**
  * AnalogKit — 11-Spur-Drum-Machine im 909-Stil (synthetisiert, keine
  * Samples). Gleiche Architektur wie die BeatBox (Pads + gemeinsames Grid,
- * Tune/Decay/Level/Sends pro Spur), aber ein eigener Klangcharakter:
+ * Tune/Decay/Level/Sends pro Spur — beide erben von TrackedDrumMachine),
+ * aber ein eigener Klangcharakter:
  *
  * - BD/SD/Toms: kürzere, knackigere Hüllkurven als die BeatBox, SD mit
  *   Doppel-Ton-Body (zwei leicht verstimmte Oszillatoren, je eigener
@@ -18455,13 +18396,8 @@ const TRACK_DEFS = [
   { name: 'RC', synth: rc },
 ];
 
-/** Leeres Pattern-Slot: 11 Spuren × 16 leere Steps. */
-const emptySlot = () => TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
-
-class AnalogKit extends Machine {
-  getParamForKnob(key) {
-    return key === 'volume' ? this.volume : super.getParamForKnob(key);
-  }
+class AnalogKit extends TrackedDrumMachine {
+  static TRACK_DEFS = TRACK_DEFS;
 
   static meta = {
     type: 'analogkit',
@@ -18470,355 +18406,6 @@ class AnalogKit extends Machine {
     color: '#9fb0bd',
     model: 'RW-05',
   };
-
-  buildAudio() {
-    this.volume = 0.8;
-    this.output.gain.value = this.volume;
-    this.selected = 0;
-    /** Index der solo geschalteten Spur, oder null */
-    this.soloTrack = null;
-
-    // Jede Spur: eigener Panner + eigene Sends zu Delay/Reverb, parallel
-    // zum trockenen Pfad (panner -> this.output) — identisch zur BeatBox.
-    this.tracks = TRACK_DEFS.map((def) => {
-      const panner = engine.ctx.createStereoPanner();
-      panner.connect(this.output);
-      const sendDelayNode = engine.ctx.createGain();
-      sendDelayNode.gain.value = 0;
-      panner.connect(sendDelayNode);
-      sendDelayNode.connect(engine.delayBus);
-      const sendReverbNode = engine.ctx.createGain();
-      sendReverbNode.gain.value = 0;
-      panner.connect(sendReverbNode);
-      sendReverbNode.connect(engine.reverbBus);
-      return {
-        ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner,
-        sendDelay: 0, sendReverb: 0, sendDelayNode, sendReverbNode,
-      };
-    });
-
-    // 4 leere Pattern-Slots (A/B/C/D), je 11 Step-Spuren — neu hinzugefügte
-    // Maschinen starten ohne vorprogrammierte Steps.
-    this.patterns = [emptySlot(), emptySlot(), emptySlot(), emptySlot()];
-    this.patternIndex = 0;
-    this.patterns[0].forEach((steps, ti) => { this.tracks[ti].steps = steps; });
-  }
-
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Die steps-Referenzen der Spuren auf beliebige Daten zeigen lassen
-   *  (nicht zwingend this.patterns — auch von bindClipData genutzt). */
-  #bindData(slot) {
-    this.tracks.forEach((tr, ti) => { tr.steps = slot[ti]; });
-  }
-  #bindSlot() {
-    this.#bindData(this.patterns[this.patternIndex]);
-  }
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.#bindSlot();
-    this.patternBank?.setActive(i);
-    this.seq?.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-  #cloneSlot(i) {
-    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.#bindData(data);
-    this.seq?.setPattern(this.tracks[this.selected].steps);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer ---------- */
-  onStep(step, time) {
-    const idx = step % this.tracks[0].steps.length;
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    for (let i = 0; i < this.tracks.length; i++) {
-      if (this.soloTrack != null && i !== this.soloTrack) continue;
-      const tr = this.tracks[i];
-      if (tr.steps[idx].on) this.#trigger(tr, time);
-    }
-  }
-
-  serialize() {
-    return {
-      volume: this.volume,
-      tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
-        sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
-      })),
-      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
-  }
-
-  deserialize(state) {
-    this.volume = state.volume ?? 0.8;
-    this.output.gain.value = this.volume;
-    state.tracks?.forEach((saved, i) => {
-      const tr = this.tracks[i];
-      if (!tr) return;
-      tr.tune = saved.tune ?? tr.tune;
-      tr.decay = saved.decay ?? tr.decay;
-      tr.level = saved.level ?? tr.level;
-      if (saved.snap !== undefined) tr.snap = saved.snap;
-      this.setTrackPan(i, saved.pan ?? 0);
-      tr.sendDelay = saved.sendDelay ?? 0;
-      tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
-      tr.sendReverb = saved.sendReverb ?? 0;
-      tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
-    });
-    if (state.patterns) {
-      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.tracks?.some((t) => t.steps)) {
-      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
-      this.patterns = [slotA, emptySlot(), emptySlot(), emptySlot()];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptySlot());
-    this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
-    this.#bindSlot();
-    this.setPan(state.pan ?? 0);
-  }
-
-  /* ---------- Mixer: Pegel (Volume separat, nicht in params) ---------- */
-  get level() { return this.volume; }
-  setLevel(v) {
-    v = Math.min(1, Math.max(0, v));
-    this.volume = v;
-    this.output.gain.setTargetAtTime(v, engine.now, 0.01);
-    const knob = this.el?.querySelector('x-knob[data-p="volume"]');
-    if (knob) knob.value = v;
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
-  }
-
-  disposeAudio() {
-    for (const tr of this.tracks) {
-      tr.panner.disconnect();
-      tr.meterAnalyser?.disconnect();
-      tr.sendDelayNode.disconnect();
-      tr.sendReverbNode.disconnect();
-    }
-  }
-
-  getTrackMeterAnalyser(i) {
-    const tr = this.tracks[i];
-    if (!tr.meterAnalyser) {
-      tr.meterAnalyser = engine.ctx.createAnalyser();
-      tr.meterAnalyser.fftSize = 512;
-      tr.panner.connect(tr.meterAnalyser);
-    }
-    return tr.meterAnalyser;
-  }
-
-  #trigger(tr, time) {
-    this.pulse(time);
-    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, tr);
-  }
-
-  /* ---------- Mixer: Pegel & Panorama pro Spur ---------- */
-  setTrackLevel(i, v) {
-    const tr = this.tracks[i];
-    if (!tr) return;
-    tr.level = Math.min(1, Math.max(0, v));
-    if (i === this.selected) this.knobs.level.value = tr.level;
-  }
-  setTrackPan(i, v) {
-    const tr = this.tracks[i];
-    if (!tr) return;
-    tr.pan = Math.min(1, Math.max(-1, v));
-    tr.panner.pan.setTargetAtTime(tr.pan, engine.now, 0.01);
-  }
-  setTrackSend(i, which, v) {
-    const tr = this.tracks[i];
-    if (!tr) return;
-    v = Math.min(1, Math.max(0, v));
-    const key = which === 'delay' ? 'sendDelay' : 'sendReverb';
-    const node = which === 'delay' ? tr.sendDelayNode : tr.sendReverbNode;
-    tr[key] = v;
-    node.gain.setTargetAtTime(v, engine.now, 0.01);
-    if (i === this.selected) this.knobs[key].value = v;
-  }
-
-  /* ---------- UI ---------- */
-  buildControls(container) {
-    // Spur-Parameter in eigener, eingefärbter Reihe MIT Spurname (s. BeatBox
-    // für die ausführliche Begründung) — Maschinen-Volume separat.
-    const row = document.createElement('div');
-    row.className = 'machine__row machine__row--track';
-    row.innerHTML = `
-      <span class="track-row__label" data-track-label></span>
-      <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
-      <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
-      <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
-      <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
-      <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
-      <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
-    `;
-    row.addEventListener('input', (e) => {
-      const key = e.target.dataset?.p;
-      if (!key) return;
-      const val = e.detail.value;
-      if (key === 'trackSendDelay' || key === 'trackSendReverb') {
-        this.setTrackSend(this.selected, key === 'trackSendDelay' ? 'delay' : 'reverb', val);
-      } else {
-        this.tracks[this.selected][key] = val;
-      }
-    });
-    container.appendChild(row);
-    this.trackLabelEl = row.querySelector('[data-track-label]');
-    this.knobs = {
-      tune: row.querySelector('[data-p="tune"]'),
-      decay: row.querySelector('[data-p="decay"]'),
-      level: row.querySelector('[data-p="level"]'),
-      snap: row.querySelector('[data-p="snap"]'),
-      sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
-      sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
-    };
-
-    const volRow = document.createElement('div');
-    volRow.className = 'machine__row';
-    volRow.innerHTML = `<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>`;
-    volRow.addEventListener('input', (e) => {
-      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value);
-    });
-    container.appendChild(volRow);
-
-    for (const param of ['tune', 'decay', 'level', 'snap']) {
-      const applyForKey = (key, value) => {
-        const trIdx = parseInt(key.split(':')[1], 10);
-        if (this.tracks[trIdx][param] === undefined) return;
-        this.tracks[trIdx][param] = value;
-        if (trIdx === this.selected) this.knobs[param].value = value;
-      };
-      automation.registerDynamic(
-        this.knobs[param],
-        () => `${this.id}:${this.selected}:${param}`,
-        applyForKey,
-      );
-      for (let ti = 0; ti < this.tracks.length; ti++) {
-        const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
-      }
-    }
-
-    // Spur-Sends genauso automatisierbar wie Tune/Decay/Level/Snap — eigener
-    // Apply-Pfad über setTrackSend() statt Rohwert-Zuweisung, damit der
-    // Send-Gain-Node beim Abspielen einer Lane auch wirklich rampt.
-    for (const [param, which] of [['sendDelay', 'delay'], ['sendReverb', 'reverb']]) {
-      const applyForKey = (key, value) => {
-        const trIdx = parseInt(key.split(':')[1], 10);
-        this.setTrackSend(trIdx, which, value);
-      };
-      automation.registerDynamic(
-        this.knobs[param],
-        () => `${this.id}:${this.selected}:${param}`,
-        applyForKey,
-      );
-      for (let ti = 0; ti < this.tracks.length; ti++) {
-        const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
-      }
-    }
-
-    const pads = document.createElement('div');
-    pads.className = 'pads';
-    this.padEls = this.tracks.map((tr, i) => {
-      const pad = document.createElement('button');
-      pad.className = 'pad';
-      pad.textContent = tr.name;
-      pad.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        if (this.isLiveRecording) {
-          tr.steps[this.liveStepIndex(tr.steps.length)].on = true;
-        }
-        this.#trigger(tr, engine.ctx.currentTime);
-        this.#selectTrack(i);
-      });
-      pads.appendChild(pad);
-      return pad;
-    });
-    container.appendChild(pads);
-
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'drums',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.#cloneSlot(i),
-      putSlot: (i, data) => {
-        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
-        this.setPatternIndex(i);
-      },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.tracks[0].steps, {
-      pitch: false,
-      onLengthChange: (bars) => {
-        for (const tr of this.tracks) resizePattern(tr.steps, bars);
-        this.seq.setPattern(this.tracks[this.selected].steps);
-        automation.setBars(this.id, bars);
-      },
-    });
-    container.appendChild(this.seq.el);
-    automation.setBars(this.id, this.seq.bars);
-
-    const ctrl = this.seq.el.querySelector('.stepseq__ctrl');
-    this.soloBtn = document.createElement('button');
-    this.soloBtn.className = 'm-btn m-btn--solo';
-    this.soloBtn.textContent = 'SOLO';
-    this.soloBtn.addEventListener('click', () => {
-      this.soloTrack = this.soloTrack === this.selected ? null : this.selected;
-      this.#refreshSoloUI();
-    });
-    ctrl.insertBefore(this.soloBtn, ctrl.querySelector('[data-clear]'));
-
-    this.#selectTrack(0);
-  }
-
-  #selectTrack(i) {
-    this.selected = i;
-    const tr = this.tracks[i];
-    this.padEls.forEach((p, j) => p.classList.toggle('is-selected', j === i));
-    this.trackLabelEl.textContent = tr.name;
-    this.seq.setPattern(tr.steps);
-    this.knobs.tune.value = tr.tune;
-    this.knobs.decay.value = tr.decay;
-    this.knobs.level.value = tr.level;
-    this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
-    if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
-    this.knobs.sendDelay.value = tr.sendDelay;
-    this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap', 'sendDelay', 'sendReverb']) {
-      this.knobs[param].classList.toggle('has-auto',
-        automation.hasLane(`${this.id}:${i}:${param}`));
-    }
-    this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
-    this.#refreshSoloUI();
-  }
-
-  onLanesImported() {
-    this.#selectTrack(this.selected);
-  }
-
-  #refreshSoloUI() {
-    this.soloBtn.classList.toggle('is-active', this.soloTrack === this.selected);
-    this.padEls.forEach((p, j) => p.classList.toggle('is-solo', j === this.soloTrack));
-  }
 }
 
 return { AnalogKit };

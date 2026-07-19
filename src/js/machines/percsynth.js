@@ -14,22 +14,18 @@
  *   Noise  — Rauschanteil im Anschlag
  *
  * Noten kommen aus dem Pitch-Step-Grid (wie SubSynth) oder vom Keybed.
+ * Rein fire-and-forget (kein noteOff/gehaltene Stimmen wie bei SubSynth/
+ * PolySynth) — Pattern-Bank/Step-Grid/Jam-Clip-Bindung sitzen in
+ * StepSequencedSynth.
  */
-import { Machine } from './machine.js';
+import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
 import { noise, autoStop, midiToHz } from '../core/dsp.js';
-import { StepSeq, resizePattern } from '../ui/step-seq.js';
-import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
-import { automation } from '../core/automation.js';
-import { song } from '../core/song.js';
 
-/** Leeres 1-Takt-Pattern (16 Steps aus). */
-const emptyPattern = (len = 16) =>
-  Array.from({ length: len }, () => ({ on: false, midi: 76 }));
+export class PercSynth extends StepSequencedSynth {
+  static DEFAULT_MIDI = 76;
 
-export class PercSynth extends Machine {
   static meta = {
     type: 'percsynth',
     name: 'PercSynth',
@@ -51,67 +47,9 @@ export class PercSynth extends Machine {
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
      *  ohne vorprogrammierte Steps. */
-    this.patterns = [emptyPattern(), emptyPattern(), emptyPattern(), emptyPattern()];
+    this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
-  }
-
-  /* ---------- Pattern-Bank (A/B/C/D) ---------- */
-  /** Aktives Pattern setzen (auch von der Song-Wiedergabe). */
-  setPatternIndex(i) {
-    this.patternIndex = i;
-    this.pattern = this.patterns[i];
-    this.seq?.setPattern(this.pattern);
-    this.patternBank?.setActive(i);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
-   *  Daten binden, OHNE this.patterns/patternIndex zu berühren — ein Clip
-   *  ist kein fünfter A/B/C/D-Slot, sondern läuft daneben. */
-  bindClipData(data) {
-    this.pattern = data;
-    this.seq?.setPattern(this.pattern);
-    automation.setBars(this.id, this.seq?.bars ?? 1);
-  }
-
-  /* ---------- Sequenzer ---------- */
-  onStep(step, time) {
-    const idx = step % this.pattern.length;
-    const delayMs = (time - engine.now) * 1000;
-    this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
-
-    const st = this.pattern[idx];
-    if (st.on) this.playNote(st.midi, time);
-  }
-
-  serialize() {
-    return {
-      params: { ...this.params },
-      patterns: this.patterns.map((p) => p.map((s) => ({ ...s }))),
-      patternIndex: this.patternIndex,
-      pan: this.pan,
-    };
-  }
-
-  deserialize(state) {
-    Object.assign(this.params, state.params);
-    if (state.patterns) {
-      this.patterns = state.patterns.map((p) => p.map((s) => ({ ...s })));
-      this.patternIndex = state.patternIndex ?? 0;
-    } else if (state.pattern) {
-      const a = state.pattern.map((s) => ({ ...s }));
-      this.patterns = [a, emptyPattern(a.length), emptyPattern(a.length), emptyPattern(a.length)];
-      this.patternIndex = 0;
-    }
-    while (this.patterns.length < 4) this.patterns.push(emptyPattern());
-    this.pattern = this.patterns[this.patternIndex] ?? this.patterns[0];
-    this.output.gain.value = this.params.volume;
-    this.setPan(state.pan ?? 0);
-  }
-
-  onTransport(event) {
-    if (event === 'stop') this.seq?.clearPlayhead();
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
@@ -187,29 +125,7 @@ export class PercSynth extends Machine {
     });
     container.appendChild(row);
 
-    this.patternBank = createPatternBank({
-      index: this.patternIndex,
-      shape: 'notes',
-      onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
-      getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
-      putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
-    });
-    container.appendChild(this.patternBank.el);
-
-    this.seq = new StepSeq(this.pattern, {
-      onLengthChange: (bars) => {
-        resizePattern(this.pattern, bars);
-        this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
-      },
-    });
-    container.appendChild(this.seq.el);
-    this.seq.el.querySelector('.stepseq__title').textContent = ''; // Bank labelt schon
-    // Automations-Lanes an die (ggf. geladene) Pattern-Länge koppeln
-    automation.setBars(this.id, this.seq.bars);
+    this.buildPatternControls(container);
 
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({

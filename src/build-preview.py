@@ -36,6 +36,8 @@ MODULES = [
     ("js/core/recorder.js",     ["recorder"]),
     ("js/core/jamlink.js",      ["jamlink", "packSignal", "unpackSignal"]),
     ("js/machines/machine.js",  ["Machine"]),
+    ("js/machines/tracked-drum-machine.js", ["TrackedDrumMachine"]),
+    ("js/machines/step-sequenced-synth.js", ["StepSequencedSynth"]),
     ("js/machines/subsynth.js", ["SubSynth"]),
     ("js/machines/beatbox.js",  ["BeatBox"]),
     ("js/machines/percsynth.js", ["PercSynth"]),
