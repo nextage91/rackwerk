@@ -24,9 +24,14 @@ export function env(ctx, t, peak, dur) {
   return g;
 }
 
-/** Quelle sauber beenden und den Teilgraphen abbauen. */
-export function autoStop(src, t, dur, nodes) {
-  src.start(t);
+/** Quelle sauber beenden und den Teilgraphen abbauen. `offset` (Sekunden
+ *  in den Buffer hinein) ist optional -- ohne Angabe wie bisher immer bei
+ *  0 starten. Ein zufälliger Offset lässt eine Rauschquelle bei jedem
+ *  Anschlag eine ANDERE Stelle desselben (gecachten) Rauschbuffers
+ *  abspielen statt immer denselben Ausschnitt -- Analogkit nutzt das für
+ *  mehr Anschlag-zu-Anschlag-Variation (s. dort). */
+export function autoStop(src, t, dur, nodes, offset = 0) {
+  src.start(t, offset);
   src.stop(t + dur + 0.05);
   src.onended = () => { src.disconnect(); nodes.forEach((n) => n.disconnect()); };
 }
