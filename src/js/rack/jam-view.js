@@ -31,6 +31,7 @@
  *   Knobs nutzt.
  */
 import { transport, STEPS_PER_BAR } from '../core/transport.js';
+import { undo } from '../core/undo.js';
 
 /** Kuratierte Makro-Parameter je Maschinentyp — bewusst 4, nicht alle.
  *  Bei BeatBox/AnalogKit sind das die SPUR-Regler (Tune/Decay/Level/Snap
@@ -53,6 +54,10 @@ const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit']);
  *  (unterdrückt dann den Click, s. makeReorderable) -- genau das Symptom
  *  "Clip startet nicht beim Antippen" auf einem echten Gerät. */
 const TAP_THRESHOLD = 8;
+
+/** Halten auf einem Clip (wie A/B/C/D-Pattern-Slots, s. pattern-bank.js)
+ *  öffnet den Löschen-Chip -- dieselbe Zeitschwelle wie dort. */
+const CLIP_HOLD_MS = 500;
 
 /** Ändert einen Parameter über den ECHTEN Knob im Maschinen-Panel — löst
  *  denselben `input`-Pfad aus, den auch Handbewegung/Automation nutzen
@@ -180,6 +185,68 @@ function refreshClipStates(machine) {
   }
 }
 
+/** Entfernt einen Clip endgültig (mit Undo-Angebot, wie Pattern-Clear in
+ *  step-seq.js). Läuft/wartet der gelöschte Clip gerade, wird er zuerst
+ *  regulär gestoppt (stopClip kümmert sich um Pattern-Rückkehr + Jam-Gates
+ *  -- kein Sonderfall nötig). Undo fügt denselben Clip (gleiche id) an
+ *  seiner ursprünglichen Position wieder ein, startet ihn aber nicht neu. */
+function deleteClip(machine, clipId) {
+  const idx = machine.clips.findIndex((c) => c.id === clipId);
+  if (idx === -1) return;
+  const clip = machine.clips[idx];
+
+  const st = stateFor(machine);
+  if (st.activeClipId === clipId || st.queuedClipId === clipId) stopClip(machine);
+
+  machine.removeClip(clipId);
+  const cols = columnEls.get(machine);
+  if (cols) renderClips(machine, cols.clipsEl);
+
+  undo.offer(`Clip "${clip.name}" deleted`, () => {
+    machine.clips.splice(idx, 0, clip);
+    const cols2 = columnEls.get(machine);
+    if (cols2) renderClips(machine, cols2.clipsEl);
+  });
+}
+
+/** Halten-Chip zum Löschen eines Clips -- ein einzelnes, modulweites
+ *  Popup (wie pattern-bank.js' Kontext-Chip), da hier mehrere Spalten
+ *  gleichzeitig Clips zeigen können: es soll trotzdem immer nur EIN Chip
+ *  offen sein. */
+let clipMenu = null;
+const dismissClipMenu = () => {
+  clipMenu?.remove();
+  clipMenu = null;
+  document.removeEventListener('pointerdown', onOutsideClipMenu, true);
+};
+const onOutsideClipMenu = (e) => { if (clipMenu && !clipMenu.contains(e.target)) dismissClipMenu(); };
+
+function openClipDeleteMenu(machine, clipId, anchorEl) {
+  dismissClipMenu();
+  clipMenu = document.createElement('div');
+  clipMenu.className = 'pat-chip';
+  const delBtn = document.createElement('button');
+  delBtn.className = 'pat-chip__btn pat-chip__btn--danger';
+  delBtn.textContent = '🗑 Delete Clip';
+  delBtn.addEventListener('click', () => {
+    deleteClip(machine, clipId);
+    dismissClipMenu();
+  });
+  clipMenu.appendChild(delBtn);
+  document.body.appendChild(clipMenu);
+  // über dem Clip platzieren, am Bildschirmrand einklemmen (wie pattern-bank.js)
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(
+    window.innerWidth - clipMenu.offsetWidth - 8,
+    r.left + r.width / 2 - clipMenu.offsetWidth / 2,
+  ));
+  clipMenu.style.left = `${left}px`;
+  clipMenu.style.top = `${Math.max(8, r.top - clipMenu.offsetHeight - 8)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideClipMenu, true), 0);
+  clearTimeout(clipMenu.dismissTimer);
+  clipMenu.dismissTimer = setTimeout(dismissClipMenu, 4000);
+}
+
 /* ---------- Rendering ---------- */
 
 function renderClips(machine, clipsEl) {
@@ -212,6 +279,16 @@ function renderClips(machine, clipsEl) {
  *  dem direkten Nachbarn, reicht für die kurzen Listen hier völlig. */
 function makeReorderable(clipsEl, machine) {
   let dragEl = null, pointerId = null, startY = 0;
+  let holdTimer = null;
+  // Bleibt über die ganze Geste bestehen (nicht per Timeout selbst wieder
+  // gelöscht!) -- der Löschen-Chip kann beliebig lange offen stehen, bevor
+  // der Finger tatsächlich losgelassen wird; suppressClick muss erst in
+  // release() gesetzt werden, genau dann, wenn der Click-Handler ihn auch
+  // wirklich prüft (sonst wäre ein zu früh selbst-löschendes Flag längst
+  // wieder weg und der Loslasser würde den Clip zusätzlich starten/stoppen).
+  let heldForDelete = false;
+
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
 
   clipsEl.addEventListener('pointerdown', (e) => {
     const clip = e.target.closest('.clip');
@@ -219,6 +296,15 @@ function makeReorderable(clipsEl, machine) {
     dragEl = clip;
     pointerId = e.pointerId;
     startY = e.clientY;
+    heldForDelete = false;
+    // Halten (wie A/B/C/D-Slots, s. pattern-bank.js) öffnet den Löschen-
+    // Chip -- bricht ab, sobald daraus ein echtes Ziehen wird (s. pointer-
+    // move) oder der Finger vorher losgelassen wird.
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      heldForDelete = true;
+      openClipDeleteMenu(machine, Number(clip.dataset.clipId), clip);
+    }, CLIP_HOLD_MS);
   });
 
   clipsEl.addEventListener('pointermove', (e) => {
@@ -226,6 +312,7 @@ function makeReorderable(clipsEl, machine) {
     const dy = e.clientY - startY;
     if (!dragEl.classList.contains('is-dragging')) {
       if (Math.abs(dy) < TAP_THRESHOLD) return;
+      cancelHold();
       dragEl.classList.add('is-dragging');
       dragEl.setPointerCapture(pointerId);
     }
@@ -251,12 +338,15 @@ function makeReorderable(clipsEl, machine) {
 
   const release = (e) => {
     if (!dragEl || e.pointerId !== pointerId) return;
+    cancelHold();
     const wasDragging = dragEl.classList.contains('is-dragging');
     dragEl.classList.remove('is-dragging');
     dragEl.style.transform = '';
     if (wasDragging) {
       const order = [...clipsEl.children].map((el) => Number(el.dataset.clipId));
       machine.clips = order.map((id) => machine.clips.find((c) => c.id === id));
+    }
+    if (wasDragging || heldForDelete) {
       dragEl.dataset.suppressClick = '1';
       setTimeout(() => { if (dragEl) delete dragEl.dataset.suppressClick; }, 80);
     }
