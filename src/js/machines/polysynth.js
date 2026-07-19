@@ -16,7 +16,7 @@ import { transport } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz } from '../core/dsp.js';
+import { midiToHz, applyFilterEnv } from '../core/dsp.js';
 import { automation } from '../core/automation.js';
 import { song } from '../core/song.js';
 
@@ -145,7 +145,7 @@ export class PolySynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, t);
+    applyFilterEnv(filter, t, p);
 
     return { osc, filter };
   }
@@ -230,15 +230,6 @@ export class PolySynth extends Machine {
 
   disposeAudio() {
     this.allNotesOff();
-  }
-
-  /** Filterhüllkurve — wie bei SubSynth: startet über dem Cutoff, fällt
-   *  darauf zurück. Gilt für jede Stimme einzeln, gleich wie beim Filter. */
-  #applyFilterEnv(filter, t) {
-    const p = this.params;
-    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
-    filter.frequency.setValueAtTime(peak, t);
-    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
   }
 
   /* ---------- UI ---------- */

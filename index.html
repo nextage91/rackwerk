@@ -14209,7 +14209,7 @@ return { engine };
 })();
 
 /* ===== js/core/dsp.js ===== */
-const { noise, env, autoStop, midiToHz } = (() => {
+const { noise, env, autoStop, midiToHz, applyFilterEnv } = (() => {
 /**
  * dsp.js — kleine, gemeinsam genutzte Audio-Helfer.
  * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
@@ -14245,7 +14245,19 @@ function autoStop(src, t, dur, nodes) {
 
 const midiToHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
-return { noise, env, autoStop, midiToHz };
+/**
+ * Filterhüllkurve (SubSynth + PolySynth, identisch): startet envAmt Oktaven
+ * über dem Cutoff (bis +4 Okt.) und fällt exponentiell auf den Cutoff
+ * zurück — der klassische Pluck/Acid-Charakter. Gilt für Keybed- und
+ * Sequenzer-Stimmen gleich.
+ */
+function applyFilterEnv(filter, t, params) {
+  const peak = Math.min(16000, params.cutoff * Math.pow(2, params.envAmt * 4));
+  filter.frequency.setValueAtTime(peak, t);
+  filter.frequency.setTargetAtTime(params.cutoff, t, Math.max(0.01, params.fDecay) / 3);
+}
+
+return { noise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
 /* ===== js/core/inserts.js ===== */
@@ -14396,15 +14408,24 @@ const DEFS = {
       level.gain.value = p.level;
       shaper.connect(tone);
       tone.connect(level);
+      // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
+      // Audio-Thread, das zudem bei aktivem Signal hörbar knackst, weil
+      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- der Knob
+      // feuert aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
+      // Gleiches Entprellen wie fx.js' #buildIR() für den Reverb-Impuls.
+      let driveTimer = null;
       return {
         input: shaper,
         output: level,
         setParam(key, v) {
-          if (key === 'drive') shaper.curve = makeDriveCurve(v);
+          if (key === 'drive') {
+            clearTimeout(driveTimer);
+            driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(v); }, 60);
+          }
           else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
           else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
         },
-        dispose() { shaper.disconnect(); tone.disconnect(); level.disconnect(); },
+        dispose() { clearTimeout(driveTimer); shaper.disconnect(); tone.disconnect(); level.disconnect(); },
       };
     },
   },
@@ -16857,7 +16878,7 @@ class SubSynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, time);
+    applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
     const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
@@ -16891,7 +16912,7 @@ class SubSynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, t);
+    applyFilterEnv(filter, t, p);
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(0, t);
@@ -16922,18 +16943,6 @@ class SubSynth extends Machine {
 
   disposeAudio() {
     this.allNotesOff();
-  }
-
-  /**
-   * Filterhüllkurve: startet envAmt Oktaven über dem Cutoff (bis +4 Okt.)
-   * und fällt exponentiell auf den Cutoff zurück — der klassische
-   * Pluck/Acid-Charakter. Gilt für Keybed- und Sequenzer-Stimmen gleich.
-   */
-  #applyFilterEnv(filter, t) {
-    const p = this.params;
-    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
-    filter.frequency.setValueAtTime(peak, t);
-    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
   }
 
   /* ---------- UI ---------- */
@@ -17972,7 +17981,7 @@ class PolySynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, t);
+    applyFilterEnv(filter, t, p);
 
     return { osc, filter };
   }
@@ -18057,15 +18066,6 @@ class PolySynth extends Machine {
 
   disposeAudio() {
     this.allNotesOff();
-  }
-
-  /** Filterhüllkurve — wie bei SubSynth: startet über dem Cutoff, fällt
-   *  darauf zurück. Gilt für jede Stimme einzeln, gleich wie beim Filter. */
-  #applyFilterEnv(filter, t) {
-    const p = this.params;
-    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
-    filter.frequency.setValueAtTime(peak, t);
-    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
   }
 
   /* ---------- UI ---------- */

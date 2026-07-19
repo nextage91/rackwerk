@@ -13,7 +13,7 @@ import { transport } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz } from '../core/dsp.js';
+import { midiToHz, applyFilterEnv } from '../core/dsp.js';
 import { automation } from '../core/automation.js';
 import { song } from '../core/song.js';
 
@@ -157,7 +157,7 @@ export class SubSynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, time);
+    applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
     const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
@@ -191,7 +191,7 @@ export class SubSynth extends Machine {
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
     filter.Q.value = p.resonance;
-    this.#applyFilterEnv(filter, t);
+    applyFilterEnv(filter, t, p);
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(0, t);
@@ -222,18 +222,6 @@ export class SubSynth extends Machine {
 
   disposeAudio() {
     this.allNotesOff();
-  }
-
-  /**
-   * Filterhüllkurve: startet envAmt Oktaven über dem Cutoff (bis +4 Okt.)
-   * und fällt exponentiell auf den Cutoff zurück — der klassische
-   * Pluck/Acid-Charakter. Gilt für Keybed- und Sequenzer-Stimmen gleich.
-   */
-  #applyFilterEnv(filter, t) {
-    const p = this.params;
-    const peak = Math.min(16000, p.cutoff * Math.pow(2, p.envAmt * 4));
-    filter.frequency.setValueAtTime(peak, t);
-    filter.frequency.setTargetAtTime(p.cutoff, t, Math.max(0.01, p.fDecay) / 3);
   }
 
   /* ---------- UI ---------- */
