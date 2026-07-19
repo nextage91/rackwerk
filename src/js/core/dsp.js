@@ -16,6 +16,37 @@ export function noise(ctx) {
   return _noiseBuffer;
 }
 
+let _lfsrBuffer = null;
+
+/** Gecachter 1-Sekunden-Rauschbuffer aus einem 31-stufigen rückgekoppelten
+ *  Schieberegister (Fibonacci-LFSR, Feedback-Taps Bit 13 & Bit 31 -> XOR ->
+ *  zurück auf Bit 1) statt echtem Zufall -- das reale 909-Snare-Rauschen
+ *  entsteht genau so (zwei CD4006-Schieberegister + CD4070-XOR-Gatter),
+ *  NICHT aus einem echten Rauschgenerator. Klingt hörbar "körniger"/
+ *  digitaler als Math.random()-Rauschen (nur zwei diskrete Pegel statt
+ *  kontinuierlicher Amplituden), mit einer sehr langen, aber nicht
+ *  unendlichen Periode (2^31-1 Takte) -- innerhalb der hier gecachten
+ *  1s/48kHz-Buffer-Länge wiederholt sich das Muster nicht.
+ *  Amplitude auf 1/√3 skaliert (statt ±1): das gleicht den RMS-Pegel an
+ *  Math.random()*2-1 an (Gleichverteilung hat RMS 1/√3, dieses Zwei-
+ *  Pegel-Signal sonst konstant RMS 1) -- ohne diesen Abgleich wären alle
+ *  bestehenden, per Gehör/Messung eingepegelten Level-Werte an dieser
+ *  Rauschquelle zu laut. */
+export function lfsrNoise(ctx) {
+  if (!_lfsrBuffer) {
+    _lfsrBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = _lfsrBuffer.getChannelData(0);
+    const amp = 1 / Math.sqrt(3);
+    let reg = 1; // darf nie 0 werden, sonst bleibt das Register für immer 0
+    for (let i = 0; i < d.length; i++) {
+      const bit = ((reg >> 12) ^ (reg >> 30)) & 1; // Taps: Bit 13 & Bit 31
+      reg = ((reg << 1) | bit) & 0x7fffffff; // 31 Bit breit halten
+      d[i] = bit ? amp : -amp;
+    }
+  }
+  return _lfsrBuffer;
+}
+
 /** Exponentiell abfallende Hüllkurve als Gain-Node. */
 export function env(ctx, t, peak, dur) {
   const g = ctx.createGain();

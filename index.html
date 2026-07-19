@@ -14255,7 +14255,7 @@ return { engine };
 })();
 
 /* ===== js/core/dsp.js ===== */
-const { noise, env, autoStop, midiToHz, applyFilterEnv } = (() => {
+const { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv } = (() => {
 /**
  * dsp.js — kleine, gemeinsam genutzte Audio-Helfer.
  * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
@@ -14272,6 +14272,37 @@ function noise(ctx) {
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
   return _noiseBuffer;
+}
+
+let _lfsrBuffer = null;
+
+/** Gecachter 1-Sekunden-Rauschbuffer aus einem 31-stufigen rückgekoppelten
+ *  Schieberegister (Fibonacci-LFSR, Feedback-Taps Bit 13 & Bit 31 -> XOR ->
+ *  zurück auf Bit 1) statt echtem Zufall -- das reale 909-Snare-Rauschen
+ *  entsteht genau so (zwei CD4006-Schieberegister + CD4070-XOR-Gatter),
+ *  NICHT aus einem echten Rauschgenerator. Klingt hörbar "körniger"/
+ *  digitaler als Math.random()-Rauschen (nur zwei diskrete Pegel statt
+ *  kontinuierlicher Amplituden), mit einer sehr langen, aber nicht
+ *  unendlichen Periode (2^31-1 Takte) -- innerhalb der hier gecachten
+ *  1s/48kHz-Buffer-Länge wiederholt sich das Muster nicht.
+ *  Amplitude auf 1/√3 skaliert (statt ±1): das gleicht den RMS-Pegel an
+ *  Math.random()*2-1 an (Gleichverteilung hat RMS 1/√3, dieses Zwei-
+ *  Pegel-Signal sonst konstant RMS 1) -- ohne diesen Abgleich wären alle
+ *  bestehenden, per Gehör/Messung eingepegelten Level-Werte an dieser
+ *  Rauschquelle zu laut. */
+function lfsrNoise(ctx) {
+  if (!_lfsrBuffer) {
+    _lfsrBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = _lfsrBuffer.getChannelData(0);
+    const amp = 1 / Math.sqrt(3);
+    let reg = 1; // darf nie 0 werden, sonst bleibt das Register für immer 0
+    for (let i = 0; i < d.length; i++) {
+      const bit = ((reg >> 12) ^ (reg >> 30)) & 1; // Taps: Bit 13 & Bit 31
+      reg = ((reg << 1) | bit) & 0x7fffffff; // 31 Bit breit halten
+      d[i] = bit ? amp : -amp;
+    }
+  }
+  return _lfsrBuffer;
 }
 
 /** Exponentiell abfallende Hüllkurve als Gain-Node. */
@@ -14308,7 +14339,7 @@ function applyFilterEnv(filter, t, params) {
   filter.frequency.setTargetAtTime(params.cutoff, t, Math.max(0.01, params.fDecay) / 3);
 }
 
-return { noise, env, autoStop, midiToHz, applyFilterEnv };
+return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
 /* ===== js/core/inserts.js ===== */
@@ -18386,22 +18417,32 @@ function sd(ctx, t, dest, p) {
   // "Snare-Kabel"-Rauschen: beim Original zwei PARALLELE Pfade (Tiefpass +
   // Hochpass), je eigene Hüllkurve, statt eines einzelnen Bandpasses — der
   // Tiefpass-Anteil gibt den dumpferen Rattle-Körper, der Hochpass-Anteil
-  // das helle Zischen im Attack.
+  // das helle Zischen im Attack. Beide aus dem LFSR-Rauschen (s. dsp.js) —
+  // die echte 909-Snare nutzt ein 31-stufiges Schieberegister statt echtem
+  // Zufall als Rauschquelle, das ist hörbar "körniger" als Math.random().
+  // Pegel-Koeffizient gegenüber dem alten Math.random()-Wert (0.46) leicht
+  // gesenkt (0.37): SD summiert hier VIER unabhängig peakende Schichten
+  // (2 Ton-Bodies + 2 Rauschpfade) direkt auf `dest`. Über 40 Durchläufe
+  // gemessen (test-analogkit-sd-scan.mjs): schon VOR dem LFSR-Wechsel
+  // überschritt SD bei Koeffizient 0.46 in 28/40 Fällen Peak 1.0 (bis
+  // 1.203) -- das war also kein neues Problem, nur bisher nie mit
+  // mehreren Durchläufen geprüft. Bei 0.37 bleibt der Peak zuverlässig
+  // unter 1.0, bei vergleichbarem Pegel zu BD wie vorher.
   const nLow = ctx.createBufferSource();
-  nLow.buffer = noise(ctx);
+  nLow.buffer = lfsrNoise(ctx);
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
-  const lpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.2 * p.decay);
+  const lpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.2 * p.decay);
   nLow.connect(lp).connect(lpg).connect(dest);
   autoStop(nLow, t, 0.2 * p.decay, [lp, lpg], noiseOffset());
 
   const nHigh = ctx.createBufferSource();
-  nHigh.buffer = noise(ctx);
+  nHigh.buffer = lfsrNoise(ctx);
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
-  const hpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.1 * p.decay);
+  const hpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.1 * p.decay);
   nHigh.connect(hp).connect(hpg).connect(dest);
   autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg], noiseOffset());
 }
@@ -18494,7 +18535,14 @@ const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
    Oszillatoren pro Hit (jeder startet bei Phase 0) klingen dagegen JEDES
    Mal bit-identisch -- der klassische Software-Verräter bei Cymbal-
    Emulationen. ---------- */
-const METAL_RATIOS = [1, 1.48, 1.62, 2.03, 2.28, 2.67];
+// Verhältnisse nach der klassischen 6-Oszillatoren-Referenztechnik für
+// analoge Cymbal-/Hi-Hat-Synthese (s. Sound on Sound "Practical Cymbal
+// Synthesis", wie sie u.a. auch beim TR-808 verwendet wird): breiterer
+// Streubereich (2x bis 8.2x der Basisfrequenz) als die vorherige, enger
+// gruppierte Auswahl -- damit landen bei gleichem Hochpass/Bandpass mehr
+// Quadratwellen-Obertöne im hörbaren Band, was dichter/metallischer statt
+// "gestimmt akkordisch" klingt.
+const METAL_RATIOS = [2, 3, 4.16, 5.43, 6.79, 8.21];
 
 // Durch die STIMMENZAHL geteilt, nicht durch Wurzel(Stimmenzahl): die 6
 // Oszillatoren laufen jetzt persistent/frei (s. buildAudio/metallic oben)
@@ -18591,7 +18639,7 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
-    dur: 1.0 * p.decay, level: 0.58 * Math.sqrt(6) * METAL_MAKEUP * p.level,
+    dur: 1.0 * p.decay, level: 0.44 * Math.sqrt(6) * METAL_MAKEUP * p.level,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -18623,9 +18671,9 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.84 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.65 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.6 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.55 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.40 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.39 * Math.sqrt(6) * METAL_MAKEUP }) },
   { name: 'RC', synth: rc },
 ];
 

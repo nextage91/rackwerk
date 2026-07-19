@@ -27,7 +27,7 @@ MODULES = [
     ("js/ui/pattern-bank.js",   ["createPatternBank"]),
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/audio-engine.js", ["engine"]),
-    ("js/core/dsp.js",          ["noise", "env", "autoStop", "midiToHz", "applyFilterEnv"]),
+    ("js/core/dsp.js",          ["noise", "lfsrNoise", "env", "autoStop", "midiToHz", "applyFilterEnv"]),
     ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "UI_PARAMS", "EQ_TYPES", "INSERT_COLORS", "RATIO_MODE_BUTTONS"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR"]),
     ("js/core/fx.js",           ["masterFX"]),
