@@ -160,6 +160,18 @@ let lastAudible = new Set();
  * Menge nur (z. B. Entmuten), ist nichts Störendes drin — kein Flush,
  * das würde nur einen gerade legitim ausklingenden Nachhall unnötig
  * unterbrechen.
+ *
+ * `setSoloShadowed()`: TrackedDrumMachine (BeatBox/AnalogKit) hat pro
+ * Spur EIGENE Delay-/Reverb-Sends, die absichtlich parallel zum trockenen
+ * Pfad hängen (VOR `this.gate`, s. deren buildAudio()) — ein gemuteter
+ * Kit-Bus soll so im Effekt nachklingen dürfen. Genau das ist aber der
+ * gemeldete Bug: soloed man eine ANDERE Maschine, blieben diese Spur-
+ * Sends bisher unangetastet und speisten den Master-Effekt munter weiter.
+ * Solo (anders als Mute) soll "nur dieses Instrument" bedeuten, also
+ * werden Spur-Sends hier zusätzlich abgeklemmt, sobald `soloActive` ist
+ * und DIESE Maschine nicht die soloed ist — Mute allein lässt sie weiter
+ * unberührt (der Send-Only-Trick bleibt erhalten). Maschinen ohne eigene
+ * Spur-Sends (die Basisklasse) tun bei diesem Aufruf nichts.
  */
 function refreshGates() {
   const soloActive = [...machines].some((m) => m.soloed);
@@ -171,6 +183,7 @@ function refreshGates() {
     if (open) { anyAudible = true; audibleNow.add(m); }
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
+    m.setSoloShadowed((soloActive && !m.soloed) || !m.jamGateOpen);
   }
   masterFX.setReturnAudible(anyAudible);
   const shrank = [...lastAudible].some((m) => !audibleNow.has(m));
@@ -246,6 +259,11 @@ export class Machine {
   disposeAudio() {}
   serialize() { return {}; }
   deserialize(_state) {}
+  /** Von refreshGates() gerufen, sobald eine ANDERE Maschine solo ist
+   *  (oder der Jam-Gate diese hier schließt). Nur für Unterklassen mit
+   *  Sends, die absichtlich am eigenen `this.gate` vorbeilaufen (s. dort);
+   *  die Basisklasse hat keine, also nichts zu tun. */
+  setSoloShadowed(_shadowed) {}
   /** Wert für einen Knob (data-p) — Basis: Sends, sonst aus this.params. */
   getParamForKnob(key) {
     if (key === 'sendDelay') return this.sends.delay;

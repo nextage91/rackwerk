@@ -16156,6 +16156,18 @@ let lastAudible = new Set();
  * Menge nur (z. B. Entmuten), ist nichts Störendes drin — kein Flush,
  * das würde nur einen gerade legitim ausklingenden Nachhall unnötig
  * unterbrechen.
+ *
+ * `setSoloShadowed()`: TrackedDrumMachine (BeatBox/AnalogKit) hat pro
+ * Spur EIGENE Delay-/Reverb-Sends, die absichtlich parallel zum trockenen
+ * Pfad hängen (VOR `this.gate`, s. deren buildAudio()) — ein gemuteter
+ * Kit-Bus soll so im Effekt nachklingen dürfen. Genau das ist aber der
+ * gemeldete Bug: soloed man eine ANDERE Maschine, blieben diese Spur-
+ * Sends bisher unangetastet und speisten den Master-Effekt munter weiter.
+ * Solo (anders als Mute) soll "nur dieses Instrument" bedeuten, also
+ * werden Spur-Sends hier zusätzlich abgeklemmt, sobald `soloActive` ist
+ * und DIESE Maschine nicht die soloed ist — Mute allein lässt sie weiter
+ * unberührt (der Send-Only-Trick bleibt erhalten). Maschinen ohne eigene
+ * Spur-Sends (die Basisklasse) tun bei diesem Aufruf nichts.
  */
 function refreshGates() {
   const soloActive = [...machines].some((m) => m.soloed);
@@ -16167,6 +16179,7 @@ function refreshGates() {
     if (open) { anyAudible = true; audibleNow.add(m); }
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
+    m.setSoloShadowed((soloActive && !m.soloed) || !m.jamGateOpen);
   }
   masterFX.setReturnAudible(anyAudible);
   const shrank = [...lastAudible].some((m) => !audibleNow.has(m));
@@ -16242,6 +16255,11 @@ class Machine {
   disposeAudio() {}
   serialize() { return {}; }
   deserialize(_state) {}
+  /** Von refreshGates() gerufen, sobald eine ANDERE Maschine solo ist
+   *  (oder der Jam-Gate diese hier schließt). Nur für Unterklassen mit
+   *  Sends, die absichtlich am eigenen `this.gate` vorbeilaufen (s. dort);
+   *  die Basisklasse hat keine, also nichts zu tun. */
+  setSoloShadowed(_shadowed) {}
   /** Wert für einen Knob (data-p) — Basis: Sends, sonst aus this.params. */
   getParamForKnob(key) {
     if (key === 'sendDelay') return this.sends.delay;
@@ -16790,9 +16808,12 @@ class TrackedDrumMachine extends Machine {
     // die Spur-eigene Node. Jede Spur bekommt zusätzlich ihre eigenen
     // Send-Gains zu Delay/Reverb — parallel zum trockenen Pfad (panner ->
     // this.output), nicht dahinter. Dadurch bleiben Spur-Sends unabhängig
-    // von Mute/Solo der Maschine (bewusst: ein gemuteter Kit-Bus soll
-    // trotzdem noch in den Effekt "nachklingen" können, wie bei einem
-    // Send-Only-Trick am echten Pult).
+    // von MUTE der Maschine (bewusst: ein gemuteter Kit-Bus soll trotzdem
+    // noch in den Effekt "nachklingen" können, wie bei einem Send-Only-
+    // Trick am echten Pult) -- SOLO einer anderen Maschine klemmt sie
+    // trotzdem zusätzlich ab, s. setSoloShadowed() unten: Solo soll
+    // "nur dieses Instrument" bedeuten, nicht "dieses plus alle
+    // Effekt-Sends der anderen".
     this.tracks = this.constructor.TRACK_DEFS.map((def) => {
       const panner = engine.ctx.createStereoPanner();
       panner.connect(this.output);
@@ -16946,6 +16967,23 @@ class TrackedDrumMachine extends Machine {
       tr.meterAnalyser?.disconnect();
       tr.sendDelayNode.disconnect();
       tr.sendReverbNode.disconnect();
+    }
+  }
+
+  /** Die Spur-Sends laufen bewusst an `this.gate` vorbei (s. buildAudio())
+   *  — Mute soll sie unberührt lassen. Solo (eine ANDERE Maschine ist
+   *  solo) bzw. ein geschlossenes Jam-Gate sollen aber wirklich NUR das
+   *  gewählte Instrument übrig lassen, also hier zusätzlich stumm. Der
+   *  gespeicherte Spur-Send-Wert (tr.sendDelay/tr.sendReverb) bleibt dabei
+   *  unangetastet — beim Aufheben des Solo kommt exakt der alte Wert
+   *  zurück, kein manuelles Nachstellen der Send-Knobs nötig. */
+  setSoloShadowed(shadowed) {
+    // Machine's Konstruktor ruft refreshGates() bereits VOR buildAudio()
+    // auf (s. dort) -- this.tracks existiert dann noch nicht.
+    if (!this.tracks) return;
+    for (const tr of this.tracks) {
+      tr.sendDelayNode.gain.setTargetAtTime(shadowed ? 0 : tr.sendDelay, engine.now, 0.015);
+      tr.sendReverbNode.gain.setTargetAtTime(shadowed ? 0 : tr.sendReverb, engine.now, 0.015);
     }
   }
 
