@@ -467,6 +467,7 @@ x-fader {
   box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
 }
 .pat-chip__btn:active { transform: translateY(1px); }
+.pat-chip__btn--danger { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
