@@ -926,6 +926,13 @@ button {
   place-items: center;
 }
 .macros x-knob { --knob-size: 30px; gap: 3px; }
+/* Label/Wert dürfen in der schmalen Jam-Spalte NICHT umbrechen: ein
+   zweizeiliger Wert (z. B. "1800 Hz") macht diesen einen Knob höher als
+   seinen Zeilen-Nachbarn -- place-items:center zentriert dann ungleich
+   hohe Zellen, was wie ein "verschobenes" Raster aussieht. Kleinere
+   Schrift statt Umbruch hält alle vier Knobs einer Reihe gleich hoch. */
+.macros x-knob .knob__label { font-size: 8px; letter-spacing: .02em; white-space: nowrap; }
+.macros x-knob .knob__value { font-size: 8px; white-space: nowrap; }
 
 .channel__track {
   text-align: center;

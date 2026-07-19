@@ -56,10 +56,12 @@ const TAP_THRESHOLD = 8;
 
 /** Ändert einen Parameter über den ECHTEN Knob im Maschinen-Panel — löst
  *  denselben `input`-Pfad aus, den auch Handbewegung/Automation nutzen
- *  (kein `knob-grab` davor, also greift auch kein Trim/keine Aufnahme). */
-function nudgeParam(machine, key, value) {
-  const knob = machine.el?.querySelector(`x-knob[data-p="${key}"]`);
-  if (!knob) return;
+ *  (kein `knob-grab` davor, also greift auch kein Trim/keine Aufnahme).
+ *  Nimmt den Knob als Referenz statt ihn selbst nachzuschlagen: beim
+ *  Ziehen eines Jam-Makro-Reglers feuert das mehrfach pro Geste (jede
+ *  Wertänderung), ein erneutes querySelector() ins volle Maschinen-Panel
+ *  bei jedem Schritt wäre unnötige, auf älteren iPhones spürbare Arbeit. */
+function nudgeParam(knob, value) {
   knob.value = value;
   knob.dispatchEvent(new CustomEvent('input', { detail: { value }, bubbles: true }));
 }
@@ -68,6 +70,7 @@ function readKnobMeta(machine, key) {
   const knob = machine.el?.querySelector(`x-knob[data-p="${key}"]`);
   if (!knob) return null;
   return {
+    knob,
     label: knob.getAttribute('label') || key,
     min: knob.getAttribute('min') ?? '0',
     max: knob.getAttribute('max') ?? '1',
@@ -313,7 +316,7 @@ function buildMacros(machine) {
     if (meta.curve) knob.setAttribute('curve', meta.curve);
     if (meta.unit) knob.setAttribute('unit', meta.unit);
     knob.setAttribute('value', meta.value);
-    knob.addEventListener('input', (e) => nudgeParam(machine, key, e.detail.value));
+    knob.addEventListener('input', (e) => nudgeParam(meta.knob, e.detail.value));
     wrap.appendChild(knob);
   }
   return wrap;
