@@ -32,7 +32,7 @@
  */
 import { TrackedDrumMachine } from './tracked-drum-machine.js';
 import { engine } from '../core/audio-engine.js';
-import { noise, env, autoStop } from '../core/dsp.js';
+import { noise, lfsrNoise, env, autoStop } from '../core/dsp.js';
 
 /** Zufällige, kleine relative Abweichung (±pct) — Bauteiltoleranz-Analogie:
  *  zwei Anschläge derselben Stimme sind nie exakt gleich hoch/laut. */
@@ -150,9 +150,11 @@ function sd(ctx, t, dest, p) {
   // "Snare-Kabel"-Rauschen: beim Original zwei PARALLELE Pfade (Tiefpass +
   // Hochpass), je eigene Hüllkurve, statt eines einzelnen Bandpasses — der
   // Tiefpass-Anteil gibt den dumpferen Rattle-Körper, der Hochpass-Anteil
-  // das helle Zischen im Attack.
+  // das helle Zischen im Attack. Beide aus dem LFSR-Rauschen (s. dsp.js) —
+  // die echte 909-Snare nutzt ein 31-stufiges Schieberegister statt echtem
+  // Zufall als Rauschquelle, das ist hörbar "körniger" als Math.random().
   const nLow = ctx.createBufferSource();
-  nLow.buffer = noise(ctx);
+  nLow.buffer = lfsrNoise(ctx);
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
@@ -161,7 +163,7 @@ function sd(ctx, t, dest, p) {
   autoStop(nLow, t, 0.2 * p.decay, [lp, lpg], noiseOffset());
 
   const nHigh = ctx.createBufferSource();
-  nHigh.buffer = noise(ctx);
+  nHigh.buffer = lfsrNoise(ctx);
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
@@ -258,7 +260,14 @@ const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
    Oszillatoren pro Hit (jeder startet bei Phase 0) klingen dagegen JEDES
    Mal bit-identisch -- der klassische Software-Verräter bei Cymbal-
    Emulationen. ---------- */
-const METAL_RATIOS = [1, 1.48, 1.62, 2.03, 2.28, 2.67];
+// Verhältnisse nach der klassischen 6-Oszillatoren-Referenztechnik für
+// analoge Cymbal-/Hi-Hat-Synthese (s. Sound on Sound "Practical Cymbal
+// Synthesis", wie sie u.a. auch beim TR-808 verwendet wird): breiterer
+// Streubereich (2x bis 8.2x der Basisfrequenz) als die vorherige, enger
+// gruppierte Auswahl -- damit landen bei gleichem Hochpass/Bandpass mehr
+// Quadratwellen-Obertöne im hörbaren Band, was dichter/metallischer statt
+// "gestimmt akkordisch" klingt.
+const METAL_RATIOS = [2, 3, 4.16, 5.43, 6.79, 8.21];
 
 // Durch die STIMMENZAHL geteilt, nicht durch Wurzel(Stimmenzahl): die 6
 // Oszillatoren laufen jetzt persistent/frei (s. buildAudio/metallic oben)
@@ -355,7 +364,7 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
-    dur: 1.0 * p.decay, level: 0.58 * Math.sqrt(6) * METAL_MAKEUP * p.level,
+    dur: 1.0 * p.decay, level: 0.44 * Math.sqrt(6) * METAL_MAKEUP * p.level,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -387,9 +396,9 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.84 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.65 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.6 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.55 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.40 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.39 * Math.sqrt(6) * METAL_MAKEUP }) },
   { name: 'RC', synth: rc },
 ];
 
