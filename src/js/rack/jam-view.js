@@ -330,8 +330,15 @@ function buildColumn(machine) {
   col.style.setProperty('--ch-color', color);
   col.style.setProperty('--ch-glow', `rgba(${r},${g},${b},.5)`);
 
-  const trackLabel = TRACK_SCOPED_TYPES.has(machine.constructor.meta.type)
-    ? `<div class="channel__track">${machine.tracks[machine.selected]?.name ?? ''}</div>` : '';
+  // IMMER rendern (auch leer für Nicht-Drum-Maschinen), nie ganz weglassen:
+  // ein bedingt weggelassenes Element macht die Fixhöhe von .strip je nach
+  // Maschinentyp unterschiedlich hoch, was Fader/Encoder/XY-Pad zwischen
+  // den Spalten gegeneinander verschiebt (schon mal gesehen, s. Verlauf
+  // zur Makro-Knob-Ausrichtung). .channel__track reserviert seine Höhe
+  // per CSS auch leer.
+  const trackLabel = `<div class="channel__track">${
+    TRACK_SCOPED_TYPES.has(machine.constructor.meta.type) ? (machine.tracks[machine.selected]?.name ?? '') : ''
+  }</div>`;
 
   col.innerHTML = `
     <div class="channel__head">

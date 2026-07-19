@@ -132,7 +132,18 @@ export class XKnob extends HTMLElement {
     }
     const dy = this.#dragStartY - e.clientY;                       // hoch = mehr
     const dx = (e.clientX ?? this.#dragStartX) - this.#dragStartX; // rechts = mehr
-    const norm = this.#dragStartNorm + (dy + dx) / DRAG_RANGE_PX;
+    const rawNorm = this.#dragStartNorm + (dy + dx) / DRAG_RANGE_PX;
+    // Über den Anschlag hinausgezogen (rawNorm < 0 oder > 1)? Anker
+    // mitschieben, sonst entsteht eine tote Zone: der Wert bliebe bei
+    // 0/1 hängen, bis der Finger beim Umkehren wieder über die
+    // URSPRÜNGLICHE Zugstrecke zurückgewandert ist -- fühlt sich wie ein
+    // klemmender Regler an (dieselbe Idee wie x-fader#dragTo).
+    const norm = Math.min(1, Math.max(0, rawNorm));
+    if (rawNorm !== norm) {
+      this.#dragStartNorm = norm;
+      this.#dragStartY = e.clientY;
+      this.#dragStartX = e.clientX ?? this.#dragStartX;
+    }
     const next = this.#fromNorm(norm);
     if (next !== this.#value) {
       this.#value = next;

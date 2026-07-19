@@ -44,7 +44,7 @@ export class XFader extends HTMLElement {
   #built = false;
   #value = 1;
   #track; #cap; #fill; #readout;
-  #rect = null;
+  #dragTop = 0; #dragBottom = 0;
   #lastTap = 0;
 
   get value() {
@@ -92,7 +92,9 @@ export class XFader extends HTMLElement {
     }
     this.#lastTap = now;
 
-    this.#rect = this.#track.getBoundingClientRect();
+    const r = this.#track.getBoundingClientRect();
+    this.#dragTop = r.top;
+    this.#dragBottom = r.bottom;
     this.#dragTo(e.clientY);
 
     this.#track.addEventListener('pointermove', this.#onMove);
@@ -102,9 +104,21 @@ export class XFader extends HTMLElement {
 
   #onMove = (e) => this.#dragTo(e.clientY);
 
+  /**
+   * Zieht der Finger über den sichtbaren Track hinaus (unten/oben), schiebt
+   * sich die jeweilige Grenze mit ihm mit -- sonst entsteht eine "tote
+   * Zone": Der Wert bleibt bei 0 hängen (bzw. bei 1), bis der Finger beim
+   * Umkehren wieder über die URSPRÜNGLICHE Kante zurückgewandert ist, was
+   * sich wie ein klemmender Fader anfühlt, obwohl der Wert längst hätte
+   * steigen müssen. Mit der mitwandernden Grenze reagiert die Umkehr sofort,
+   * ohne Nachlauf -- exakt an der Stelle, an der der Finger tatsächlich die
+   * Richtung wechselt.
+   */
   #dragTo(clientY) {
-    const r = this.#rect;
-    const norm = Math.min(1, Math.max(0, (r.bottom - clientY) / r.height));
+    if (clientY < this.#dragTop) this.#dragTop = clientY;
+    if (clientY > this.#dragBottom) this.#dragBottom = clientY;
+    const height = this.#dragBottom - this.#dragTop;
+    const norm = height > 0 ? Math.min(1, Math.max(0, (this.#dragBottom - clientY) / height)) : 1;
     const next = this.#fromNorm(norm);
     if (next !== this.#value) {
       this.#value = next;

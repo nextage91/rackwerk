@@ -939,4 +939,11 @@ button {
   font-size: 10px;
   color: var(--ink-faint);
   letter-spacing: .04em;
+  /* Immer gerendert (auch leer, s. jam-view.js#buildColumn) -- feste
+     Höhe statt der Schriftmetrik überlassen, damit ein leeres Element
+     (SubSynth & co.) exakt gleich hoch ist wie eines mit Text (BeatBox/
+     AnalogKit) und .strip dadurch bei jedem Maschinentyp gleich hoch
+     bleibt (sonst verschieben sich Fader/Encoder/XY-Pad zwischen Spalten). */
+  line-height: 12px;
+  min-height: 12px;
 }

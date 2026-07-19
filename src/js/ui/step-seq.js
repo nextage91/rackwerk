@@ -159,9 +159,13 @@ export class StepSeq {
     for (const c of this.cells) c.classList.remove('is-play');
   }
 
-  /* ---------- Gesten: Tippen vs. Pitch-Drag ---------- */
+  /** Multi-Touch: pointerId → { idx, startY, startMidi, moved } je Geste
+   *  (nicht ein einzelnes gemeinsames Objekt) -- sonst würde ein zweiter
+   *  Finger, der eine ANDERE Zelle antippt, den ersten mitten in der
+   *  Geste überschreiben (dessen pointerup fände dann keine Zelle mehr
+   *  und würde stattdessen die falsche togglen). */
   #wirePointer() {
-    let active = null; // { idx, startY, startMidi, moved }
+    const active = new Map();
 
     this.grid.addEventListener('pointerdown', (e) => {
       const cell = e.target.closest('.cell');
@@ -169,33 +173,35 @@ export class StepSeq {
       e.preventDefault();
       this.grid.setPointerCapture?.(e.pointerId);
       const idx = this.#patIdx(parseInt(cell.dataset.cell, 10));
-      active = { idx, startY: e.clientY, startMidi: this.pattern[idx].midi, moved: false };
+      active.set(e.pointerId, { idx, startY: e.clientY, startMidi: this.pattern[idx].midi, moved: false });
     });
 
     this.grid.addEventListener('pointermove', (e) => {
-      if (!active || !this.pitchMode) return;
-      const dy = active.startY - e.clientY;
-      if (!active.moved && Math.abs(dy) < TAP_THRESHOLD) return;
+      const drag = active.get(e.pointerId);
+      if (!drag || !this.pitchMode) return;
+      const dy = drag.startY - e.clientY;
+      if (!drag.moved && Math.abs(dy) < TAP_THRESHOLD) return;
 
-      const st = this.pattern[active.idx];
-      if (!active.moved) {
-        active.moved = true;
-        st.on = true;
+      const step = this.pattern[drag.idx];
+      if (!drag.moved) {
+        drag.moved = true;
+        step.on = true;
       }
-      st.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
-        active.startMidi + Math.round(dy / SEMITONE_PX)));
-      this.#renderCell(active.idx % BAR_STEPS);
+      step.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
+        drag.startMidi + Math.round(dy / SEMITONE_PX)));
+      this.#renderCell(drag.idx % BAR_STEPS);
     });
 
     const finish = (e) => {
-      if (!active) return;
-      if (!active.moved) {
-        const st = this.pattern[active.idx];
-        st.on = !st.on;
-        this.#renderCell(active.idx % BAR_STEPS);
+      const drag = active.get(e.pointerId);
+      if (!drag) return;
+      if (!drag.moved) {
+        const step = this.pattern[drag.idx];
+        step.on = !step.on;
+        this.#renderCell(drag.idx % BAR_STEPS);
       }
       this.grid.releasePointerCapture?.(e.pointerId);
-      active = null;
+      active.delete(e.pointerId);
       this.onChange?.();
     };
     this.grid.addEventListener('pointerup', finish);
