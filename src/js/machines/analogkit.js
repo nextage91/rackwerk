@@ -6,17 +6,64 @@
  *
  * - BD/SD/Toms: kürzere, knackigere Hüllkurven als die BeatBox, SD mit
  *   Doppel-Ton-Body (zwei leicht verstimmte Oszillatoren, je eigener
- *   Decay) statt einem gemeinsamen.
+ *   Decay) statt einem gemeinsamen. BD zusätzlich durch ein leicht
+ *   resonantes Tiefpassfilter (das "Boing" einer echten VCF) plus eine
+ *   sanfte Sättigungsstufe (Waveshaper) für den Punch, SD-Body ebenso
+ *   leicht angesättigt statt komplett sauber.
  * - CH/OH/CC/RC: 6 verstimmte Oszillatoren durchs Hochpass/Bandpass für
  *   den metallischen Grundklang, plus eine hochpassgefilterte Rausch-
  *   schicht darunter für die Dichte, die das echte 909-PCM-Cymbal-Sample
  *   hat (ein reines Oszillatorbündel klingt sonst zu "sauber"/808-artig).
+ *   Die 6 Oszillatoren pro Stimme laufen dabei KONTINUIERLICH (s.
+ *   #buildAudio) statt bei jedem Anschlag frisch bei Phase 0 zu starten
+ *   — wie beim echten 909, wo Trigger nur ein VCA-Gate auf dem gerade
+ *   aktuellen (frei driftenden) Phasenverhältnis öffnen. Das ist der
+ *   eigentliche Grund, warum zwei Anschläge derselben Hi-Hat am echten
+ *   Gerät nie identisch klingen — mit frischen Oszillatoren pro Hit
+ *   (frühere Version hier) ist jeder Anschlag dagegen bit-identisch, ein
+ *   klassischer "das ist Software"-Verräter.
+ * - Jede Spur bekommt zusätzlich eine winzige, zufällige Tonhöhen-/Pegel-
+ *   Abweichung pro Anschlag (Bauteiltoleranz-Simulation, s. jitter()) —
+ *   ohne das klingt jeder Hit exakt gleich laut/hoch, was sich digital/
+ *   "einprogrammiert" statt analog/lebendig anfühlt.
  *
  * Kit: BD (Bass Drum), SD (Snare), LT/MT/HT (Toms), RS (Rim Shot),
  * CP (Clap), CH/OH (Hi-Hats), CC/RC (Cymbals).
  */
 import { TrackedDrumMachine } from './tracked-drum-machine.js';
+import { engine } from '../core/audio-engine.js';
 import { noise, env, autoStop } from '../core/dsp.js';
+
+/** Zufällige, kleine relative Abweichung (±pct) — Bauteiltoleranz-Analogie:
+ *  zwei Anschläge derselben Stimme sind nie exakt gleich hoch/laut. */
+const jitter = (base, pct) => base * (1 + (Math.random() * 2 - 1) * pct);
+
+/** Zufälliger Start-Offset in den gecachten 1s-Rauschbuffer (s. dsp.js#noise)
+ *  -- ohne das spielt jeder Anschlag denselben Rauschausschnitt (deterministisch
+ *  per Design für BeatBox & co., s. dort), was bei percussiven Analog-Sounds
+ *  wie Snare-Rattle/Rimshot/Clap unnatürlich identisch klingt. `maxDur` ist
+ *  die längste hier genutzte Klangdauer -- lässt genug Buffer übrig. */
+const noiseOffset = (maxDur = 0.3) => Math.random() * (1 - maxDur);
+
+/** Sanfte Tanh-Sättigung für Kick-/Snare-Body — der "Punch", den ein
+ *  cleaner Oszillator+Hüllkurve-Pfad allein nicht hat (reale 909-VCAs
+ *  clippen leicht bei den lauten Trommeln). Fest verdrahtete, moderate
+ *  Stärke statt eines Reglers -- das ist Teil des Stimmcharakters, kein
+ *  Nutzerparameter (dafür gibt es die Drive-Insert-FX). */
+function makeSatCurve(amount) {
+  const n = 512;
+  const curve = new Float32Array(n);
+  const k = 1 + amount * 8;
+  const norm = Math.tanh(k);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = Math.tanh(k * x) / norm;
+  }
+  return curve;
+}
+let _satCurveWarm = null, _satCurveHot = null;
+const satCurveWarm = () => (_satCurveWarm ??= makeSatCurve(0.35));
+const satCurveHot = () => (_satCurveHot ??= makeSatCurve(0.6));
 
 /* ================= Drum-Synthese ================= */
 
@@ -25,15 +72,30 @@ import { noise, env, autoStop } from '../core/dsp.js';
 function bd(ctx, t, dest, p) {
   // Kurze, knackige Pitch-Hüllkurve — startet höher/fällt schneller als
   // die BeatBox-Kick, weniger Sub-Betonung, mehr "Klack" im Attack.
-  const f0 = Math.max(80, 200 * p.tune);
-  const f1 = Math.max(35, 58 * p.tune);
+  // ±1.5% Tonhöhen-Jitter pro Anschlag (Bauteiltoleranz) -- ohne das
+  // klingt jeder Kick exakt gleich, was digital/programmiert wirkt.
+  const f0 = jitter(Math.max(80, 200 * p.tune), 0.015);
+  const f1 = jitter(Math.max(35, 58 * p.tune), 0.015);
   const o = ctx.createOscillator();
   o.type = 'sine';
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f1, t + 0.045);
-  const g = env(ctx, t, 1.0 * p.level, 0.35 * p.decay);
-  o.connect(g).connect(dest);
-  autoStop(o, t, 0.35 * p.decay, [g]);
+
+  // Leicht resonantes Tiefpassfilter statt eines direkten Oszillator→VCA-
+  // Pfads: das echte 909-Kick-VCF "boingt" hörbar mit, statt den Sinus
+  // unverändert durchzureichen -- reiner Sinus+Hüllkurve klingt sonst zu
+  // rund/synthetisch. Sättigung danach für den Punch (moderate 909-VCA-
+  // Übersteuerung bei lauten Trommeln).
+  const lpf = ctx.createBiquadFilter();
+  lpf.type = 'lowpass';
+  lpf.frequency.setValueAtTime(f0 * 1.4, t);
+  lpf.frequency.exponentialRampToValueAtTime(f1 * 1.8, t + 0.05);
+  lpf.Q.value = 2.2;
+  const sat = ctx.createWaveShaper();
+  sat.curve = satCurveWarm();
+  const g = env(ctx, t, jitter(1.0 * p.level, 0.05), 0.35 * p.decay);
+  o.connect(lpf).connect(sat).connect(g).connect(dest);
+  autoStop(o, t, 0.35 * p.decay, [lpf, sat, g]);
 
   // Attack-Klick: beim echten 909 kein Ton, sondern ein sehr kurzer,
   // tiefpassgefilterter Rauschimpuls aus einer eigenen Klick-Schaltung
@@ -47,9 +109,9 @@ function bd(ctx, t, dest, p) {
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 3800 * p.tune;
-    const cg = env(ctx, t, snap * p.level * 1.6, 0.004);
+    const cg = env(ctx, t, jitter(snap * p.level * 1.6, 0.05), 0.004);
     n.connect(lp).connect(cg).connect(dest);
-    autoStop(n, t, 0.004, [lp, cg]);
+    autoStop(n, t, 0.004, [lp, cg], noiseOffset(0.01));
   }
 }
 
@@ -66,14 +128,23 @@ function sd(ctx, t, dest, p) {
   // plus moderater Pegel-Nachschlag — SD hat wenig Peak-Headroom (mehrere
   // gleichzeitig einsetzende Schichten), daher hier bewusst zurückhaltender
   // als bei den anderen leisen Stimmen unten.
+  // ±1% Tonhöhen-, ±5% Pegel-Jitter pro Anschlag (wie BD) plus eine
+  // sanfte Sättigung auf jedem Ton-Body -- ein cleaner Dreieck-Mix klingt
+  // sonst zu synthetisch/steril für den 909-"Ping". Eigene Sättigungs-
+  // Node je Oszillator (nicht geteilt): die beiden Töne klingen
+  // unterschiedlich lang nach (durMul 1.0 vs. 0.6) -- ein gemeinsamer
+  // Knoten würde beim früheren autoStop() des kürzeren Tons auch den
+  // noch klingenden längeren mit abklemmen.
   for (const { f, durMul, mix } of [{ f: 180, durMul: 1.0, mix: 0.38 }, { f: 330, durMul: 0.6, mix: 0.28 }]) {
     const o = ctx.createOscillator();
     o.type = 'triangle';
-    o.frequency.value = f * p.tune;
+    o.frequency.value = jitter(f * p.tune, 0.01);
     const dur = 0.17 * p.decay * durMul;
-    const g = env(ctx, t, mix * p.level, dur);
-    o.connect(g).connect(dest);
-    autoStop(o, t, dur, [g]);
+    const sat = ctx.createWaveShaper();
+    sat.curve = satCurveWarm();
+    const g = env(ctx, t, jitter(mix * p.level, 0.05), dur);
+    o.connect(sat).connect(g).connect(dest);
+    autoStop(o, t, dur, [sat, g]);
   }
 
   // "Snare-Kabel"-Rauschen: beim Original zwei PARALLELE Pfade (Tiefpass +
@@ -85,18 +156,18 @@ function sd(ctx, t, dest, p) {
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
-  const lpg = env(ctx, t, 0.46 * p.level, 0.2 * p.decay);
+  const lpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.2 * p.decay);
   nLow.connect(lp).connect(lpg).connect(dest);
-  autoStop(nLow, t, 0.2 * p.decay, [lp, lpg]);
+  autoStop(nLow, t, 0.2 * p.decay, [lp, lpg], noiseOffset());
 
   const nHigh = ctx.createBufferSource();
   nHigh.buffer = noise(ctx);
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
-  const hpg = env(ctx, t, 0.46 * p.level, 0.1 * p.decay);
+  const hpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.1 * p.decay);
   nHigh.connect(hp).connect(hpg).connect(dest);
-  autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg]);
+  autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg], noiseOffset());
 }
 
 function rs(ctx, t, dest, p) {
@@ -128,13 +199,13 @@ function rs(ctx, t, dest, p) {
   for (const f of RS_RESONANCES) {
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = f * p.tune;
+    bp.frequency.value = jitter(f * p.tune, 0.02);
     bp.Q.value = 6;
-    const g = env(ctx, t, 3 * p.level, dur);
+    const g = env(ctx, t, jitter(3 * p.level, 0.05), dur);
     n.connect(bp).connect(g).connect(dest);
     nodes.push(bp, g);
   }
-  autoStop(n, t, dur, nodes);
+  autoStop(n, t, dur, nodes, noiseOffset());
 }
 
 function cp(ctx, t, dest, p) {
@@ -146,30 +217,30 @@ function cp(ctx, t, dest, p) {
   n.buffer = noise(ctx);
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
-  bp.frequency.value = 1300 * p.tune;
+  bp.frequency.value = jitter(1300 * p.tune, 0.02);
   bp.Q.value = 1.8;
 
   const g = ctx.createGain();
   const dur = 0.044 + 0.22 * p.decay;
   for (let i = 0; i < 4; i++) {
-    g.gain.setValueAtTime(2.55 * p.level, t + i * 0.011);
+    g.gain.setValueAtTime(jitter(2.55 * p.level, 0.06), t + i * 0.011);
     g.gain.linearRampToValueAtTime(0.6 * p.level, t + i * 0.011 + 0.008);
   }
-  g.gain.setValueAtTime(1.95 * p.level, t + 0.044);
+  g.gain.setValueAtTime(jitter(1.95 * p.level, 0.06), t + 0.044);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
 
   n.connect(bp).connect(g).connect(dest);
-  autoStop(n, t, dur, [bp, g]);
+  autoStop(n, t, dur, [bp, g], noiseOffset());
 }
 
 /** Tom-Stimme: startet leicht über der Zielfrequenz, fällt schnell darauf. */
 const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
   const o = ctx.createOscillator();
   o.type = 'sine';
-  const f = baseFreq * p.tune;
+  const f = jitter(baseFreq * p.tune, 0.012);
   o.frequency.setValueAtTime(f * 1.3, t);
   o.frequency.exponentialRampToValueAtTime(f, t + 0.08);
-  const g = env(ctx, t, 0.85 * p.level, 0.28 * p.decay);
+  const g = env(ctx, t, jitter(0.85 * p.level, 0.05), 0.28 * p.decay);
   o.connect(g).connect(dest);
   autoStop(o, t, 0.28 * p.decay, [g]);
 };
@@ -178,31 +249,72 @@ const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
    Rechteckwellen durch ein Hoch-/Bandpass — die klassische analoge
    Cymbal-Synthese-Technik (statt gefiltertem Rauschen wie bei der
    BeatBox). Die Verhältnisse sind bewusst nicht-ganzzahlig, damit die
-   Summe unharmonisch/metallisch statt tonal klingt. ---------- */
+   Summe unharmonisch/metallisch statt tonal klingt.
+   Die 6 Oszillatoren pro Stimme sind FREI LAUFEND statt pro Anschlag neu
+   erzeugt (s. AnalogKit#buildAudio, das sie einmalig anlegt und in
+   tr.metalOscs/tr.metalBus ablegt): am echten 909 laufen diese
+   Oszillatoren kontinuierlich, ein Trigger öffnet nur ein VCA-Gate auf
+   dem gerade aktuellen (frei driftenden) Phasenverhältnis. Frische
+   Oszillatoren pro Hit (jeder startet bei Phase 0) klingen dagegen JEDES
+   Mal bit-identisch -- der klassische Software-Verräter bei Cymbal-
+   Emulationen. ---------- */
 const METAL_RATIOS = [1, 1.48, 1.62, 2.03, 2.28, 2.67];
 
-// 6 Rechteckwellen ohne Gegenmaßnahme können sich am Anschlag (alle starten
-// phasengleich bei t=0) kurzzeitig weit über den nominellen Level aufsummieren
-// (gemessen: >0 dBFS bei level=0.5) — durch Wurzel(Stimmenzahl) geteilt, damit
-// der tatsächliche Pegel wieder beim eingestellten `level` landet (dieselbe
-// Kompensation wie beim PolySynth-Akkord-Voicing).
-const METAL_HEADROOM = 1 / Math.sqrt(METAL_RATIOS.length);
+// Durch die STIMMENZAHL geteilt, nicht durch Wurzel(Stimmenzahl): die 6
+// Oszillatoren laufen jetzt persistent/frei (s. buildAudio/metallic oben)
+// -- ihre Summe ist damit KEIN einmaliger Anschlag-Moment mehr, sondern
+// ein fortlaufendes Signal, das durch die exakten (rationalen) Verhältnisse
+// zwangsläufig irgendwann wieder nahezu perfekt phasengleich wird (LCM-
+// Periodizität; gemessen: Summenpeak bis 5.7 von theoretisch max. 6, bei
+// zufälligem Trigger-Zeitpunkt). Die alte Wurzel(6)-Kompensation ging vom
+// EINMALIGEN, immer gleich phasenstarren Anschlag frischer Oszillatoren
+// aus (dafür war sie korrekt kalibriert) -- hier muss der SCHLECHTESTE
+// Fall (alle 6 phasengleich) sicher im Rahmen bleiben, nicht nur der
+// durchschnittliche. `level` in TRACK_DEFS unten ist um Wurzel(6)
+// angehoben, um den dadurch leiseren Normalfall wieder auszugleichen.
+const METAL_HEADROOM = 1 / METAL_RATIOS.length;
+// Zusätzlicher Pegel-Nachschlag (empirisch, gegen BD gemessen): das
+// Schließen des Gates VOR dem Anschlag (s. metallic(), Fix fürs Bleed-
+// vor-dem-Hit) senkt den gemessenen Pegel gegenüber dem alten Verhalten
+// leicht -- gleicht das wieder auf die historisch eingemessenen
+// Zielwerte (CH/OH/CC ~13/12/11dB unter BD) aus.
+const METAL_MAKEUP = 1.35;
 
-function metallic(ctx, t, dest, { freq, filterFreq, filterType = 'highpass', filterQ, dur, level }) {
-  const bus = ctx.createGain();
+function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filterQ, dur, level }) {
+  // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
+  // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
+  // änderung am laufenden, aber stummen Oszillator ist unhörbar).
+  for (let i = 0; i < tr.metalOscs.length; i++) {
+    tr.metalOscs[i].frequency.setValueAtTime(
+      jitter(tr.metalFreq * METAL_RATIOS[i] * tr.metalDetunes[i] * tr.tune, 0.004), t,
+    );
+  }
   const filt = ctx.createBiquadFilter();
   filt.type = filterType;
   filt.frequency.value = filterFreq;
   if (filterQ !== undefined) filt.Q.value = filterQ;
-  const g = env(ctx, t, level * METAL_HEADROOM, dur);
-  bus.connect(filt).connect(g).connect(dest);
-  for (const ratio of METAL_RATIOS) {
-    const o = ctx.createOscillator();
-    o.type = 'square';
-    o.frequency.value = freq * ratio;
-    o.connect(bus);
-    autoStop(o, t, dur, [bus, filt, g]);
-  }
+  const g = env(ctx, t, jitter(level * METAL_HEADROOM, 0.05), dur);
+  // Der Bus liefert (anders als bei allen anderen Stimmen) schon VOR
+  // diesem Anschlag durchgehend Signal (persistente Oszillatoren) -- ein
+  // frischer GainNode steht bis zu seinem ERSTEN geplanten Automations-
+  // Wert per Spec auf dem Default 1.0, nicht auf 0! Ohne diese explizite
+  // Schließung liefe das rohe Summensignal für das gesamte Lookahead-
+  // Fenster (Aufruf-Zeitpunkt bis t) ungedämpft durch -- hörbar als
+  // Vorecho/Bleed vor jedem Anschlag. setValueAtTime(0, ...) VOR t reiht
+  // sich zeitlich vor den von env() gesetzten Peak ein (Automations-
+  // Warteschlangen sind zeit-, nicht aufrufreihenfolgesortiert).
+  g.gain.setValueAtTime(0, ctx.currentTime);
+  tr.metalBus.connect(filt);
+  filt.connect(g).connect(dest);
+  // Kein autoStop() -- der Bus läuft weiter (persistente Oszillatoren),
+  // nur der Filter/Gate-Zweig dieses EINEN Anschlags wird nach Ablauf der
+  // Hüllkurve wieder abgeklemmt (wall-clock statt onended: hier stoppt ja
+  // keine Source, s. dsp.js#autoStop für den Normalfall).
+  setTimeout(() => {
+    try { tr.metalBus.disconnect(filt); } catch { /* Maschine evtl. schon disposed */ }
+    filt.disconnect(g);
+    g.disconnect(dest);
+  }, (dur + 0.05) * 1000);
 
   // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
   // komprimiertes 6-Bit-PCM-Sample eines echten Beckens (per VCA/Filter
@@ -215,18 +327,25 @@ function metallic(ctx, t, dest, { freq, filterFreq, filterType = 'highpass', fil
   const nf = ctx.createBiquadFilter();
   nf.type = 'highpass';
   nf.frequency.value = Math.max(filterFreq * 0.5, 2000);
-  const ng = env(ctx, t, level * METAL_HEADROOM * 0.45, dur);
+  const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45, 0.05), dur);
   n.connect(nf).connect(ng).connect(dest);
-  autoStop(n, t, dur, [nf, ng]);
+  autoStop(n, t, dur, [nf, ng], noiseOffset());
 }
 
 /** Hi-Hat/Crash-Stimme: feste Klangfarbe, Tune/Decay/Level wirken wie bei
- *  den übrigen Spuren. */
-const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level }) =>
-  (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    freq: freq * p.tune, filterFreq, filterType, filterQ,
+ *  den übrigen Spuren. `freq` steht zusätzlich als `.metalFreq` auf der
+ *  zurückgegebenen Funktion, damit AnalogKit#buildAudio weiss, mit
+ *  welcher Basisfrequenz es den persistenten Oszillatoren-Bus dieser
+ *  Spur anlegen muss (einzige Quelle der Wahrheit, keine doppelt
+ *  gepflegte Zahl in TRACK_DEFS). */
+const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level }) => {
+  const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
+    tr: p, filterFreq, filterType, filterQ,
     dur: durMult * p.decay, level: level * p.level,
   });
+  fn.metalFreq = freq;
+  return fn;
+};
 
 function rc(ctx, t, dest, p) {
   // Ride: schmaleres Bandpass (mehr "Ping"-Charakter als die Crash) plus
@@ -235,16 +354,17 @@ function rc(ctx, t, dest, p) {
   // (Metall-Anteil + Ping) moderat angehoben — Ride sass im Kit deutlich
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
-    freq: 350 * p.tune, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
-    dur: 1.0 * p.decay, level: 0.58 * p.level,
+    tr: p, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
+    dur: 1.0 * p.decay, level: 0.58 * Math.sqrt(6) * METAL_MAKEUP * p.level,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
-  o.frequency.value = 700 * p.tune;
-  const g = env(ctx, t, 0.42 * p.level, 0.15 * p.decay);
+  o.frequency.value = jitter(700 * p.tune, 0.01);
+  const g = env(ctx, t, jitter(0.42 * p.level, 0.05), 0.15 * p.decay);
   o.connect(g).connect(dest);
   autoStop(o, t, 0.15 * p.decay, [g]);
 }
+rc.metalFreq = 350;
 
 /* ================= Die Maschine ================= */
 
@@ -260,9 +380,16 @@ const TRACK_DEFS = [
   // OH ~17dB, CC ~13dB unter der Kick — durMult/level hier angehoben
   // (CH zusätzlich etwas länger ausklingend statt reinem Klick, kostet
   // dank env() keinen zusätzlichen Peak), Headroom liess das jeweils zu.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.84 }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.65 }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.6 }) },
+  // level-Werte zusätzlich um Wurzel(6) angehoben, um METAL_HEADROOMs
+  // Wechsel von 1/Wurzel(6) auf 1/6 auszugleichen (s. dort), plus
+  // METAL_MAKEUP: das Schließen des Gates VOR dem Anschlag (s. metallic(),
+  // Fix für das Bleed-vor-dem-Hit) senkt den gemessenen Pegel gegenüber
+  // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
+  // gleicht das wieder auf die historisch eingemessenen Zielwerte
+  // (CH/OH/CC ~13/12/11dB unter BD) aus.
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.84 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.65 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.6 * Math.sqrt(6) * METAL_MAKEUP }) },
   { name: 'RC', synth: rc },
 ];
 
@@ -276,4 +403,52 @@ export class AnalogKit extends TrackedDrumMachine {
     color: '#9fb0bd',
     model: 'RW-05',
   };
+
+  /** Legt für jede metallische Spur (CH/OH/CC/RC, erkennbar an
+   *  synth.metalFreq, s. metallicVoice()/rc oben) einen persistenten,
+   *  frei laufenden 6-Oszillatoren-Bus an -- einmalig bei der
+   *  Konstruktion, nicht pro Anschlag (s. metallic() für das Warum). */
+  buildAudio() {
+    super.buildAudio();
+    for (const tr of this.tracks) {
+      const metalFreq = tr.synth.metalFreq;
+      if (metalFreq == null) continue;
+      tr.metalFreq = metalFreq;
+      // Winziger, PERMANENTER Detune je Oszillator (±0.3%, einmalig
+      // gewürfelt, nicht bei jedem Anschlag neu) -- METAL_RATIOS sind
+      // exakte rationale Zahlen, das Summensignal daher rein periodisch
+      // (LCM der 6 Frequenzen). Ohne Detune läuft ein Anschlag irgendwann
+      // GARANTIERT wieder in einen fast perfekt phasengleichen Moment wie
+      // beim allerersten Start -- und klippt dann hart (gemessen: Summen-
+      // Peak bis 5.7 bei 6 unity-Rechtecken, statt der für sqrt(6)-
+      // Headroom angenommenen Dekorrelation). Echte Bauteiltoleranz macht
+      // die 6 Frequenzen NIE exakt rational zueinander -- das bilden wir
+      // hier nach, statt uns auf "läuft schon lang genug, um dekorreliert
+      // zu sein" zu verlassen (was bei exakten Verhältnissen nie zutrifft).
+      tr.metalDetunes = METAL_RATIOS.map(() => 1 + (Math.random() * 2 - 1) * 0.003);
+      tr.metalBus = engine.ctx.createGain();
+      tr.metalOscs = METAL_RATIOS.map((ratio, i) => {
+        const o = engine.ctx.createOscillator();
+        o.type = 'square';
+        o.frequency.value = metalFreq * ratio * tr.metalDetunes[i];
+        o.connect(tr.metalBus);
+        o.start();
+        return o;
+      });
+    }
+  }
+
+  /** Basisklasse kennt die metallischen Oszillatoren-Busse nicht -- selbst
+   *  stoppen, sonst liefen sie nach dem Entfernen der Maschine unhörbar,
+   *  aber unnötig weiter. */
+  disposeAudio() {
+    super.disposeAudio();
+    for (const tr of this.tracks) {
+      for (const o of tr.metalOscs ?? []) {
+        try { o.stop(); } catch { /* schon gestoppt */ }
+        o.disconnect();
+      }
+      tr.metalBus?.disconnect();
+    }
+  }
 }
