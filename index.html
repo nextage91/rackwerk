@@ -18420,12 +18420,20 @@ function sd(ctx, t, dest, p) {
   // das helle Zischen im Attack. Beide aus dem LFSR-Rauschen (s. dsp.js) —
   // die echte 909-Snare nutzt ein 31-stufiges Schieberegister statt echtem
   // Zufall als Rauschquelle, das ist hörbar "körniger" als Math.random().
+  // Pegel-Koeffizient gegenüber dem alten Math.random()-Wert (0.46) leicht
+  // gesenkt (0.37): SD summiert hier VIER unabhängig peakende Schichten
+  // (2 Ton-Bodies + 2 Rauschpfade) direkt auf `dest`. Über 40 Durchläufe
+  // gemessen (test-analogkit-sd-scan.mjs): schon VOR dem LFSR-Wechsel
+  // überschritt SD bei Koeffizient 0.46 in 28/40 Fällen Peak 1.0 (bis
+  // 1.203) -- das war also kein neues Problem, nur bisher nie mit
+  // mehreren Durchläufen geprüft. Bei 0.37 bleibt der Peak zuverlässig
+  // unter 1.0, bei vergleichbarem Pegel zu BD wie vorher.
   const nLow = ctx.createBufferSource();
   nLow.buffer = lfsrNoise(ctx);
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
-  const lpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.2 * p.decay);
+  const lpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.2 * p.decay);
   nLow.connect(lp).connect(lpg).connect(dest);
   autoStop(nLow, t, 0.2 * p.decay, [lp, lpg], noiseOffset());
 
@@ -18434,7 +18442,7 @@ function sd(ctx, t, dest, p) {
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
-  const hpg = env(ctx, t, jitter(0.46 * p.level, 0.05), 0.1 * p.decay);
+  const hpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.1 * p.decay);
   nHigh.connect(hp).connect(hpg).connect(dest);
   autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg], noiseOffset());
 }
