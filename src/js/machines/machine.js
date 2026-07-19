@@ -141,7 +141,11 @@ let lastAudible = new Set();
 
 /**
  * Öffnet/schließt die Gates aller Maschinen: Ist irgendeine Maschine solo,
- * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer.
+ * sind alle nicht-solo Maschinen stumm. Mute gewinnt immer. Zusätzlich
+ * fließt `m.jamGateOpen` ein (s. setJamGate) — von der Jam-Ansicht
+ * gesetzt, unabhängig von Mute/Solo, damit "nur Spuren mit aktivem Clip
+ * klingen" sich genau wie ein weiterer, automatischer Mute-Grund verhält
+ * (inklusive Sends/Tail-Handling unten).
  *
  * Schließt zusätzlich die gemeinsame Master-FX-Rückführung (masterFX.
  * setReturnAudible), sobald KEINE Maschine mehr hörbar ist — sonst bliebe
@@ -163,7 +167,7 @@ function refreshGates() {
   let anyAudible = false;
   const audibleNow = new Set();
   for (const m of machines) {
-    const open = !m.muted && (!soloActive || m.soloed);
+    const open = !m.muted && (!soloActive || m.soloed) && m.jamGateOpen;
     if (open) { anyAudible = true; audibleNow.add(m); }
     m.gate.gain.cancelScheduledValues(t);
     m.gate.gain.setTargetAtTime(open ? 1 : 0, t, 0.015);
@@ -181,6 +185,9 @@ export class Machine {
     this.id = nextId++;
     this.muted = false;
     this.soloed = false;
+    /** Von der Jam-Ansicht gesetzt (s. setJamGate) — unabhängig von Mute/
+     *  Solo. Default offen: solange niemand jammt, keine Einschränkung. */
+    this.jamGateOpen = true;
 
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
@@ -708,6 +715,17 @@ export class Machine {
     this.soloed = soloed;
     this.headSoloBtn?.classList.toggle('is-active', soloed);
     this.onMixerChange?.();
+    refreshGates();
+  }
+
+  /** Von der Jam-Ansicht aufgerufen (jam-view.js#refreshJamGates) — eine
+   *  zusätzliche, unabhängige Gate-Bedingung neben Mute/Solo. Bewusst KEIN
+   *  eigenes UI/keine eigene Persistenz: kein neuer Nutzer-sichtbarer
+   *  Zustand, nur eine automatische Folge davon, ob irgendwo ein Clip
+   *  läuft (s. dortigen Kommentar für die genaue Regel). */
+  setJamGate(open) {
+    if (this.jamGateOpen === open) return;
+    this.jamGateOpen = open;
     refreshGates();
   }
 
