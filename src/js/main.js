@@ -982,8 +982,13 @@ function wireTransportUI() {
       if (event === 'play' || event === 'stop') {
         const playing = t.isPlaying;
         btnPlay.classList.toggle('is-playing', playing);
-        iconPlay.hidden = playing;
-        iconStop.hidden = !playing;
+        // toggleAttribute statt .hidden = ... -- die `hidden`-IDL-Property
+        // spiegelt auf <svg>-Elementen (anders als auf normalen HTML-
+        // Elementen) das Attribut nicht zuverlässig, das Icon bliebe sonst
+        // dauerhaft auf dem Anfangszustand aus dem Markup stehen, egal was
+        // man zuweist (Play/Stop-Icon zeigen dann permanent beide zugleich).
+        iconPlay.toggleAttribute('hidden', playing);
+        iconStop.toggleAttribute('hidden', !playing);
         btnPlay.setAttribute('aria-label',
           playing ? 'Stop playback' : 'Start playback');
         if (!playing) lcdPos.textContent = '1.1';

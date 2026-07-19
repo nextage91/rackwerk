@@ -187,6 +187,11 @@ button {
 }
 .t-btn:active { transform: translateY(1px); filter: brightness(1.15); }
 .t-btn--play svg { width: 22px; height: 22px; fill: var(--led-play); }
+/* Browser wenden ihr UA-Standardstyle für [hidden] (display:none) auf SVG-
+   Elemente nicht zuverlässig an -- ohne diese Regel zeigt der Button IMMER
+   beide Icons gleichzeitig übereinander, egal ob gerade "play" oder "stop"
+   markiert ist (per iconPlay.hidden/iconStop.hidden in main.js gesetzt). */
+.t-btn--play svg[hidden] { display: none; }
 .t-btn--play.is-playing { box-shadow: 0 0 12px rgba(102,224,122,.35), var(--shadow-panel); }
 
 /* ===================== Rack ===================== */
@@ -19067,6 +19072,14 @@ const MACRO_PARAMS = {
 };
 const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit']);
 
+/** Bewegungsschwelle Tippen-vs-Ziehen (px) -- dieselbe wie step-seq.js'
+ *  TAP_THRESHOLD für Pitch-Drag: ein echter Finger-Tap hat auf dem Handy
+ *  fast immer ein paar Pixel unwillkürliches Zittern. Mit dem alten Wert
+ *  von 6px kippte ein normaler Tap regelmäßig fälschlich in den Dragmodus
+ *  (unterdrückt dann den Click, s. makeReorderable) -- genau das Symptom
+ *  "Clip startet nicht beim Antippen" auf einem echten Gerät. */
+const TAP_THRESHOLD = 8;
+
 /** Ändert einen Parameter über den ECHTEN Knob im Maschinen-Panel — löst
  *  denselben `input`-Pfad aus, den auch Handbewegung/Automation nutzen
  *  (kein `knob-grab` davor, also greift auch kein Trim/keine Aufnahme). */
@@ -19216,7 +19229,7 @@ function makeReorderable(clipsEl, machine) {
     if (!dragEl || e.pointerId !== pointerId) return;
     const dy = e.clientY - startY;
     if (!dragEl.classList.contains('is-dragging')) {
-      if (Math.abs(dy) < 6) return;
+      if (Math.abs(dy) < TAP_THRESHOLD) return;
       dragEl.classList.add('is-dragging');
       dragEl.setPointerCapture(pointerId);
     }
@@ -20447,8 +20460,13 @@ function wireTransportUI() {
       if (event === 'play' || event === 'stop') {
         const playing = t.isPlaying;
         btnPlay.classList.toggle('is-playing', playing);
-        iconPlay.hidden = playing;
-        iconStop.hidden = !playing;
+        // toggleAttribute statt .hidden = ... -- die `hidden`-IDL-Property
+        // spiegelt auf <svg>-Elementen (anders als auf normalen HTML-
+        // Elementen) das Attribut nicht zuverlässig, das Icon bliebe sonst
+        // dauerhaft auf dem Anfangszustand aus dem Markup stehen, egal was
+        // man zuweist (Play/Stop-Icon zeigen dann permanent beide zugleich).
+        iconPlay.toggleAttribute('hidden', playing);
+        iconStop.toggleAttribute('hidden', !playing);
         btnPlay.setAttribute('aria-label',
           playing ? 'Stop playback' : 'Start playback');
         if (!playing) lcdPos.textContent = '1.1';
