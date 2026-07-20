@@ -28,7 +28,11 @@ function makeDriveCurve(amount) {
   const K = 30;
   const norm = Math.tanh(K);
   for (let i = 0; i < n; i++) {
-    const x = (i * 2) / n - 1;
+    // (n - 1), NICHT n -- s. dieselbe Korrektur + Begründung bei
+    // makeSatCurve() in analogkit.js: sonst landet x=0 nicht auf dem
+    // Tabellenindex, den WaveShaperNode für x=0 tatsächlich abfragt,
+    // wodurch echte Stille einen kleinen, hörbaren DC-Versatz bekommt.
+    const x = (i * 2) / (n - 1) - 1;
     const driven = Math.tanh(K * x) / norm;
     curve[i] = (1 - amount) * x + amount * driven;
   }

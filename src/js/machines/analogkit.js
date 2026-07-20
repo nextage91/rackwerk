@@ -56,7 +56,18 @@ function makeSatCurve(amount) {
   const k = 1 + amount * 8;
   const norm = Math.tanh(k);
   for (let i = 0; i < n; i++) {
-    const x = (i * 2) / n - 1;
+    // (n - 1), NICHT n: WaveShaperNode rechnet einen Eingabewert x intern
+    // auf virtual_index = (x+1)*(N-1)/2 um (N = Tabellenlänge), nicht auf
+    // (x+1)*N/2. Mit `n` statt `n - 1` hier landet x=0 NICHT auf dem
+    // Index, den der Knoten tatsächlich für x=0 abfragt -- die Kurve war
+    // an dieser Stelle um einen Sample-Schritt verschoben, wodurch echte
+    // Stille (Eingang 0) NICHT auf Ausgang 0 abgebildet wurde, sondern auf
+    // einen kleinen, aber hörbaren DC-Versatz (~-0.007). Solange der davor
+    // liegende GainNode noch auf seinem Default-Wert 1.0 steht (vor der
+    // ersten geplanten Automation, s. env() in dsp.js), lief dieser
+    // Versatz ungedämpft durch -- ein kurzes, helles "Klicken" beim
+    // Scheduling jedes Hits, bevor die eigentliche Hüllkurve einsetzt.
+    const x = (i * 2) / (n - 1) - 1;
     curve[i] = Math.tanh(k * x) / norm;
   }
   return curve;
