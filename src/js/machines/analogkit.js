@@ -313,7 +313,22 @@ const METAL_HEADROOM = 1 / METAL_RATIOS.length;
 // Zielwerte (CH/OH/CC ~13/12/11dB unter BD) aus.
 const METAL_MAKEUP = 1.35;
 
-function metallic(ctx, t, dest, { tr, dur, level }) {
+// Kompensiert den strukturellen Hoch-/Bandpass-Verlust der Oszillatorbank
+// (s. ausführliche Begründung bei `oscBoost` in metallic() weiter unten) --
+// je Stimme einzeln gemessen (Rauschschicht als Referenz verliert am
+// selben Filter nur ~0.3dB, egal welche Stimme):
+//   CH (8000Hz Hochpass): -9.0dB   OH (6500Hz Hochpass): -8.0dB
+//   CC (5000Hz Hochpass): -7.7dB   RC (4000Hz Bandpass): -6.8dB
+// Boost = ca. 75% des gemessenen Verlusts (nicht 100%: der Rest bleibt
+// bewusst Kopfraum/Streuung -- ein voller 1:1-Ausgleich würde die
+// Oszillatorbank in den durchschnittlichen Fällen zu dominant über die
+// Rauschschicht heben, die dem Klang bewusst Dichte gibt).
+const CH_OSC_BOOST = 2.2;
+const OH_OSC_BOOST = 2.0;
+const CC_OSC_BOOST = 1.95;
+const RC_OSC_BOOST = 1.8;
+
+function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1 }) {
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -334,7 +349,22 @@ function metallic(ctx, t, dest, { tr, dur, level }) {
   // persistenten Filter bleibt pro Anschlag nur noch EIN neuer Knoten (die
   // Hüllkurve `g`) übrig -- strukturell so einfach wie bei jeder anderen
   // Stimme in dieser Datei.
-  const g = env(ctx, t, jitter(level * METAL_HEADROOM, 0.05), dur);
+  // oscBoost gleicht einen strukturellen Pegelverlust aus: alle 6
+  // Rechteckwellen-Grundtöne (2x bis 8.21x der Basisfrequenz, s.
+  // METAL_RATIOS) liegen UNTER dem Hoch-/Bandpass jeder Stimme -- nur
+  // ihre (bei Rechteckwellen mit 1/n abfallenden) Obertöne oberhalb des
+  // Cutoffs überleben. Gemessen: die Oszillatorbank verliert dadurch
+  // 6.8-9.0dB (je nach Stimme), während die parallele Breitband-
+  // Rauschschicht am selben Filter nur ~0.3dB verliert (Rauschen hat
+  // schon von Natur aus Energie im ganzen Spektrum, keine tiefen
+  // Grundtöne, die erst wegfallen könnten). Ohne diesen Ausgleich ist
+  // die Rauschschicht nach dem Filter TROTZ niedrigerem Nominalpegel
+  // (s. `* 0.45` unten) real lauter als die Oszillatorbank -- zusammen
+  // mit der ohnehin gewollten Anschlag-zu-Anschlag-Variation (s.
+  // METAL_RATIOS-Kommentar oben) kippt die Oszillatorbank dadurch bei
+  // manchen Anschlägen komplett unter die Rauschschicht: der Hit klingt
+  // dann nur noch nach Rauschen statt nach Metall/Ton.
+  const g = env(ctx, t, jitter(level * METAL_HEADROOM * oscBoost, 0.05), dur);
   // Der Bus liefert (anders als bei allen anderen Stimmen) schon VOR
   // diesem Anschlag durchgehend Signal (persistente Oszillatoren) -- ein
   // frischer GainNode steht bis zu seinem ERSTEN geplanten Automations-
@@ -353,8 +383,11 @@ function metallic(ctx, t, dest, { tr, dur, level }) {
   // `t` -- die Automations-Warteschlange ist zeit-, nicht aufruf-
   // reihenfolge-sortiert, das Gate ging dann NACH dem Envelope-Peak
   // wieder zu statt davor und schnitt den Oszillatorbank-Layer fast
-  // komplett weg (nur die Rauschschicht blieb hörbar -- "klingt
-  // rauschiger beim Antippen als im Sequencer", genau das gemeldete
+  // komplett weg. Das allein war ein echter, seltener werdender Bug,
+  // aber NICHT die Hauptursache für "klingt beim Antippen deutlich
+  // rauschiger/inkonsistenter als im Sequencer" -- die eigentliche
+  // Hauptursache war der oben dokumentierte strukturelle Filterverlust
+  // (oscBoost). Beides zusammen ergab das gemeldete
   // Symptom). Zeit 0 liegt garantiert vor jedem echten `t` > 0, egal wie
   // viel JS-Zeit zwischen dem Berechnen von `t` und dieser Zeile vergeht.
   g.gain.setValueAtTime(0, 0);
@@ -402,9 +435,9 @@ function metallic(ctx, t, dest, { tr, dur, level }) {
  *  welchem Filter es den persistenten Oszillatoren-Bus/Filter dieser
  *  Spur anlegen muss (einzige Quelle der Wahrheit, keine doppelt
  *  gepflegte Zahl in TRACK_DEFS). */
-const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level }) => {
+const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, dur: durMult * p.decay, level: level * p.level,
+    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
   });
   fn.metalFreq = freq;
   fn.filterFreq = filterFreq;
@@ -420,7 +453,8 @@ function rc(ctx, t, dest, p) {
   // (Metall-Anteil + Ping) moderat angehoben — Ride sass im Kit deutlich
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
-    tr: p, dur: 1.0 * p.decay, level: 0.44 * Math.sqrt(6) * METAL_MAKEUP * p.level,
+    tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
+    oscBoost: RC_OSC_BOOST,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -455,9 +489,9 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.55 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.40 * Math.sqrt(6) * METAL_MAKEUP }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.39 * Math.sqrt(6) * METAL_MAKEUP }) },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }) },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }) },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }) },
   { name: 'RC', synth: rc },
 ];
 
