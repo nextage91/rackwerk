@@ -18636,13 +18636,24 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
   filt.connect(g).connect(dest);
   // Kein autoStop() -- der Bus läuft weiter (persistente Oszillatoren),
   // nur der Filter/Gate-Zweig dieses EINEN Anschlags wird nach Ablauf der
-  // Hüllkurve wieder abgeklemmt (wall-clock statt onended: hier stoppt ja
-  // keine Source, s. dsp.js#autoStop für den Normalfall).
-  setTimeout(() => {
+  // Hüllkurve wieder abgeklemmt. Dafür EXTRA einen stummen
+  // ConstantSourceNode als reinen Zeitgeber -- NICHT setTimeout(): das
+  // läuft an der JS-Wall-Clock, nicht an der Audio-Uhr, und kann bei
+  // vielbeschäftigtem Hauptthread (schnelles Antippen erzeugt viele
+  // Pointer-Events + DOM-Updates durch #selectTrack) beliebig spät
+  // feuern. Ein per start()/stop() audio-uhr-genau geplanter Knoten
+  // (wie autoStop() es für echte Klangquellen schon tut, s. dsp.js)
+  // feuert sein onended dagegen exakt zur Audio-Zeit, unabhängig davon,
+  // wie beschäftigt der Haupt-Thread gerade ist.
+  const cleanupTimer = ctx.createConstantSource();
+  cleanupTimer.start(t);
+  cleanupTimer.stop(t + dur + 0.05);
+  cleanupTimer.onended = () => {
     try { tr.metalBus.disconnect(filt); } catch { /* Maschine evtl. schon disposed */ }
     filt.disconnect(g);
     g.disconnect(dest);
-  }, (dur + 0.05) * 1000);
+    cleanupTimer.disconnect();
+  };
 
   // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
   // komprimiertes 6-Bit-PCM-Sample eines echten Beckens (per VCA/Filter
