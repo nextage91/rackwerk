@@ -333,10 +333,23 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
   // Wert per Spec auf dem Default 1.0, nicht auf 0! Ohne diese explizite
   // Schließung liefe das rohe Summensignal für das gesamte Lookahead-
   // Fenster (Aufruf-Zeitpunkt bis t) ungedämpft durch -- hörbar als
-  // Vorecho/Bleed vor jedem Anschlag. setValueAtTime(0, ...) VOR t reiht
-  // sich zeitlich vor den von env() gesetzten Peak ein (Automations-
-  // Warteschlangen sind zeit-, nicht aufrufreihenfolgesortiert).
-  g.gain.setValueAtTime(0, ctx.currentTime);
+  // Vorecho/Bleed vor jedem Anschlag.
+  //
+  // ABSOLUTE Zeit 0 hier, NICHT ctx.currentTime: `t` kann je nach
+  // Aufrufer beliebig knapp in der Zukunft liegen (Pad-Press: nur bis zu
+  // 128 Samples/~2.7ms Vorlauf durch quantizeTime, s. audio-engine.js --
+  // der Sequencer-Scheduler dagegen plant mit 100ms Vorlauf, s.
+  // SCHEDULE_AHEAD in transport.js). Mit ctx.currentTime lief hier ein
+  // echtes Wettrennen: reichten die paar ms Vorlauf beim Pad-Press nicht
+  // (JS-Overhead, GC-Pause, langsames Gerät), landete diese Zeile NACH
+  // `t` -- die Automations-Warteschlange ist zeit-, nicht aufruf-
+  // reihenfolge-sortiert, das Gate ging dann NACH dem Envelope-Peak
+  // wieder zu statt davor und schnitt den Oszillatorbank-Layer fast
+  // komplett weg (nur die Rauschschicht blieb hörbar -- "klingt
+  // rauschiger beim Antippen als im Sequencer", genau das gemeldete
+  // Symptom). Zeit 0 liegt garantiert vor jedem echten `t` > 0, egal wie
+  // viel JS-Zeit zwischen dem Berechnen von `t` und dieser Zeile vergeht.
+  g.gain.setValueAtTime(0, 0);
   tr.metalBus.connect(filt);
   filt.connect(g).connect(dest);
   // Kein autoStop() -- der Bus läuft weiter (persistente Oszillatoren),
