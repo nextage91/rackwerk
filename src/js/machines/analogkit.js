@@ -238,6 +238,11 @@ function cp(ctx, t, dest, p) {
   }
   g.gain.setValueAtTime(jitter(1.95 * p.level, 0.06), t + 0.044);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  // Wie env() (s. dsp.js) -- exponentialRamp erreicht nie echte 0, und
+  // autoStop() stoppt erst 50ms nach `dur`. Ohne diesen letzten linearen
+  // Schritt auf 0 GENAU in diesem Fenster bliebe die Gain bis zum harten
+  // stop() bei 0.001 stehen -- hörbar als leises Klicken am Ende.
+  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
 
   n.connect(bp).connect(g).connect(dest);
   autoStop(n, t, dur, [bp, g], noiseOffset());

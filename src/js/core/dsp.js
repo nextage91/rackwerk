@@ -47,11 +47,22 @@ export function lfsrNoise(ctx) {
   return _lfsrBuffer;
 }
 
-/** Exponentiell abfallende Hüllkurve als Gain-Node. */
+/** Exponentiell abfallende Hüllkurve als Gain-Node. `exponentialRampTo...`
+ *  kann nie exakt 0 erreichen (nur asymptotisch), daher landet die Rampe
+ *  bei 0.001 -- autoStop() (s.u.) stoppt die Quelle aber erst 50ms SPÄTER
+ *  als `dur`, und ohne weitere Automation hält die Gain bis dahin FLACH
+ *  bei 0.001. Die Quelle liefert in diesem Fenster also weiter ein
+ *  leises, aber nicht stummes Signal, das beim harten stop() abrupt auf
+ *  0 springt -- ein winziger, aber echter Sprung, hörbar als leises
+ *  Klicken am Ende jedes Sounds (besonders bei langen Decays wie der
+ *  Kick auffällig). Ein abschliessender linearer Ramp auf echte 0 GENAU
+ *  in diesem 50ms-Fenster (dieselbe Konstante wie in autoStop()) behebt
+ *  das: die Quelle ist beim Stop bereits lautlos, kein Sprung mehr. */
 export function env(ctx, t, peak, dur) {
   const g = ctx.createGain();
   g.gain.setValueAtTime(Math.max(peak, 0.001), t);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
   return g;
 }
 
