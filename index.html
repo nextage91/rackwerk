@@ -18595,7 +18595,7 @@ const METAL_HEADROOM = 1 / METAL_RATIOS.length;
 // Zielwerte (CH/OH/CC ~13/12/11dB unter BD) aus.
 const METAL_MAKEUP = 1.35;
 
-function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filterQ, dur, level }) {
+function metallic(ctx, t, dest, { tr, dur, level }) {
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -18604,10 +18604,18 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
       jitter(tr.metalFreq * METAL_RATIOS[i] * tr.metalDetunes[i] * tr.tune, 0.004), t,
     );
   }
-  const filt = ctx.createBiquadFilter();
-  filt.type = filterType;
-  filt.frequency.value = filterFreq;
-  if (filterQ !== undefined) filt.Q.value = filterQ;
+  // tr.metalFilt ist PERSISTENT (s. AnalogKit#buildAudio) -- Typ/Frequenz/Q
+  // sind pro Spur fest verdrahtet und ändern sich nie pro Anschlag, es gab
+  // also keinen Grund, hier bei JEDEM Hit einen frischen BiquadFilterNode
+  // anzulegen. Das war zusätzlich zur reinen Verschwendung auch eine
+  // eigene Fehlerquelle: nur DIESER pro-Hit-erzeugte Filter (anders als
+  // z.B. die Rauschschicht unten, die eine eigene, natürlich bei `t`
+  // startende Quelle hat) musste jedes Mal frisch an den durchgehend
+  // laufenden metalBus an- UND wieder abgeklemmt werden -- ein Vorgang mit
+  // eigenem Zeitfenster, in dem etwas schiefgehen kann. Mit dem
+  // persistenten Filter bleibt pro Anschlag nur noch EIN neuer Knoten (die
+  // Hüllkurve `g`) übrig -- strukturell so einfach wie bei jeder anderen
+  // Stimme in dieser Datei.
   const g = env(ctx, t, jitter(level * METAL_HEADROOM, 0.05), dur);
   // Der Bus liefert (anders als bei allen anderen Stimmen) schon VOR
   // diesem Anschlag durchgehend Signal (persistente Oszillatoren) -- ein
@@ -18632,13 +18640,12 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
   // Symptom). Zeit 0 liegt garantiert vor jedem echten `t` > 0, egal wie
   // viel JS-Zeit zwischen dem Berechnen von `t` und dieser Zeile vergeht.
   g.gain.setValueAtTime(0, 0);
-  tr.metalBus.connect(filt);
-  filt.connect(g).connect(dest);
-  // Kein autoStop() -- der Bus läuft weiter (persistente Oszillatoren),
-  // nur der Filter/Gate-Zweig dieses EINEN Anschlags wird nach Ablauf der
-  // Hüllkurve wieder abgeklemmt. Dafür EXTRA einen stummen
-  // ConstantSourceNode als reinen Zeitgeber -- NICHT setTimeout(): das
-  // läuft an der JS-Wall-Clock, nicht an der Audio-Uhr, und kann bei
+  tr.metalFilt.connect(g).connect(dest);
+  // Kein autoStop() -- der Bus (und jetzt auch der Filter) laufen weiter
+  // (persistente Oszillatoren), nur der Gate-Zweig dieses EINEN Anschlags
+  // wird nach Ablauf der Hüllkurve wieder abgeklemmt. Dafür EXTRA einen
+  // stummen ConstantSourceNode als reinen Zeitgeber -- NICHT setTimeout():
+  // das läuft an der JS-Wall-Clock, nicht an der Audio-Uhr, und kann bei
   // vielbeschäftigtem Hauptthread (schnelles Antippen erzeugt viele
   // Pointer-Events + DOM-Updates durch #selectTrack) beliebig spät
   // feuern. Ein per start()/stop() audio-uhr-genau geplanter Knoten
@@ -18649,8 +18656,7 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
   cleanupTimer.start(t);
   cleanupTimer.stop(t + dur + 0.05);
   cleanupTimer.onended = () => {
-    try { tr.metalBus.disconnect(filt); } catch { /* Maschine evtl. schon disposed */ }
-    filt.disconnect(g);
+    try { tr.metalFilt.disconnect(g); } catch { /* Maschine evtl. schon disposed */ }
     g.disconnect(dest);
     cleanupTimer.disconnect();
   };
@@ -18665,24 +18671,27 @@ function metallic(ctx, t, dest, { tr, filterFreq, filterType = 'highpass', filte
   n.buffer = noise(ctx);
   const nf = ctx.createBiquadFilter();
   nf.type = 'highpass';
-  nf.frequency.value = Math.max(filterFreq * 0.5, 2000);
+  nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
   const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45, 0.05), dur);
   n.connect(nf).connect(ng).connect(dest);
   autoStop(n, t, dur, [nf, ng], noiseOffset());
 }
 
 /** Hi-Hat/Crash-Stimme: feste Klangfarbe, Tune/Decay/Level wirken wie bei
- *  den übrigen Spuren. `freq` steht zusätzlich als `.metalFreq` auf der
- *  zurückgegebenen Funktion, damit AnalogKit#buildAudio weiss, mit
- *  welcher Basisfrequenz es den persistenten Oszillatoren-Bus dieser
+ *  den übrigen Spuren. `freq`/`filterFreq`/`filterType`/`filterQ` stehen
+ *  zusätzlich auf der zurückgegebenen Funktion (wie schon `.metalFreq`),
+ *  damit AnalogKit#buildAudio weiss, mit welcher Basisfrequenz und
+ *  welchem Filter es den persistenten Oszillatoren-Bus/Filter dieser
  *  Spur anlegen muss (einzige Quelle der Wahrheit, keine doppelt
  *  gepflegte Zahl in TRACK_DEFS). */
 const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, filterFreq, filterType, filterQ,
-    dur: durMult * p.decay, level: level * p.level,
+    tr: p, dur: durMult * p.decay, level: level * p.level,
   });
   fn.metalFreq = freq;
+  fn.filterFreq = filterFreq;
+  fn.filterType = filterType;
+  fn.filterQ = filterQ;
   return fn;
 };
 
@@ -18693,8 +18702,7 @@ function rc(ctx, t, dest, p) {
   // (Metall-Anteil + Ping) moderat angehoben — Ride sass im Kit deutlich
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
-    tr: p, filterFreq: 4000, filterType: 'bandpass', filterQ: 1.4,
-    dur: 1.0 * p.decay, level: 0.44 * Math.sqrt(6) * METAL_MAKEUP * p.level,
+    tr: p, dur: 1.0 * p.decay, level: 0.44 * Math.sqrt(6) * METAL_MAKEUP * p.level,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -18704,6 +18712,9 @@ function rc(ctx, t, dest, p) {
   autoStop(o, t, 0.15 * p.decay, [g]);
 }
 rc.metalFreq = 350;
+rc.filterFreq = 4000;
+rc.filterType = 'bandpass';
+rc.filterQ = 1.4;
 
 /* ================= Die Maschine ================= */
 
@@ -18774,12 +18785,22 @@ class AnalogKit extends TrackedDrumMachine {
         o.start();
         return o;
       });
+      // Ebenfalls persistent (s. metallic() für die Begründung): Typ/
+      // Frequenz/Q sind pro Spur fest (aus synth.filterFreq/Type/Q, s.
+      // metallicVoice()/rc), ändern sich nie pro Anschlag -- ein einziger
+      // dauerhaft an metalBus hängender Filter statt einem frischen pro
+      // Hit.
+      tr.metalFilt = engine.ctx.createBiquadFilter();
+      tr.metalFilt.type = tr.synth.filterType ?? 'highpass';
+      tr.metalFilt.frequency.value = tr.synth.filterFreq;
+      if (tr.synth.filterQ !== undefined) tr.metalFilt.Q.value = tr.synth.filterQ;
+      tr.metalBus.connect(tr.metalFilt);
     }
   }
 
-  /** Basisklasse kennt die metallischen Oszillatoren-Busse nicht -- selbst
-   *  stoppen, sonst liefen sie nach dem Entfernen der Maschine unhörbar,
-   *  aber unnötig weiter. */
+  /** Basisklasse kennt die metallischen Oszillatoren-Busse/-Filter nicht --
+   *  selbst stoppen/trennen, sonst liefen sie nach dem Entfernen der
+   *  Maschine unhörbar, aber unnötig weiter. */
   disposeAudio() {
     super.disposeAudio();
     for (const tr of this.tracks) {
@@ -18787,6 +18808,7 @@ class AnalogKit extends TrackedDrumMachine {
         try { o.stop(); } catch { /* schon gestoppt */ }
         o.disconnect();
       }
+      tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
     }
   }
