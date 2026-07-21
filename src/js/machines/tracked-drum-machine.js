@@ -20,6 +20,41 @@ import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
 import { song } from '../core/song.js';
 
+// TEMPORÄR (Debug): sichtbares On-Screen-Overlay, um bei einem echten
+// Pad-Press auf dem Gerät direkt zu sehen, ob der Oszillatorbus einer
+// metallischen Spur (CH/OH/CC/RC, s. AnalogKit) im Trigger-Moment
+// tatsächlich Signal führt -- unabhängig von Gate/Hüllkurve. Ohne
+// tr.metalBusAnalyser (alle anderen Stimmen/Maschinen) ist dies ein
+// no-op. Wird nach Abschluss der Fehlersuche wieder entfernt.
+let debugOverlayEl = null;
+function captureMetalDebug(tr, source) {
+  if (typeof tr.metalBusAnalyser?.getFloatTimeDomainData !== 'function') return;
+  const buf = new Float32Array(tr.metalBusAnalyser.fftSize);
+  tr.metalBusAnalyser.getFloatTimeDomainData(buf);
+  let peak = 0;
+  for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  const entry = {
+    source, track: tr.name,
+    t: engine.ctx.currentTime.toFixed(3),
+    state: engine.ctx.state,
+    oscBusPeak: peak.toFixed(4),
+  };
+  window.__rackwerkDebug = window.__rackwerkDebug || [];
+  window.__rackwerkDebug.push(entry);
+  if (window.__rackwerkDebug.length > 10) window.__rackwerkDebug.shift();
+
+  if (!debugOverlayEl) {
+    debugOverlayEl = document.createElement('div');
+    debugOverlayEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;'
+      + 'max-width:96vw;font:9px/1.3 monospace;color:#0f0;background:rgba(0,0,0,0.75);'
+      + 'padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre;overflow:auto;max-height:40vh;';
+    document.body.appendChild(debugOverlayEl);
+  }
+  debugOverlayEl.textContent = window.__rackwerkDebug
+    .map((e) => `${e.source.padEnd(4)} ${e.track.padEnd(3)} t=${e.t} state=${e.state.padEnd(9)} oscBusPeak=${e.oscBusPeak}`)
+    .join('\n');
+}
+
 export class TrackedDrumMachine extends Machine {
   getParamForKnob(key) {
     // volume liegt hier nicht in params — alles andere (z. B. die
@@ -233,8 +268,9 @@ export class TrackedDrumMachine extends Machine {
     return tr.meterAnalyser;
   }
 
-  #trigger(tr, time) {
+  #trigger(tr, time, source = 'seq') {
     this.pulse(time);
+    captureMetalDebug(tr, source); // TEMPORÄR (Debug), s. Kommentar oben im File
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
     // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
@@ -381,7 +417,7 @@ export class TrackedDrumMachine extends Machine {
         if (this.isLiveRecording) {
           tr.steps[this.liveStepIndex(tr.steps.length)].on = true;
         }
-        this.#trigger(tr, engine.ctx.currentTime);
+        this.#trigger(tr, engine.ctx.currentTime, 'pad');
         this.#selectTrack(i); // rendert das Grid neu — zeigt den frischen Step gleich mit
       });
       pads.appendChild(pad);

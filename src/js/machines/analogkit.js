@@ -547,6 +547,15 @@ export class AnalogKit extends TrackedDrumMachine {
       tr.metalFilt.frequency.value = tr.synth.filterFreq;
       if (tr.synth.filterQ !== undefined) tr.metalFilt.Q.value = tr.synth.filterQ;
       tr.metalBus.connect(tr.metalFilt);
+
+      // TEMPORÄR (Debug, s. tracked-drum-machine.js #trigger): reiner
+      // Abgriff auf die rohe Oszillatorsumme VOR jedem Gate/Filter, um
+      // live auf dem Gerät zu prüfen, ob der Oszillatorbus im Moment
+      // eines Pad-Press tatsächlich Signal führt. Kein Effekt auf den
+      // Klang (Dead-End-Tap, wie tr.meterAnalyser).
+      tr.metalBusAnalyser = engine.ctx.createAnalyser();
+      tr.metalBusAnalyser.fftSize = 256;
+      tr.metalBus.connect(tr.metalBusAnalyser);
     }
   }
 
@@ -562,6 +571,7 @@ export class AnalogKit extends TrackedDrumMachine {
       }
       tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
+      tr.metalBusAnalyser?.disconnect();
     }
   }
 }
