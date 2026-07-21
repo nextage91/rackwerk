@@ -20,59 +20,6 @@ import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
 import { song } from '../core/song.js';
 
-// TEMPORÄR (Debug): sichtbares On-Screen-Overlay, um bei einem echten
-// Pad-Press auf dem Gerät direkt zu sehen, ob der Oszillatorbus einer
-// metallischen Spur (CH/OH/CC/RC, s. AnalogKit) im Trigger-Moment
-// tatsächlich Signal führt -- unabhängig von Gate/Hüllkurve. Ohne
-// tr.metalBusAnalyser (alle anderen Stimmen/Maschinen) ist dies ein
-// no-op. Wird nach Abschluss der Fehlersuche wieder entfernt.
-let debugOverlayEl = null;
-function renderDebugOverlay() {
-  if (!debugOverlayEl) {
-    debugOverlayEl = document.createElement('div');
-    debugOverlayEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;'
-      + 'max-width:96vw;font:9px/1.3 monospace;color:#0f0;background:rgba(0,0,0,0.75);'
-      + 'padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre;overflow:auto;max-height:40vh;';
-    document.body.appendChild(debugOverlayEl);
-  }
-  debugOverlayEl.textContent = window.__rackwerkDebug
-    .map((e) => `${e.source.padEnd(4)} ${e.track.padEnd(3)} t=${e.t} state=${e.state.padEnd(9)} `
-      + `oscBusPeak=${e.oscBusPeak} postGatePeak=${e.postGatePeak}`)
-    .join('\n');
-}
-function readAnalyserPeak(analyser) {
-  const buf = new Float32Array(analyser.fftSize);
-  analyser.getFloatTimeDomainData(buf);
-  let peak = 0;
-  for (const v of buf) peak = Math.max(peak, Math.abs(v));
-  return peak;
-}
-function captureMetalDebug(tr, source) {
-  if (typeof tr.metalBusAnalyser?.getFloatTimeDomainData !== 'function') return;
-  const entry = {
-    source, track: tr.name,
-    t: engine.ctx.currentTime.toFixed(3),
-    state: engine.ctx.state,
-    oscBusPeak: readAnalyserPeak(tr.metalBusAnalyser).toFixed(4),
-    postGatePeak: '…', // NACH Gate/Filter/Panner, kommt ~40ms später (s.u.)
-  };
-  window.__rackwerkDebug = window.__rackwerkDebug || [];
-  window.__rackwerkDebug.push(entry);
-  if (window.__rackwerkDebug.length > 10) window.__rackwerkDebug.shift();
-  renderDebugOverlay();
-
-  // Zweite Messung mit Verzögerung: 40ms liegt bei JEDER metallischen
-  // Stimme sicher noch im Attack/frühen Decay (kürzeste Hüllkurve CH:
-  // 0.2*decay, decay-Default 1 -> 200ms) -- zeigt, ob das (laut
-  // oscBusPeak gesunde) Signal bis nach Gate/Filter/Panner durchkommt.
-  if (typeof tr.postGateAnalyser?.getFloatTimeDomainData === 'function') {
-    setTimeout(() => {
-      entry.postGatePeak = readAnalyserPeak(tr.postGateAnalyser).toFixed(4);
-      renderDebugOverlay();
-    }, 40);
-  }
-}
-
 export class TrackedDrumMachine extends Machine {
   getParamForKnob(key) {
     // volume liegt hier nicht in params — alles andere (z. B. die
@@ -189,7 +136,7 @@ export class TrackedDrumMachine extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, pan: tr.pan,
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, noiseMix: tr.noiseMix, pan: tr.pan,
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
@@ -209,6 +156,7 @@ export class TrackedDrumMachine extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
+      if (saved.noiseMix !== undefined) tr.noiseMix = saved.noiseMix;
       this.setTrackPan(i, saved.pan ?? 0);
       // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
       // buildControls) — direkt an Feld + Gain-Node schreiben statt über
@@ -286,9 +234,8 @@ export class TrackedDrumMachine extends Machine {
     return tr.meterAnalyser;
   }
 
-  #trigger(tr, time, source = 'seq') {
+  #trigger(tr, time) {
     this.pulse(time);
-    captureMetalDebug(tr, source); // TEMPORÄR (Debug), s. Kommentar oben im File
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
     // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
@@ -338,6 +285,7 @@ export class TrackedDrumMachine extends Machine {
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
+      <x-knob label="Noise" min="0" max="2" value="1" default="1" data-p="noiseMix"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
     `;
@@ -364,6 +312,7 @@ export class TrackedDrumMachine extends Machine {
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
       snap: row.querySelector('[data-p="snap"]'),
+      noiseMix: row.querySelector('[data-p="noiseMix"]'),
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
@@ -382,7 +331,7 @@ export class TrackedDrumMachine extends Machine {
     // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
     // Playback schreibt direkt in die Spur-Parameter; der Knob bewegt
     // sich nur mit, wenn seine Spur gerade ausgewählt ist.
-    for (const param of ['tune', 'decay', 'level', 'snap']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix']) {
       const applyForKey = (key, value) => {
         const trIdx = parseInt(key.split(':')[1], 10);
         if (this.tracks[trIdx][param] === undefined) return; // Spur ohne diesen Param
@@ -435,7 +384,7 @@ export class TrackedDrumMachine extends Machine {
         if (this.isLiveRecording) {
           tr.steps[this.liveStepIndex(tr.steps.length)].on = true;
         }
-        this.#trigger(tr, engine.ctx.currentTime, 'pad');
+        this.#trigger(tr, engine.ctx.currentTime);
         this.#selectTrack(i); // rendert das Grid neu — zeigt den frischen Step gleich mit
       });
       pads.appendChild(pad);
@@ -496,9 +445,11 @@ export class TrackedDrumMachine extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    this.knobs.noiseMix.style.display = tr.noiseMix === undefined ? 'none' : '';
+    if (tr.noiseMix !== undefined) this.knobs.noiseMix.value = tr.noiseMix;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap', 'sendDelay', 'sendReverb']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
