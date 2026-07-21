@@ -556,6 +556,13 @@ export class AnalogKit extends TrackedDrumMachine {
       tr.metalBusAnalyser = engine.ctx.createAnalyser();
       tr.metalBusAnalyser.fftSize = 256;
       tr.metalBus.connect(tr.metalBusAnalyser);
+
+      // TEMPORÄR (Debug): zweiter Abgriff NACH Gate/Filter/Panner --
+      // zeigt, ob das (laut metalBusAnalyser gesunde) Signal bis zum
+      // Spur-Ausgang durchkommt oder irgendwo dazwischen verschwindet.
+      tr.postGateAnalyser = engine.ctx.createAnalyser();
+      tr.postGateAnalyser.fftSize = 256;
+      tr.panner.connect(tr.postGateAnalyser);
     }
   }
 
@@ -572,6 +579,7 @@ export class AnalogKit extends TrackedDrumMachine {
       tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
       tr.metalBusAnalyser?.disconnect();
+      tr.postGateAnalyser?.disconnect();
     }
   }
 }
