@@ -16992,7 +16992,8 @@ class TrackedDrumMachine extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, noiseMix: tr.noiseMix, pan: tr.pan,
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
+        oscMix: tr.oscMix, noiseMix: tr.noiseMix, pan: tr.pan,
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
@@ -17012,6 +17013,7 @@ class TrackedDrumMachine extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
+      if (saved.oscMix !== undefined) tr.oscMix = saved.oscMix;
       if (saved.noiseMix !== undefined) tr.noiseMix = saved.noiseMix;
       this.setTrackPan(i, saved.pan ?? 0);
       // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
@@ -17141,6 +17143,7 @@ class TrackedDrumMachine extends Machine {
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
+      <x-knob label="Tone" min="0" max="2" value="1" default="1" data-p="oscMix"></x-knob>
       <x-knob label="Noise" min="0" max="2" value="1" default="1" data-p="noiseMix"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
@@ -17168,6 +17171,7 @@ class TrackedDrumMachine extends Machine {
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
       snap: row.querySelector('[data-p="snap"]'),
+      oscMix: row.querySelector('[data-p="oscMix"]'),
       noiseMix: row.querySelector('[data-p="noiseMix"]'),
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
@@ -17187,7 +17191,7 @@ class TrackedDrumMachine extends Machine {
     // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
     // Playback schreibt direkt in die Spur-Parameter; der Knob bewegt
     // sich nur mit, wenn seine Spur gerade ausgewählt ist.
-    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix']) {
       const applyForKey = (key, value) => {
         const trIdx = parseInt(key.split(':')[1], 10);
         if (this.tracks[trIdx][param] === undefined) return; // Spur ohne diesen Param
@@ -17301,11 +17305,13 @@ class TrackedDrumMachine extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    this.knobs.oscMix.style.display = tr.oscMix === undefined ? 'none' : '';
+    if (tr.oscMix !== undefined) this.knobs.oscMix.value = tr.oscMix;
     this.knobs.noiseMix.style.display = tr.noiseMix === undefined ? 'none' : '';
     if (tr.noiseMix !== undefined) this.knobs.noiseMix.value = tr.noiseMix;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix', 'sendDelay', 'sendReverb']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
@@ -18615,7 +18621,7 @@ const OH_OSC_BOOST = 2.0;
 const CC_OSC_BOOST = 1.95;
 const RC_OSC_BOOST = 1.8;
 
-function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) {
+function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, noiseMix = 1 }) {
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -18677,9 +18683,18 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
   // `t` > 0 (s. ausführliche Begründung in früheren Commits): schließt das
   // Gate zuverlässig, bevor der Peak bei `t` einsetzt.
   g.gain.setValueAtTime(0, 0);
-  g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost, 0.05), 0.001), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  // oscMix: Spur-Regler "Tone" (Default 1 = bisheriger fest eingemessener
+  // Pegel, 0 = Oszillatorbank komplett stumm -- z.B. um NUR den Rausch-
+  // layer zu nutzen). Analog zu noiseMix beim Rauschlayer unten. Bei
+  // oscMix=0 KEINE Rampe planen (nur die (0,0)-Schließung von oben steht) --
+  // exponentialRampToValueAtTime verlangt einen von 0 verschiedenen
+  // Startwert, echte Stille braucht daher einen eigenen Zweig statt nur
+  // eines auf 0.001 gefloorten Peaks (der wäre technisch nie ganz stumm).
+  if (oscMix > 0) {
+    g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost * oscMix, 0.05), 0.001), t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  }
   g.connect(dest); // wiederholtes connect() auf dieselbe Verbindung ist ein No-Op, kein Fehler
 
   // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
@@ -18688,20 +18703,24 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
   // Rechteckwellen je erreichen (die klingen eher nach einem gestimmten
   // Akkord, "808-artig"). Eine hochpassgefilterte Rauschschicht unter dem
   // Oszillatorbündel nähert diese Dichte an, ohne selbst ein Sample zu sein.
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const nf = ctx.createBiquadFilter();
-  nf.type = 'highpass';
-  nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
+  //
   // noiseMix: Spur-Regler "Noise" (Default 1 = bisher fest eingemessenes
-  // Verhältnis Ton/Rauschen, 0 = reiner Ton, 2 = doppelt so viel Rauschen)
+  // Verhältnis Ton/Rauschen, 0 = reiner Ton -- Rauschlayer entfällt dann
+  // komplett statt nur sehr leise zu sein, 2 = doppelt so viel Rauschen)
   // -- direkt aus dem gemeldeten Pad-vs-Sequencer-Fall entstanden: sobald
   // beide Layer zuverlässig gleich klingen, will man sie nach Geschmack
   // gegeneinander abmischen können statt an einen festen Wert gebunden
-  // zu sein.
-  const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
-  n.connect(nf).connect(ng).connect(dest);
-  autoStop(n, t, dur, [nf, ng], noiseOffset());
+  // zu sein, bis hin zu nur EINEM der beiden Layer.
+  if (noiseMix > 0) {
+    const n = ctx.createBufferSource();
+    n.buffer = noise(ctx);
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'highpass';
+    nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
+    const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
+    n.connect(nf).connect(ng).connect(dest);
+    autoStop(n, t, dur, [nf, ng], noiseOffset());
+  }
 }
 
 /** Hi-Hat/Crash-Stimme: feste Klangfarbe, Tune/Decay/Level wirken wie bei
@@ -18713,7 +18732,8 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
  *  gepflegte Zahl in TRACK_DEFS). */
 const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost, noiseMix: p.noiseMix ?? 1,
+    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
+    oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
   });
   fn.metalFreq = freq;
   fn.filterFreq = filterFreq;
@@ -18730,7 +18750,7 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
-    oscBoost: RC_OSC_BOOST, noiseMix: p.noiseMix ?? 1,
+    oscBoost: RC_OSC_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -18765,10 +18785,10 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), noiseMix: 1 },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), noiseMix: 1 },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), noiseMix: 1 },
-  { name: 'RC', synth: rc, noiseMix: 1 },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'RC', synth: rc, oscMix: 1, noiseMix: 1 },
 ];
 
 class AnalogKit extends TrackedDrumMachine {

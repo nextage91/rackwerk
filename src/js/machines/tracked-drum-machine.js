@@ -136,7 +136,8 @@ export class TrackedDrumMachine extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap, noiseMix: tr.noiseMix, pan: tr.pan,
+        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
+        oscMix: tr.oscMix, noiseMix: tr.noiseMix, pan: tr.pan,
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
@@ -156,6 +157,7 @@ export class TrackedDrumMachine extends Machine {
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
       if (saved.snap !== undefined) tr.snap = saved.snap;
+      if (saved.oscMix !== undefined) tr.oscMix = saved.oscMix;
       if (saved.noiseMix !== undefined) tr.noiseMix = saved.noiseMix;
       this.setTrackPan(i, saved.pan ?? 0);
       // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
@@ -285,6 +287,7 @@ export class TrackedDrumMachine extends Machine {
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
+      <x-knob label="Tone" min="0" max="2" value="1" default="1" data-p="oscMix"></x-knob>
       <x-knob label="Noise" min="0" max="2" value="1" default="1" data-p="noiseMix"></x-knob>
       <x-knob label="Send D" min="0" max="1" value="0" data-p="trackSendDelay"></x-knob>
       <x-knob label="Send R" min="0" max="1" value="0" data-p="trackSendReverb"></x-knob>
@@ -312,6 +315,7 @@ export class TrackedDrumMachine extends Machine {
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
       snap: row.querySelector('[data-p="snap"]'),
+      oscMix: row.querySelector('[data-p="oscMix"]'),
       noiseMix: row.querySelector('[data-p="noiseMix"]'),
       sendDelay: row.querySelector('[data-p="trackSendDelay"]'),
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
@@ -331,7 +335,7 @@ export class TrackedDrumMachine extends Machine {
     // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
     // Playback schreibt direkt in die Spur-Parameter; der Knob bewegt
     // sich nur mit, wenn seine Spur gerade ausgewählt ist.
-    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix']) {
       const applyForKey = (key, value) => {
         const trIdx = parseInt(key.split(':')[1], 10);
         if (this.tracks[trIdx][param] === undefined) return; // Spur ohne diesen Param
@@ -445,11 +449,13 @@ export class TrackedDrumMachine extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
+    this.knobs.oscMix.style.display = tr.oscMix === undefined ? 'none' : '';
+    if (tr.oscMix !== undefined) this.knobs.oscMix.value = tr.oscMix;
     this.knobs.noiseMix.style.display = tr.noiseMix === undefined ? 'none' : '';
     if (tr.noiseMix !== undefined) this.knobs.noiseMix.value = tr.noiseMix;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap', 'noiseMix', 'sendDelay', 'sendReverb']) {
+    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }

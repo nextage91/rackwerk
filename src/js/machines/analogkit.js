@@ -328,7 +328,7 @@ const OH_OSC_BOOST = 2.0;
 const CC_OSC_BOOST = 1.95;
 const RC_OSC_BOOST = 1.8;
 
-function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) {
+function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, noiseMix = 1 }) {
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -390,9 +390,18 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
   // `t` > 0 (s. ausführliche Begründung in früheren Commits): schließt das
   // Gate zuverlässig, bevor der Peak bei `t` einsetzt.
   g.gain.setValueAtTime(0, 0);
-  g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost, 0.05), 0.001), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  // oscMix: Spur-Regler "Tone" (Default 1 = bisheriger fest eingemessener
+  // Pegel, 0 = Oszillatorbank komplett stumm -- z.B. um NUR den Rausch-
+  // layer zu nutzen). Analog zu noiseMix beim Rauschlayer unten. Bei
+  // oscMix=0 KEINE Rampe planen (nur die (0,0)-Schließung von oben steht) --
+  // exponentialRampToValueAtTime verlangt einen von 0 verschiedenen
+  // Startwert, echte Stille braucht daher einen eigenen Zweig statt nur
+  // eines auf 0.001 gefloorten Peaks (der wäre technisch nie ganz stumm).
+  if (oscMix > 0) {
+    g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost * oscMix, 0.05), 0.001), t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  }
   g.connect(dest); // wiederholtes connect() auf dieselbe Verbindung ist ein No-Op, kein Fehler
 
   // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
@@ -401,20 +410,24 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
   // Rechteckwellen je erreichen (die klingen eher nach einem gestimmten
   // Akkord, "808-artig"). Eine hochpassgefilterte Rauschschicht unter dem
   // Oszillatorbündel nähert diese Dichte an, ohne selbst ein Sample zu sein.
-  const n = ctx.createBufferSource();
-  n.buffer = noise(ctx);
-  const nf = ctx.createBiquadFilter();
-  nf.type = 'highpass';
-  nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
+  //
   // noiseMix: Spur-Regler "Noise" (Default 1 = bisher fest eingemessenes
-  // Verhältnis Ton/Rauschen, 0 = reiner Ton, 2 = doppelt so viel Rauschen)
+  // Verhältnis Ton/Rauschen, 0 = reiner Ton -- Rauschlayer entfällt dann
+  // komplett statt nur sehr leise zu sein, 2 = doppelt so viel Rauschen)
   // -- direkt aus dem gemeldeten Pad-vs-Sequencer-Fall entstanden: sobald
   // beide Layer zuverlässig gleich klingen, will man sie nach Geschmack
   // gegeneinander abmischen können statt an einen festen Wert gebunden
-  // zu sein.
-  const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
-  n.connect(nf).connect(ng).connect(dest);
-  autoStop(n, t, dur, [nf, ng], noiseOffset());
+  // zu sein, bis hin zu nur EINEM der beiden Layer.
+  if (noiseMix > 0) {
+    const n = ctx.createBufferSource();
+    n.buffer = noise(ctx);
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'highpass';
+    nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
+    const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
+    n.connect(nf).connect(ng).connect(dest);
+    autoStop(n, t, dur, [nf, ng], noiseOffset());
+  }
 }
 
 /** Hi-Hat/Crash-Stimme: feste Klangfarbe, Tune/Decay/Level wirken wie bei
@@ -426,7 +439,8 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) 
  *  gepflegte Zahl in TRACK_DEFS). */
 const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost, noiseMix: p.noiseMix ?? 1,
+    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
+    oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
   });
   fn.metalFreq = freq;
   fn.filterFreq = filterFreq;
@@ -443,7 +457,7 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
-    oscBoost: RC_OSC_BOOST, noiseMix: p.noiseMix ?? 1,
+    oscBoost: RC_OSC_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -478,10 +492,10 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), noiseMix: 1 },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), noiseMix: 1 },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), noiseMix: 1 },
-  { name: 'RC', synth: rc, noiseMix: 1 },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'RC', synth: rc, oscMix: 1, noiseMix: 1 },
 ];
 
 export class AnalogKit extends TrackedDrumMachine {
