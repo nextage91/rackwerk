@@ -14305,34 +14305,50 @@ function lfsrNoise(ctx) {
   return _lfsrBuffer;
 }
 
-/** Exponentiell abfallende Hüllkurve als Gain-Node. `exponentialRampTo...`
- *  kann nie exakt 0 erreichen (nur asymptotisch), daher landet die Rampe
- *  bei 0.001 -- autoStop() (s.u.) stoppt die Quelle aber erst 50ms SPÄTER
- *  als `dur`, und ohne weitere Automation hält die Gain bis dahin FLACH
- *  bei 0.001. Die Quelle liefert in diesem Fenster also weiter ein
- *  leises, aber nicht stummes Signal, das beim harten stop() abrupt auf
- *  0 springt -- ein winziger, aber echter Sprung, hörbar als leises
- *  Klicken am Ende jedes Sounds (besonders bei langen Decays wie der
- *  Kick auffällig). Ein abschliessender linearer Ramp auf echte 0 GENAU
- *  in diesem 50ms-Fenster (dieselbe Konstante wie in autoStop()) behebt
- *  das: die Quelle ist beim Stop bereits lautlos, kein Sprung mehr. */
-function env(ctx, t, peak, dur) {
+/** ADR-Hüllkurve als Gain-Node: Attack (0 -> peak), dann exponentieller
+ *  Decay (peak -> 0.001, praktisch stumm), dann Release (0.001 -> echte 0).
+ *  `attack`/`release` (Sekunden) sind optional -- Default 0/0.05 reproduziert
+ *  exakt das alte, feste Verhalten (sofortiger Sprung auf `peak`, fixer
+ *  50ms-Tail), damit bestehende Spuren beim Umstieg unverändert klingen.
+ *
+ *  `exponentialRampToValueAtTime` kann nie exakt 0 erreichen (nur
+ *  asymptotisch) UND verlangt einen von 0 verschiedenen Startwert -- daher
+ *  landet der Decay bei 0.001 statt 0, und der letzte Schritt von dort auf
+ *  echte 0 läuft linear über `release` (das kann `linearRampToValueAtTime`
+ *  problemlos, exponentiell nicht). Ohne diesen letzten Schritt bliebe die
+ *  Gain bis zum harten stop() bei 0.001 hängen und spränge dann abrupt auf
+ *  0 -- ein winziges, aber echtes Klicken am Ende jedes Sounds.
+ *
+ *  g.totalDur trägt die volle Länge (attack+dur+release) ab `t` -- autoStop()
+ *  braucht diesen Wert (nicht nur `dur`), um Quelle/Zusatzknoten erst nach
+ *  dem vollständigen Ausklang abzubauen. */
+function env(ctx, t, peak, dur, { attack = 0, release = 0.05 } = {}) {
   const g = ctx.createGain();
-  g.gain.setValueAtTime(Math.max(peak, 0.001), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  const pk = Math.max(peak, 0.001);
+  const rel = Math.max(release, 0.005);
+  if (attack > 0) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(pk, t + attack);
+  } else {
+    g.gain.setValueAtTime(pk, t);
+  }
+  g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+  g.gain.linearRampToValueAtTime(0, t + attack + dur + rel);
+  g.totalDur = attack + dur + rel;
   return g;
 }
 
-/** Quelle sauber beenden und den Teilgraphen abbauen. `offset` (Sekunden
- *  in den Buffer hinein) ist optional -- ohne Angabe wie bisher immer bei
- *  0 starten. Ein zufälliger Offset lässt eine Rauschquelle bei jedem
- *  Anschlag eine ANDERE Stelle desselben (gecachten) Rauschbuffers
- *  abspielen statt immer denselben Ausschnitt -- Analogkit nutzt das für
- *  mehr Anschlag-zu-Anschlag-Variation (s. dort). */
+/** Quelle sauber beenden und den Teilgraphen abbauen. `dur` muss die VOLLE
+ *  Hüllkurvenlänge sein (z.B. `g.totalDur` von env() oben), nicht nur die
+ *  reine Decay-Zeit -- sonst stoppt die Quelle mitten in ihrem eigenen
+ *  Release-Ausklang. `offset` (Sekunden in den Buffer hinein) ist optional
+ *  -- ohne Angabe wie bisher immer bei 0 starten. Ein zufälliger Offset
+ *  lässt eine Rauschquelle bei jedem Anschlag eine ANDERE Stelle desselben
+ *  (gecachten) Rauschbuffers abspielen statt immer denselben Ausschnitt --
+ *  Analogkit nutzt das für mehr Anschlag-zu-Anschlag-Variation (s. dort). */
 function autoStop(src, t, dur, nodes, offset = 0) {
   src.start(t, offset);
-  src.stop(t + dur + 0.05);
+  src.stop(t + dur);
   src.onended = () => { src.disconnect(); nodes.forEach((n) => n.disconnect()); };
 }
 
@@ -16916,7 +16932,7 @@ class TrackedDrumMachine extends Machine {
       panner.connect(sendReverbNode);
       sendReverbNode.connect(engine.reverbBus);
       return {
-        ...def, tune: 1, decay: 1, level: 0.9, pan: 0, panner,
+        ...def, tune: 1, decay: 1, level: 0.9, attack: 0, release: 0.05, pan: 0, panner,
         sendDelay: 0, sendReverb: 0, sendDelayNode, sendReverbNode,
       };
     });
@@ -16992,8 +17008,8 @@ class TrackedDrumMachine extends Machine {
       volume: this.volume,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
-        tune: tr.tune, decay: tr.decay, level: tr.level, snap: tr.snap,
-        oscMix: tr.oscMix, noiseMix: tr.noiseMix, pan: tr.pan,
+        tune: tr.tune, decay: tr.decay, level: tr.level, attack: tr.attack, release: tr.release,
+        snap: tr.snap, oscMix: tr.oscMix, noiseMix: tr.noiseMix, pan: tr.pan,
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
@@ -17012,6 +17028,8 @@ class TrackedDrumMachine extends Machine {
       tr.tune = saved.tune ?? tr.tune;
       tr.decay = saved.decay ?? tr.decay;
       tr.level = saved.level ?? tr.level;
+      tr.attack = saved.attack ?? tr.attack;
+      tr.release = saved.release ?? tr.release;
       if (saved.snap !== undefined) tr.snap = saved.snap;
       if (saved.oscMix !== undefined) tr.oscMix = saved.oscMix;
       if (saved.noiseMix !== undefined) tr.noiseMix = saved.noiseMix;
@@ -17142,6 +17160,8 @@ class TrackedDrumMachine extends Machine {
       <x-knob label="Tune"  min="0.5" max="2" value="1"   default="1" curve="log" data-p="tune"></x-knob>
       <x-knob label="Decay" min="0.25" max="3" value="1"  default="1" curve="log" data-p="decay"></x-knob>
       <x-knob label="Level" min="0" max="1" value="0.9"   data-p="level"></x-knob>
+      <x-knob label="Attack" min="0" max="0.3" value="0" default="0" data-p="attack"></x-knob>
+      <x-knob label="Release" min="0.005" max="1" value="0.05" default="0.05" curve="log" data-p="release"></x-knob>
       <x-knob label="Snap"  min="0" max="1" value="0.5"   data-p="snap"></x-knob>
       <x-knob label="Tone" min="0" max="2" value="1" default="1" data-p="oscMix"></x-knob>
       <x-knob label="Noise" min="0" max="2" value="1" default="1" data-p="noiseMix"></x-knob>
@@ -17170,6 +17190,8 @@ class TrackedDrumMachine extends Machine {
       tune: row.querySelector('[data-p="tune"]'),
       decay: row.querySelector('[data-p="decay"]'),
       level: row.querySelector('[data-p="level"]'),
+      attack: row.querySelector('[data-p="attack"]'),
+      release: row.querySelector('[data-p="release"]'),
       snap: row.querySelector('[data-p="snap"]'),
       oscMix: row.querySelector('[data-p="oscMix"]'),
       noiseMix: row.querySelector('[data-p="noiseMix"]'),
@@ -17191,7 +17213,7 @@ class TrackedDrumMachine extends Machine {
     // der gerade gewählten Spur — jede Drum-Spur hat eigene Fahrten.
     // Playback schreibt direkt in die Spur-Parameter; der Knob bewegt
     // sich nur mit, wenn seine Spur gerade ausgewählt ist.
-    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix']) {
+    for (const param of ['tune', 'decay', 'level', 'attack', 'release', 'snap', 'oscMix', 'noiseMix']) {
       const applyForKey = (key, value) => {
         const trIdx = parseInt(key.split(':')[1], 10);
         if (this.tracks[trIdx][param] === undefined) return; // Spur ohne diesen Param
@@ -17303,6 +17325,8 @@ class TrackedDrumMachine extends Machine {
     this.knobs.tune.value = tr.tune;
     this.knobs.decay.value = tr.decay;
     this.knobs.level.value = tr.level;
+    this.knobs.attack.value = tr.attack;
+    this.knobs.release.value = tr.release;
     this.knobs.snap.style.display = tr.snap === undefined ? 'none' : '';
     if (tr.snap !== undefined) this.knobs.snap.value = tr.snap;
     this.knobs.oscMix.style.display = tr.oscMix === undefined ? 'none' : '';
@@ -17311,7 +17335,7 @@ class TrackedDrumMachine extends Machine {
     if (tr.noiseMix !== undefined) this.knobs.noiseMix.value = tr.noiseMix;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'decay', 'level', 'snap', 'oscMix', 'noiseMix', 'sendDelay', 'sendReverb']) {
+    for (const param of ['tune', 'decay', 'level', 'attack', 'release', 'snap', 'oscMix', 'noiseMix', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
     }
@@ -17713,6 +17737,12 @@ const { BeatBox } = (() => {
 
 /* Jede Drum: (ctx, t, dest, {tune, decay, level}) */
 
+/** Kurzform für env()s optionales {attack, release} -- ADR gilt pro Spur
+ *  (nicht pro Layer): jeder interne Layer einer Stimme (z.B. Snares Ton +
+ *  Rauschen) bekommt dieselben Attack-/Release-Werte der Spur, damit sich
+ *  der ganze Sound wie EIN Instrument formen lässt. */
+const adr = (p) => ({ attack: p.attack, release: p.release });
+
 function kick(ctx, t, dest, p) {
   // Körper: Sinus mit Pitch-Hüllkurve. Zielfrequenz nach unten begrenzen —
   // unter ~30 Hz ist auf Phone-Lautsprechern nichts mehr hörbar und der
@@ -17723,9 +17753,9 @@ function kick(ctx, t, dest, p) {
   o.type = 'sine';
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f1, t + 0.1);
-  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay);
+  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.4 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 
   // Klick: 12 ms Hochpass-Rauschen als Attack-Transient. Startet immer an
   // derselben Buffer-Position → klingt bei jedem Anschlag identisch und
@@ -17738,9 +17768,9 @@ function kick(ctx, t, dest, p) {
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
     hp.frequency.value = 1500;
-    const cg = env(ctx, t, snap * p.level, 0.012);
+    const cg = env(ctx, t, snap * p.level, 0.012, adr(p));
     n.connect(hp).connect(cg).connect(dest);
-    autoStop(n, t, 0.012, [hp, cg]);
+    autoStop(n, t, cg.totalDur, [hp, cg]);
   }
 }
 
@@ -17749,18 +17779,18 @@ function snare(ctx, t, dest, p) {
   const o = ctx.createOscillator();
   o.type = 'triangle';
   o.frequency.value = 190 * p.tune;
-  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay);
+  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay, adr(p));
   o.connect(og).connect(dest);
-  autoStop(o, t, 0.1 * p.decay, [og]);
+  autoStop(o, t, og.totalDur, [og]);
 
   const n = ctx.createBufferSource();
   n.buffer = noise(ctx);
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
   bp.frequency.value = 1800 * p.tune;
-  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay);
+  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay, adr(p));
   n.connect(bp).connect(ng).connect(dest);
-  autoStop(n, t, 0.18 * p.decay, [bp, ng]);
+  autoStop(n, t, ng.totalDur, [bp, ng]);
 }
 
 function clap(ctx, t, dest, p) {
@@ -17771,18 +17801,36 @@ function clap(ctx, t, dest, p) {
   bp.frequency.value = 1100 * p.tune;
   bp.Q.value = 1.5;
 
-  // 3 schnelle Retrigger, dann Ausklang — der typische Clap
+  // 3 schnelle Retrigger, dann Ausklang — der typische Clap. Nutzt env()
+  // NICHT (eigene Mehrfach-Retrigger-Automation) -- Attack/Release der Spur
+  // werden hier deshalb von Hand angewandt: Attack streckt NUR den ersten
+  // Anstieg (die 2 folgenden Retrigger bleiben scharf), Release ersetzt den
+  // finalen Schritt auf echte 0 (fehlte hier bisher komplett -- s.u.).
   const g = ctx.createGain();
   const dur = 0.036 + 0.2 * p.decay;
-  for (let i = 0; i < 3; i++) {
-    g.gain.setValueAtTime(0.9 * p.level, t + i * 0.012);
-    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.012 + 0.01);
+  const attack = p.attack ?? 0;
+  const release = Math.max(p.release ?? 0.05, 0.005);
+  if (attack > 0) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.9 * p.level, t + attack);
+  } else {
+    g.gain.setValueAtTime(0.9 * p.level, t);
   }
-  g.gain.setValueAtTime(0.7 * p.level, t + 0.036);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.gain.linearRampToValueAtTime(0.2 * p.level, t + attack + 0.01);
+  for (let i = 1; i < 3; i++) {
+    g.gain.setValueAtTime(0.9 * p.level, t + attack + i * 0.012);
+    g.gain.linearRampToValueAtTime(0.2 * p.level, t + attack + i * 0.012 + 0.01);
+  }
+  g.gain.setValueAtTime(0.7 * p.level, t + attack + 0.036);
+  g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+  // Bisher fehlte hier der letzte lineare Schritt auf echte 0 (anders als
+  // bei env()/cp() in AnalogKit) -- die Quelle sprang beim harten stop()
+  // von 0.001 abrupt auf 0, ein winziges, aber echtes Klicken. Mit
+  // Release jetzt konsistent behoben.
+  g.gain.linearRampToValueAtTime(0, t + attack + dur + release);
 
   n.connect(bp).connect(g).connect(dest);
-  autoStop(n, t, dur, [bp, g]);
+  autoStop(n, t, attack + dur + release, [bp, g]);
 }
 
 const hat = (baseDur) => (ctx, t, dest, p) => {
@@ -17791,9 +17839,9 @@ const hat = (baseDur) => (ctx, t, dest, p) => {
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 7000 * p.tune;
-  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay);
+  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay, adr(p));
   n.connect(hp).connect(g).connect(dest);
-  autoStop(n, t, baseDur * p.decay, [hp, g]);
+  autoStop(n, t, g.totalDur, [hp, g]);
 };
 
 const tom = (mult) => (ctx, t, dest, p) => {
@@ -17802,9 +17850,9 @@ const tom = (mult) => (ctx, t, dest, p) => {
   const f = 150 * mult * p.tune;
   o.frequency.setValueAtTime(f, t);
   o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.15);
-  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay);
+  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.3 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 };
 
 function perc(ctx, t, dest, p) {
@@ -17812,14 +17860,14 @@ function perc(ctx, t, dest, p) {
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
   bp.frequency.value = 900 * p.tune;
-  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay);
+  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay, adr(p));
   bp.connect(g).connect(dest);
   for (const f of [540, 810]) {
     const o = ctx.createOscillator();
     o.type = 'square';
     o.frequency.value = f * p.tune;
     o.connect(bp);
-    autoStop(o, t, 0.18 * p.decay, [bp, g]);
+    autoStop(o, t, g.totalDur, [bp, g]);
   }
 }
 
@@ -17946,14 +17994,19 @@ class PercSynth extends StepSequencedSynth {
     modGain.gain.setTargetAtTime(0, time, dur / 4);
     mod.connect(modGain).connect(car.frequency);
 
-    // Amp-Hüllkurve
+    // Amp-Hüllkurve. Letzter linearer Schritt auf echte 0 (exponentialRamp
+    // erreicht nie echte 0) GENAU im TAIL-Fenster vor autoStop()s stop() --
+    // ohne den bliebe die Gain bis zum harten stop() bei 0.001 hängen und
+    // spränge dann abrupt auf 0 (hörbares Klicken, s. dsp.js#env).
+    const TAIL = 0.05;
     const amp = ctx.createGain();
     amp.gain.setValueAtTime(0.9, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
     car.connect(amp).connect(this.output);
 
-    autoStop(car, time, dur, [amp]);
-    autoStop(mod, time, dur, [modGain]);
+    autoStop(car, time, dur + TAIL, [amp]);
+    autoStop(mod, time, dur + TAIL, [modGain]);
 
     // Rauschanteil im Anschlag (Bandpass um die doppelte Notenfrequenz)
     if (p.noiseMix > 0.01) {
@@ -17967,8 +18020,9 @@ class PercSynth extends StepSequencedSynth {
       const nDur = Math.min(dur, 0.12);
       ng.gain.setValueAtTime(0.8 * p.noiseMix, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + nDur);
+      ng.gain.linearRampToValueAtTime(0, time + nDur + TAIL);
       n.connect(bp).connect(ng).connect(this.output);
-      autoStop(n, time, nDur, [bp, ng]);
+      autoStop(n, time, nDur + TAIL, [bp, ng]);
     }
   }
 
@@ -18331,6 +18385,12 @@ const { AnalogKit } = (() => {
  *  zwei Anschläge derselben Stimme sind nie exakt gleich hoch/laut. */
 const jitter = (base, pct) => base * (1 + (Math.random() * 2 - 1) * pct);
 
+/** Kurzform für env()s optionales {attack, release} -- ADR gilt pro Spur
+ *  (nicht pro Layer): jeder interne Layer einer Stimme (z.B. SDs zwei
+ *  Ton-Bodies + zwei Rauschpfade) bekommt dieselben Attack-/Release-Werte
+ *  der Spur, damit sich der ganze Sound wie EIN Instrument formen lässt. */
+const adr = (p) => ({ attack: p.attack, release: p.release });
+
 /** Zufälliger Start-Offset in den gecachten 1s-Rauschbuffer (s. dsp.js#noise)
  *  -- ohne das spielt jeder Anschlag denselben Rauschausschnitt (deterministisch
  *  per Design für BeatBox & co., s. dort), was bei percussiven Analog-Sounds
@@ -18397,9 +18457,9 @@ function bd(ctx, t, dest, p) {
   lpf.Q.value = 2.2;
   const sat = ctx.createWaveShaper();
   sat.curve = satCurveWarm();
-  const g = env(ctx, t, jitter(1.0 * p.level, 0.05), 0.35 * p.decay);
+  const g = env(ctx, t, jitter(1.0 * p.level, 0.05), 0.35 * p.decay, adr(p));
   o.connect(lpf).connect(sat).connect(g).connect(dest);
-  autoStop(o, t, 0.35 * p.decay, [lpf, sat, g]);
+  autoStop(o, t, g.totalDur, [lpf, sat, g]);
 
   // Attack-Klick: beim echten 909 kein Ton, sondern ein sehr kurzer,
   // tiefpassgefilterter Rauschimpuls aus einer eigenen Klick-Schaltung
@@ -18413,9 +18473,9 @@ function bd(ctx, t, dest, p) {
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 3800 * p.tune;
-    const cg = env(ctx, t, jitter(snap * p.level * 1.6, 0.05), 0.004);
+    const cg = env(ctx, t, jitter(snap * p.level * 1.6, 0.05), 0.004, adr(p));
     n.connect(lp).connect(cg).connect(dest);
-    autoStop(n, t, 0.004, [lp, cg], noiseOffset(0.01));
+    autoStop(n, t, cg.totalDur, [lp, cg], noiseOffset(0.01));
   }
 }
 
@@ -18446,9 +18506,9 @@ function sd(ctx, t, dest, p) {
     const dur = 0.17 * p.decay * durMul;
     const sat = ctx.createWaveShaper();
     sat.curve = satCurveWarm();
-    const g = env(ctx, t, jitter(mix * p.level, 0.05), dur);
+    const g = env(ctx, t, jitter(mix * p.level, 0.05), dur, adr(p));
     o.connect(sat).connect(g).connect(dest);
-    autoStop(o, t, dur, [sat, g]);
+    autoStop(o, t, g.totalDur, [sat, g]);
   }
 
   // "Snare-Kabel"-Rauschen: beim Original zwei PARALLELE Pfade (Tiefpass +
@@ -18470,18 +18530,18 @@ function sd(ctx, t, dest, p) {
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = 1100 * p.tune;
-  const lpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.2 * p.decay);
+  const lpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.2 * p.decay, adr(p));
   nLow.connect(lp).connect(lpg).connect(dest);
-  autoStop(nLow, t, 0.2 * p.decay, [lp, lpg], noiseOffset());
+  autoStop(nLow, t, lpg.totalDur, [lp, lpg], noiseOffset());
 
   const nHigh = ctx.createBufferSource();
   nHigh.buffer = lfsrNoise(ctx);
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 3500 * p.tune;
-  const hpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.1 * p.decay);
+  const hpg = env(ctx, t, jitter(0.37 * p.level, 0.05), 0.1 * p.decay, adr(p));
   nHigh.connect(hp).connect(hpg).connect(dest);
-  autoStop(nHigh, t, 0.1 * p.decay, [hp, hpg], noiseOffset());
+  autoStop(nHigh, t, hpg.totalDur, [hp, hpg], noiseOffset());
 }
 
 function rs(ctx, t, dest, p) {
@@ -18510,16 +18570,18 @@ function rs(ctx, t, dest, p) {
   // schwankte zwischen 0.95 und 1.78 bei GLEICHEM Gain!). Q=6 dämpft diese
   // Streuung; Gain=3 hält selbst den schlechtesten von 40 gemessenen Fällen
   // sicher unter der etablierten Kick-Referenzobergrenze (~1.2).
+  let totalDur = dur;
   for (const f of RS_RESONANCES) {
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = jitter(f * p.tune, 0.02);
     bp.Q.value = 6;
-    const g = env(ctx, t, jitter(3 * p.level, 0.05), dur);
+    const g = env(ctx, t, jitter(3 * p.level, 0.05), dur, adr(p));
     n.connect(bp).connect(g).connect(dest);
     nodes.push(bp, g);
+    totalDur = g.totalDur;
   }
-  autoStop(n, t, dur, nodes, noiseOffset());
+  autoStop(n, t, totalDur, nodes, noiseOffset());
 }
 
 function cp(ctx, t, dest, p) {
@@ -18536,20 +18598,37 @@ function cp(ctx, t, dest, p) {
 
   const g = ctx.createGain();
   const dur = 0.044 + 0.22 * p.decay;
-  for (let i = 0; i < 4; i++) {
-    g.gain.setValueAtTime(jitter(2.55 * p.level, 0.06), t + i * 0.011);
-    g.gain.linearRampToValueAtTime(0.6 * p.level, t + i * 0.011 + 0.008);
+  // Nutzt env() NICHT (eigene Mehrfach-Retrigger-Automation statt einer
+  // einzelnen Hüllkurve) -- Attack/Release der Spur werden hier deshalb von
+  // Hand angewandt statt über den adr()-Helfer: Attack verschiebt/streckt
+  // NUR den allerersten Anstieg (die 3 folgenden Retrigger-Zacken bleiben
+  // scharf, sonst verschwimmt der charakteristische Clap-Rattle), Release
+  // ersetzt wie bei env() den letzten linearen Schritt auf echte 0.
+  const attack = p.attack ?? 0;
+  const release = Math.max(p.release ?? 0.05, 0.005);
+  if (attack > 0) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(jitter(2.55 * p.level, 0.06), t + attack);
+  } else {
+    g.gain.setValueAtTime(jitter(2.55 * p.level, 0.06), t);
   }
-  g.gain.setValueAtTime(jitter(1.95 * p.level, 0.06), t + 0.044);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  // Wie env() (s. dsp.js) -- exponentialRamp erreicht nie echte 0, und
-  // autoStop() stoppt erst 50ms nach `dur`. Ohne diesen letzten linearen
-  // Schritt auf 0 GENAU in diesem Fenster bliebe die Gain bis zum harten
-  // stop() bei 0.001 stehen -- hörbar als leises Klicken am Ende.
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  // Retrigger #1s Abklingen zum Zwischenpegel (bislang Teil der Schleife,
+  // jetzt einzeln: der ERSTE Anstieg kommt oben ggf. schon vom Attack-Ramp).
+  g.gain.linearRampToValueAtTime(0.6 * p.level, t + attack + 0.008);
+  for (let i = 1; i < 4; i++) {
+    g.gain.setValueAtTime(jitter(2.55 * p.level, 0.06), t + attack + i * 0.011);
+    g.gain.linearRampToValueAtTime(0.6 * p.level, t + attack + i * 0.011 + 0.008);
+  }
+  g.gain.setValueAtTime(jitter(1.95 * p.level, 0.06), t + attack + 0.044);
+  g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+  // Wie env() (s. dsp.js) -- exponentialRamp erreicht nie echte 0. Ohne
+  // diesen letzten linearen Schritt auf echte 0 GENAU im Release-Fenster
+  // bliebe die Gain bis zum harten stop() bei 0.001 stehen -- hörbar als
+  // leises Klicken am Ende.
+  g.gain.linearRampToValueAtTime(0, t + attack + dur + release);
 
   n.connect(bp).connect(g).connect(dest);
-  autoStop(n, t, dur, [bp, g], noiseOffset());
+  autoStop(n, t, attack + dur + release, [bp, g], noiseOffset());
 }
 
 /** Tom-Stimme: startet leicht über der Zielfrequenz, fällt schnell darauf. */
@@ -18559,9 +18638,9 @@ const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
   const f = jitter(baseFreq * p.tune, 0.012);
   o.frequency.setValueAtTime(f * 1.3, t);
   o.frequency.exponentialRampToValueAtTime(f, t + 0.08);
-  const g = env(ctx, t, jitter(0.85 * p.level, 0.05), 0.28 * p.decay);
+  const g = env(ctx, t, jitter(0.85 * p.level, 0.05), 0.28 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.28 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 };
 
 /* ---------- Metallische Hats/Cymbals: 6 unharmonisch verstimmte
@@ -18621,7 +18700,10 @@ const OH_OSC_BOOST = 2.0;
 const CC_OSC_BOOST = 1.95;
 const RC_OSC_BOOST = 1.8;
 
-function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, noiseMix = 1 }) {
+function metallic(ctx, t, dest, {
+  tr, dur, level, oscBoost = 1, oscMix = 1, noiseMix = 1, attack = 0, release = 0.05,
+}) {
+  const rel = Math.max(release, 0.005);
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -18691,9 +18773,15 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, nois
   // Startwert, echte Stille braucht daher einen eigenen Zweig statt nur
   // eines auf 0.001 gefloorten Peaks (der wäre technisch nie ganz stumm).
   if (oscMix > 0) {
-    g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost * oscMix, 0.05), 0.001), t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+    const peakG = Math.max(jitter(level * METAL_HEADROOM * oscBoost * oscMix, 0.05), 0.001);
+    if (attack > 0) {
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peakG, t + attack);
+    } else {
+      g.gain.setValueAtTime(peakG, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+    g.gain.linearRampToValueAtTime(0, t + attack + dur + rel);
   }
   g.connect(dest); // wiederholtes connect() auf dieselbe Verbindung ist ein No-Op, kein Fehler
 
@@ -18717,9 +18805,9 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, nois
     const nf = ctx.createBiquadFilter();
     nf.type = 'highpass';
     nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
-    const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
+    const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur, { attack, release });
     n.connect(nf).connect(ng).connect(dest);
-    autoStop(n, t, dur, [nf, ng], noiseOffset());
+    autoStop(n, t, ng.totalDur, [nf, ng], noiseOffset());
   }
 }
 
@@ -18733,7 +18821,7 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, oscMix = 1, nois
 const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
     tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
-    oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
+    oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1, ...adr(p),
   });
   fn.metalFreq = freq;
   fn.filterFreq = filterFreq;
@@ -18750,14 +18838,14 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
-    oscBoost: RC_OSC_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1,
+    oscBoost: RC_OSC_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1, ...adr(p),
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
   o.frequency.value = jitter(700 * p.tune, 0.01);
-  const g = env(ctx, t, jitter(0.42 * p.level, 0.05), 0.15 * p.decay);
+  const g = env(ctx, t, jitter(0.42 * p.level, 0.05), 0.15 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.15 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 }
 rc.metalFreq = 350;
 rc.filterFreq = 4000;

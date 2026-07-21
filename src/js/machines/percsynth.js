@@ -76,14 +76,19 @@ export class PercSynth extends StepSequencedSynth {
     modGain.gain.setTargetAtTime(0, time, dur / 4);
     mod.connect(modGain).connect(car.frequency);
 
-    // Amp-Hüllkurve
+    // Amp-Hüllkurve. Letzter linearer Schritt auf echte 0 (exponentialRamp
+    // erreicht nie echte 0) GENAU im TAIL-Fenster vor autoStop()s stop() --
+    // ohne den bliebe die Gain bis zum harten stop() bei 0.001 hängen und
+    // spränge dann abrupt auf 0 (hörbares Klicken, s. dsp.js#env).
+    const TAIL = 0.05;
     const amp = ctx.createGain();
     amp.gain.setValueAtTime(0.9, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
     car.connect(amp).connect(this.output);
 
-    autoStop(car, time, dur, [amp]);
-    autoStop(mod, time, dur, [modGain]);
+    autoStop(car, time, dur + TAIL, [amp]);
+    autoStop(mod, time, dur + TAIL, [modGain]);
 
     // Rauschanteil im Anschlag (Bandpass um die doppelte Notenfrequenz)
     if (p.noiseMix > 0.01) {
@@ -97,8 +102,9 @@ export class PercSynth extends StepSequencedSynth {
       const nDur = Math.min(dur, 0.12);
       ng.gain.setValueAtTime(0.8 * p.noiseMix, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + nDur);
+      ng.gain.linearRampToValueAtTime(0, time + nDur + TAIL);
       n.connect(bp).connect(ng).connect(this.output);
-      autoStop(n, time, nDur, [bp, ng]);
+      autoStop(n, time, nDur + TAIL, [bp, ng]);
     }
   }
 
