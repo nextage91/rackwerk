@@ -364,53 +364,36 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1 }) {
   // METAL_RATIOS-Kommentar oben) kippt die Oszillatorbank dadurch bei
   // manchen Anschlägen komplett unter die Rauschschicht: der Hit klingt
   // dann nur noch nach Rauschen statt nach Metall/Ton.
-  const g = env(ctx, t, jitter(level * METAL_HEADROOM * oscBoost, 0.05), dur);
-  // Der Bus liefert (anders als bei allen anderen Stimmen) schon VOR
-  // diesem Anschlag durchgehend Signal (persistente Oszillatoren) -- ein
-  // frischer GainNode steht bis zu seinem ERSTEN geplanten Automations-
-  // Wert per Spec auf dem Default 1.0, nicht auf 0! Ohne diese explizite
-  // Schließung liefe das rohe Summensignal für das gesamte Lookahead-
-  // Fenster (Aufruf-Zeitpunkt bis t) ungedämpft durch -- hörbar als
-  // Vorecho/Bleed vor jedem Anschlag.
-  //
-  // ABSOLUTE Zeit 0 hier, NICHT ctx.currentTime: `t` kann je nach
-  // Aufrufer beliebig knapp in der Zukunft liegen (Pad-Press: nur bis zu
-  // 128 Samples/~2.7ms Vorlauf durch quantizeTime, s. audio-engine.js --
-  // der Sequencer-Scheduler dagegen plant mit 100ms Vorlauf, s.
-  // SCHEDULE_AHEAD in transport.js). Mit ctx.currentTime lief hier ein
-  // echtes Wettrennen: reichten die paar ms Vorlauf beim Pad-Press nicht
-  // (JS-Overhead, GC-Pause, langsames Gerät), landete diese Zeile NACH
-  // `t` -- die Automations-Warteschlange ist zeit-, nicht aufruf-
-  // reihenfolge-sortiert, das Gate ging dann NACH dem Envelope-Peak
-  // wieder zu statt davor und schnitt den Oszillatorbank-Layer fast
-  // komplett weg. Das allein war ein echter, seltener werdender Bug,
-  // aber NICHT die Hauptursache für "klingt beim Antippen deutlich
-  // rauschiger/inkonsistenter als im Sequencer" -- die eigentliche
-  // Hauptursache war der oben dokumentierte strukturelle Filterverlust
-  // (oscBoost). Beides zusammen ergab das gemeldete
-  // Symptom). Zeit 0 liegt garantiert vor jedem echten `t` > 0, egal wie
-  // viel JS-Zeit zwischen dem Berechnen von `t` und dieser Zeile vergeht.
+  // Gate-Knoten kommt aus einem PERSISTENTEN Pool (s. AnalogKit#buildAudio,
+  // tr.metalGatePool) statt bei jedem Hit frisch an tr.metalFilt an- und
+  // wieder abzuklemmen. Grund (per Debug-Overlay am echten Gerät verifiziert,
+  // s. PR-Historie): oscBusPeak (roh, vor dem Gate) war bei JEDEM Pad-Hit
+  // gesund und nahezu identisch -- aber der Pegel NACH dem Gate schwankte
+  // trotzdem um Faktor 8-9x zwischen sonst gleichartigen Hits, exakt
+  // passend zum gemeldeten Symptom (nur der eine "laute" Hit klang tonal).
+  // Verdächtig: tr.metalFilt.disconnect(g) entfernt bei eng aufeinander-
+  // folgenden Anschlägen (reales Antippen erzeugt Lücken bis unter 150ms,
+  // deutlich enger als die bis zu ~3s lange Cleanup-Frist bei hohem
+  // DECAY-Wert) EINE von mehreren gleichzeitig an metalFilt hängenden
+  // Ziel-Verbindungen -- ein Vorgang, der sich zwischen Audio-Engines
+  // unterschiedlich verhalten kann. Der Pool umgeht das strukturell:
+  // metalFilt->g wird pro Poolplatz EINMALIG in buildAudio() verbunden
+  // und nie wieder getrennt -- ein Hit belegt per Round-Robin den
+  // nächsten Platz (Voice-Stealing wie bei echter Hardware mit
+  // begrenzter Polyphonie) und plant nur noch eine frische Hüllkurve,
+  // OHNE die Graph-Topologie von tr.metalFilt anzufassen.
+  const pool = tr.metalGatePool;
+  const g = pool[tr.metalGatePoolIdx];
+  tr.metalGatePoolIdx = (tr.metalGatePoolIdx + 1) % pool.length;
+  g.gain.cancelScheduledValues(0);
+  // ABSOLUTE Zeit 0, nicht ctx.currentTime -- garantiert vor jedem echten
+  // `t` > 0 (s. ausführliche Begründung in früheren Commits): schließt das
+  // Gate zuverlässig, bevor der Peak bei `t` einsetzt.
   g.gain.setValueAtTime(0, 0);
-  tr.metalFilt.connect(g).connect(dest);
-  // Kein autoStop() -- der Bus (und jetzt auch der Filter) laufen weiter
-  // (persistente Oszillatoren), nur der Gate-Zweig dieses EINEN Anschlags
-  // wird nach Ablauf der Hüllkurve wieder abgeklemmt. Dafür EXTRA einen
-  // stummen ConstantSourceNode als reinen Zeitgeber -- NICHT setTimeout():
-  // das läuft an der JS-Wall-Clock, nicht an der Audio-Uhr, und kann bei
-  // vielbeschäftigtem Hauptthread (schnelles Antippen erzeugt viele
-  // Pointer-Events + DOM-Updates durch #selectTrack) beliebig spät
-  // feuern. Ein per start()/stop() audio-uhr-genau geplanter Knoten
-  // (wie autoStop() es für echte Klangquellen schon tut, s. dsp.js)
-  // feuert sein onended dagegen exakt zur Audio-Zeit, unabhängig davon,
-  // wie beschäftigt der Haupt-Thread gerade ist.
-  const cleanupTimer = ctx.createConstantSource();
-  cleanupTimer.start(t);
-  cleanupTimer.stop(t + dur + 0.05);
-  cleanupTimer.onended = () => {
-    try { tr.metalFilt.disconnect(g); } catch { /* Maschine evtl. schon disposed */ }
-    g.disconnect(dest);
-    cleanupTimer.disconnect();
-  };
+  g.gain.setValueAtTime(Math.max(jitter(level * METAL_HEADROOM * oscBoost, 0.05), 0.001), t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  g.connect(dest); // wiederholtes connect() auf dieselbe Verbindung ist ein No-Op, kein Fehler
 
   // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
   // komprimiertes 6-Bit-PCM-Sample eines echten Beckens (per VCA/Filter
@@ -548,6 +531,21 @@ export class AnalogKit extends TrackedDrumMachine {
       if (tr.synth.filterQ !== undefined) tr.metalFilt.Q.value = tr.synth.filterQ;
       tr.metalBus.connect(tr.metalFilt);
 
+      // Pool aus persistenten Gate-Knoten für metallic() (s. dort für die
+      // ausführliche Begründung): einmalig an metalFilt angeschlossen,
+      // nie wieder getrennt. 12 Plätze pro Spur reichen selbst für den
+      // Extremfall aus enger Antipp-Folge (<150ms) bei langem DECAY
+      // (bis 3.0 -> CC-Hüllkurve bis ~4.85s) komfortabel ab -- darüber
+      // hinaus greift Voice-Stealing (ältester Platz wird wiederverwendet,
+      // wie begrenzte Polyphonie bei echter Hardware).
+      tr.metalGatePool = Array.from({ length: 12 }, () => {
+        const g = engine.ctx.createGain();
+        g.gain.value = 0;
+        tr.metalFilt.connect(g);
+        return g;
+      });
+      tr.metalGatePoolIdx = 0;
+
       // TEMPORÄR (Debug, s. tracked-drum-machine.js #trigger): reiner
       // Abgriff auf die rohe Oszillatorsumme VOR jedem Gate/Filter, um
       // live auf dem Gerät zu prüfen, ob der Oszillatorbus im Moment
@@ -580,6 +578,7 @@ export class AnalogKit extends TrackedDrumMachine {
       tr.metalBus?.disconnect();
       tr.metalBusAnalyser?.disconnect();
       tr.postGateAnalyser?.disconnect();
+      for (const g of tr.metalGatePool ?? []) g.disconnect();
     }
   }
 }
