@@ -365,6 +365,11 @@ export class Machine {
     const [insert] = this.inserts.splice(idx, 1);
     this.#rewireInsertChain();
     insert.dispose();
+    // Automation-Lanes des entfernten Inserts mit aufräumen -- ohne das
+    // blieben sie als unerreichbare Leichen in automation.lanes stehen
+    // (insert.id wird nie wiederverwendet, s. inserts.js#createInsert,
+    // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
+    automation.clearLanesWithPrefix(`${this.id}:insert:${id}:`);
     this.#renderInserts();
   }
 
@@ -396,6 +401,17 @@ export class Machine {
     for (const insert of this.inserts) insert.dispose();
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
+    this.#renderInserts();
+  }
+
+  /** Nach dem Laden eines Projekts (project.js#loadProject/importMachines):
+   *  deserializeInserts() läuft VOR automation.importLanes(), das erste
+   *  #renderInserts() sieht die geladenen Lanes also noch nicht -- has-auto
+   *  auf den Insert-Knobs stünde sonst falsch (fehlend) bis zum nächsten
+   *  Rendern. Ein zweiter Durchlauf hier holt das nach. Unterklassen mit
+   *  eigenen automatisierbaren Regeln (z. B. TrackedDrumMachine für die
+   *  Spur-Knobs) überschreiben das und rufen super.onLanesImported() mit. */
+  onLanesImported() {
     this.#renderInserts();
   }
 
@@ -681,6 +697,22 @@ export class Machine {
             if (led) led.style.opacity = 0.25 + insert.params.drive * 0.75;
           }
         });
+        // Automatisierbar wie jeder Maschinen-Knob (s. render()s data-auto-
+        // Schleife) -- eigener Weg statt data-auto, weil Insert-Module bei
+        // JEDEM add/remove/move/bypass komplett neu gerendert werden
+        // (#renderInserts() setzt innerHTML neu): der Knoten selbst ist
+        // hier NIE stabil, register() muss deshalb bei jedem Rendern erneut
+        // auf das jeweils aktuelle Element gebunden werden. Der Lane-
+        // Schlüssel (insert.id-basiert, s. inserts.js#createInsert) bleibt
+        // dabei über Reordering UND Neuladen hinweg stabil -- nur SO
+        // überlebt eine aufgenommene Fahrt einen Insert-Umbau oder ein
+        // Speichern/Laden.
+        const autoKey = `${this.id}:insert:${id}:${knob.dataset.insertParam}`;
+        automation.register(autoKey, knob, (v) => {
+          knob.value = v;
+          knob.dispatchEvent(new CustomEvent('input', { detail: { value: v }, bubbles: true }));
+        });
+        knob.classList.toggle('has-auto', automation.hasLane(autoKey));
       }
       for (const btn of row.querySelectorAll('[data-eq-type]')) {
         btn.addEventListener('click', () => {

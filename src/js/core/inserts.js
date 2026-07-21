@@ -296,9 +296,16 @@ export const FILTER_DELAY_TYPES = [
 let nextInsertId = 1;
 
 /**
- * Baut einen Insert. `saved` (optional) = { params, bypassed } aus einem
- * vorher gespeicherten Projekt — fehlende Parameter fallen auf die
+ * Baut einen Insert. `saved` (optional) = { id, params, bypassed } aus
+ * einem vorher gespeicherten Projekt — fehlende Parameter fallen auf die
  * Effekt-Defaults zurück (z. B. wenn ein neuer Parameter dazukommt).
+ *
+ * `saved.id` wird, falls vorhanden, ÜBERNOMMEN statt eine neue ID zu
+ * vergeben -- Automation-Lanes für Insert-Parameter sind über
+ * `${machineId}:insert:${insertId}:${param}` verdrahtet (s. machine.js);
+ * ohne stabile IDs würde jedes Neuladen eines Projekts allen Inserts
+ * FRISCHE IDs zuteilen und aufgenommene Fahrten dadurch unsichtbar
+ * verwaisen lassen (Lane bleibt gespeichert, aber nie wieder erreichbar).
  */
 export function createInsert(type, saved = null) {
   const def = DEFS[type];
@@ -306,6 +313,8 @@ export function createInsert(type, saved = null) {
   const ctx = engine.ctx;
   const params = { ...def.defaults, ...saved?.params };
   const bypassed = saved?.bypassed ?? false;
+  const id = saved?.id ?? nextInsertId++;
+  if (saved?.id != null) nextInsertId = Math.max(nextInsertId, saved.id + 1);
 
   const input = ctx.createGain();
   const output = ctx.createGain();
@@ -324,7 +333,7 @@ export function createInsert(type, saved = null) {
   wetGain.connect(output);
 
   const insert = {
-    id: nextInsertId++,
+    id,
     type,
     name: def.name,
     params,
@@ -344,7 +353,7 @@ export function createInsert(type, saved = null) {
       wetGain.gain.setTargetAtTime(b ? 0 : 1, t, 0.01);
     },
     serialize() {
-      return { type, params: { ...params }, bypassed: insert.bypassed };
+      return { id, type, params: { ...params }, bypassed: insert.bypassed };
     },
     dispose() {
       input.disconnect();

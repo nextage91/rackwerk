@@ -471,8 +471,11 @@ export class TrackedDrumMachine extends Machine {
     this.#refreshSoloUI();
   }
 
-  /** Nach dem Laden eines Projekts: LEDs an die gewählte Spur anpassen. */
+  /** Nach dem Laden eines Projekts: LEDs an die gewählte Spur anpassen.
+   *  super.onLanesImported() holt dasselbe für die Insert-FX-Knobs nach
+   *  (s. Machine#onLanesImported). */
   onLanesImported() {
+    super.onLanesImported();
     this.#selectTrack(this.selected);
   }
 

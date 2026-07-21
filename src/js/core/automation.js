@@ -278,7 +278,15 @@ class Automation {
   unregisterMachine(machineId) {
     this.#dismissChip();
     this.bars.delete(machineId);
-    const prefix = `${machineId}:`;
+    this.clearLanesWithPrefix(`${machineId}:`);
+  }
+
+  /** Alle Spuren (targets+lanes+grabbed) mit einem Schlüssel-Präfix
+   *  entfernen -- von unregisterMachine() (ganze Maschine) UND beim
+   *  Entfernen eines einzelnen Insert-Effekts genutzt (nur dessen eigene
+   *  Parameter-Lanes, damit sie nicht als unerreichbare Leichen
+   *  liegenbleiben, während die Maschine selbst weiterläuft). */
+  clearLanesWithPrefix(prefix) {
     for (const key of [...this.targets.keys()]) {
       if (key.startsWith(prefix)) {
         this.targets.delete(key);
