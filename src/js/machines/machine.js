@@ -14,7 +14,7 @@
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
-import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
+import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
 import { masterFX } from '../core/fx.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -24,6 +24,7 @@ const INSERT_DISPLAY = {
   comp: { name: '1176-Style Compressor', badge: 'FET-COMP' },
   eq: { name: 'Parametric EQ', badge: 'RACK-EQ' },
   drive: { name: 'Drive / Saturation', badge: 'TUBE-DRIVE' },
+  filterDelay: { name: 'Filter Delay', badge: 'FLT-DELAY' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -364,6 +365,11 @@ export class Machine {
     const [insert] = this.inserts.splice(idx, 1);
     this.#rewireInsertChain();
     insert.dispose();
+    // Automation-Lanes des entfernten Inserts mit aufräumen -- ohne das
+    // blieben sie als unerreichbare Leichen in automation.lanes stehen
+    // (insert.id wird nie wiederverwendet, s. inserts.js#createInsert,
+    // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
+    automation.clearLanesWithPrefix(`${this.id}:insert:${id}:`);
     this.#renderInserts();
   }
 
@@ -395,6 +401,17 @@ export class Machine {
     for (const insert of this.inserts) insert.dispose();
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
+    this.#renderInserts();
+  }
+
+  /** Nach dem Laden eines Projekts (project.js#loadProject/importMachines):
+   *  deserializeInserts() läuft VOR automation.importLanes(), das erste
+   *  #renderInserts() sieht die geladenen Lanes also noch nicht -- has-auto
+   *  auf den Insert-Knobs stünde sonst falsch (fehlend) bis zum nächsten
+   *  Rendern. Ein zweiter Durchlauf hier holt das nach. Unterklassen mit
+   *  eigenen automatisierbaren Regeln (z. B. TrackedDrumMachine für die
+   *  Spur-Knobs) überschreiben das und rufen super.onLanesImported() mit. */
+  onLanesImported() {
     this.#renderInserts();
   }
 
@@ -614,7 +631,7 @@ export class Machine {
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
         `;
-      } else {
+      } else if (insert.type === 'drive') {
         bodyHtml = `
           <div class="drive-heat">
             <span class="drive-heat__led" data-drive-heat style="opacity:${0.25 + insert.params.drive * 0.75}"></span>
@@ -622,6 +639,17 @@ export class Machine {
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
         `;
+      } else if (insert.type === 'filterDelay') {
+        bodyHtml = `
+          <div class="seg">
+            ${FILTER_DELAY_TYPES.map((t) => `
+              <button type="button" class="seg__btn${insert.params.filterType === t.value ? ' is-active' : ''}" data-filterdelay-type="${t.value}">${t.label}</button>
+            `).join('')}
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+        `;
+      } else {
+        bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
       }
 
       const { name, badge } = INSERT_DISPLAY[insert.type];
@@ -669,10 +697,32 @@ export class Machine {
             if (led) led.style.opacity = 0.25 + insert.params.drive * 0.75;
           }
         });
+        // Automatisierbar wie jeder Maschinen-Knob (s. render()s data-auto-
+        // Schleife) -- eigener Weg statt data-auto, weil Insert-Module bei
+        // JEDEM add/remove/move/bypass komplett neu gerendert werden
+        // (#renderInserts() setzt innerHTML neu): der Knoten selbst ist
+        // hier NIE stabil, register() muss deshalb bei jedem Rendern erneut
+        // auf das jeweils aktuelle Element gebunden werden. Der Lane-
+        // Schlüssel (insert.id-basiert, s. inserts.js#createInsert) bleibt
+        // dabei über Reordering UND Neuladen hinweg stabil -- nur SO
+        // überlebt eine aufgenommene Fahrt einen Insert-Umbau oder ein
+        // Speichern/Laden.
+        const autoKey = `${this.id}:insert:${id}:${knob.dataset.insertParam}`;
+        automation.register(autoKey, knob, (v) => {
+          knob.value = v;
+          knob.dispatchEvent(new CustomEvent('input', { detail: { value: v }, bubbles: true }));
+        });
+        knob.classList.toggle('has-auto', automation.hasLane(autoKey));
       }
       for (const btn of row.querySelectorAll('[data-eq-type]')) {
         btn.addEventListener('click', () => {
           this.setInsertParam(id, 'type', btn.dataset.eqType);
+          this.#renderInserts();
+        });
+      }
+      for (const btn of row.querySelectorAll('[data-filterdelay-type]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'filterType', btn.dataset.filterdelayType);
           this.#renderInserts();
         });
       }
