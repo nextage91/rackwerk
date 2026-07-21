@@ -16883,22 +16883,7 @@ const { TrackedDrumMachine } = (() => {
 // tr.metalBusAnalyser (alle anderen Stimmen/Maschinen) ist dies ein
 // no-op. Wird nach Abschluss der Fehlersuche wieder entfernt.
 let debugOverlayEl = null;
-function captureMetalDebug(tr, source) {
-  if (typeof tr.metalBusAnalyser?.getFloatTimeDomainData !== 'function') return;
-  const buf = new Float32Array(tr.metalBusAnalyser.fftSize);
-  tr.metalBusAnalyser.getFloatTimeDomainData(buf);
-  let peak = 0;
-  for (const v of buf) peak = Math.max(peak, Math.abs(v));
-  const entry = {
-    source, track: tr.name,
-    t: engine.ctx.currentTime.toFixed(3),
-    state: engine.ctx.state,
-    oscBusPeak: peak.toFixed(4),
-  };
-  window.__rackwerkDebug = window.__rackwerkDebug || [];
-  window.__rackwerkDebug.push(entry);
-  if (window.__rackwerkDebug.length > 10) window.__rackwerkDebug.shift();
-
+function renderDebugOverlay() {
   if (!debugOverlayEl) {
     debugOverlayEl = document.createElement('div');
     debugOverlayEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;'
@@ -16907,8 +16892,41 @@ function captureMetalDebug(tr, source) {
     document.body.appendChild(debugOverlayEl);
   }
   debugOverlayEl.textContent = window.__rackwerkDebug
-    .map((e) => `${e.source.padEnd(4)} ${e.track.padEnd(3)} t=${e.t} state=${e.state.padEnd(9)} oscBusPeak=${e.oscBusPeak}`)
+    .map((e) => `${e.source.padEnd(4)} ${e.track.padEnd(3)} t=${e.t} state=${e.state.padEnd(9)} `
+      + `oscBusPeak=${e.oscBusPeak} postGatePeak=${e.postGatePeak}`)
     .join('\n');
+}
+function readAnalyserPeak(analyser) {
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let peak = 0;
+  for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  return peak;
+}
+function captureMetalDebug(tr, source) {
+  if (typeof tr.metalBusAnalyser?.getFloatTimeDomainData !== 'function') return;
+  const entry = {
+    source, track: tr.name,
+    t: engine.ctx.currentTime.toFixed(3),
+    state: engine.ctx.state,
+    oscBusPeak: readAnalyserPeak(tr.metalBusAnalyser).toFixed(4),
+    postGatePeak: '…', // NACH Gate/Filter/Panner, kommt ~40ms später (s.u.)
+  };
+  window.__rackwerkDebug = window.__rackwerkDebug || [];
+  window.__rackwerkDebug.push(entry);
+  if (window.__rackwerkDebug.length > 10) window.__rackwerkDebug.shift();
+  renderDebugOverlay();
+
+  // Zweite Messung mit Verzögerung: 40ms liegt bei JEDER metallischen
+  // Stimme sicher noch im Attack/frühen Decay (kürzeste Hüllkurve CH:
+  // 0.2*decay, decay-Default 1 -> 200ms) -- zeigt, ob das (laut
+  // oscBusPeak gesunde) Signal bis nach Gate/Filter/Panner durchkommt.
+  if (typeof tr.postGateAnalyser?.getFloatTimeDomainData === 'function') {
+    setTimeout(() => {
+      entry.postGatePeak = readAnalyserPeak(tr.postGateAnalyser).toFixed(4);
+      renderDebugOverlay();
+    }, 40);
+  }
 }
 
 class TrackedDrumMachine extends Machine {
@@ -18874,6 +18892,13 @@ class AnalogKit extends TrackedDrumMachine {
       tr.metalBusAnalyser = engine.ctx.createAnalyser();
       tr.metalBusAnalyser.fftSize = 256;
       tr.metalBus.connect(tr.metalBusAnalyser);
+
+      // TEMPORÄR (Debug): zweiter Abgriff NACH Gate/Filter/Panner --
+      // zeigt, ob das (laut metalBusAnalyser gesunde) Signal bis zum
+      // Spur-Ausgang durchkommt oder irgendwo dazwischen verschwindet.
+      tr.postGateAnalyser = engine.ctx.createAnalyser();
+      tr.postGateAnalyser.fftSize = 256;
+      tr.panner.connect(tr.postGateAnalyser);
     }
   }
 
@@ -18890,6 +18915,7 @@ class AnalogKit extends TrackedDrumMachine {
       tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
       tr.metalBusAnalyser?.disconnect();
+      tr.postGateAnalyser?.disconnect();
     }
   }
 }
