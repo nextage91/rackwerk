@@ -170,6 +170,68 @@ const DEFS = {
       };
     },
   },
+  filterDelay: {
+    name: 'Filter Delay',
+    // Anders als Comp/EQ/Drive (die immer voll "wet" arbeiten) braucht ein
+    // Delay einen eigenen, stufenlosen Dry/Wet-Regler -- der äussere
+    // dryGain/wetGain-Umschalter von createInsert() ist ein reiner Bypass
+    // (0 oder 1, kein Zwischenwert), kein Mix-Regler. Der Mix-Regler lebt
+    // deshalb INNERHALB dieses Effekts, wie schon Drive's `level`.
+    defaults: {
+      time: 0.35, feedback: 0.4, filterFreq: 2000, filterType: 'lowpass', mix: 0.35,
+    },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      // Feedback-Schleife: delay -> filter -> feedback -> zurück in delay.
+      // Der WET-Abgriff sitzt VOR dem Filter (am Delay-Ausgang direkt) --
+      // das erste Echo kommt dadurch noch unverändert/breitbandig, nur die
+      // NACHFOLGENDEN Wiederholungen (die schon einmal durch die Schleife
+      // liefen) werden zunehmend gefiltert. Genau dieser fortschreitend
+      // dunkler/schmaler werdende Charakter macht den "Filter-Delay"-Sound
+      // aus (klassischer Dub-Effekt) statt eines gleichförmig gefilterten
+      // Signals von Anfang an.
+      const delay = ctx.createDelay(2.0);
+      delay.delayTime.value = p.time;
+      const filter = ctx.createBiquadFilter();
+      filter.type = p.filterType;
+      filter.frequency.value = p.filterFreq;
+      filter.Q.value = 0.7;
+      const feedback = ctx.createGain();
+      feedback.gain.value = p.feedback;
+
+      input.connect(dry).connect(output);
+      input.connect(delay);
+      delay.connect(wet).connect(output);
+      delay.connect(filter);
+      filter.connect(feedback);
+      feedback.connect(delay);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'time') delay.delayTime.setTargetAtTime(v, t, 0.02);
+          else if (key === 'feedback') feedback.gain.setTargetAtTime(v, t, 0.01);
+          else if (key === 'filterFreq') filter.frequency.setTargetAtTime(v, t, 0.01);
+          else if (key === 'filterType') filter.type = v;
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          delay.disconnect(); filter.disconnect(); feedback.disconnect();
+        },
+      };
+    },
+  },
 };
 
 export const INSERT_TYPES = Object.keys(DEFS);
@@ -183,6 +245,7 @@ export const INSERT_COLORS = {
   comp: '#e8b84b',   // FET-Kompressor: Messing/Gold, wie ein 1176
   eq: '#4fd1a5',     // Rack-EQ: kühles Teal
   drive: '#e8643f',  // Sättigung: warmes Glühen
+  filterDelay: '#6f9ceb', // Delay: kühles Blau, wie ein Tape-/Digital-Delay-Rack
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -204,6 +267,16 @@ export const UI_PARAMS = {
     { key: 'tone', label: 'Tone', min: 0, max: 1, unit: '' },
     { key: 'level', label: 'Level', min: 0, max: 2, unit: '' },
   ],
+  filterDelay: [
+    { key: 'time', label: 'Time', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
+    // Feedback bewusst auf 0.9 gedeckelt (nicht 1.0): die Schleife
+    // delay->filter->feedback->delay summiert sich sonst unbegrenzt auf --
+    // 0.9 lässt viele hörbare Wiederholungen zu, bleibt aber mathematisch
+    // stabil (jeder Durchlauf durchs Filter verliert zusätzlich Pegel).
+    { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
+    { key: 'filterFreq', label: 'Filter', min: 200, max: 8000, curve: 'log', unit: 'Hz' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
 };
 
 /** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
@@ -211,6 +284,13 @@ export const EQ_TYPES = [
   { value: 'lowshelf', label: 'Low Shelf' },
   { value: 'peaking', label: 'Peak' },
   { value: 'highshelf', label: 'High Shelf' },
+];
+
+/** Filter-Delay-Filtertyp ist ebenfalls ein Enum, kein Knob. */
+export const FILTER_DELAY_TYPES = [
+  { value: 'lowpass', label: 'Low Pass' },
+  { value: 'highpass', label: 'High Pass' },
+  { value: 'bandpass', label: 'Band Pass' },
 ];
 
 let nextInsertId = 1;
