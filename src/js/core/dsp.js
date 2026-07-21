@@ -47,34 +47,50 @@ export function lfsrNoise(ctx) {
   return _lfsrBuffer;
 }
 
-/** Exponentiell abfallende Hüllkurve als Gain-Node. `exponentialRampTo...`
- *  kann nie exakt 0 erreichen (nur asymptotisch), daher landet die Rampe
- *  bei 0.001 -- autoStop() (s.u.) stoppt die Quelle aber erst 50ms SPÄTER
- *  als `dur`, und ohne weitere Automation hält die Gain bis dahin FLACH
- *  bei 0.001. Die Quelle liefert in diesem Fenster also weiter ein
- *  leises, aber nicht stummes Signal, das beim harten stop() abrupt auf
- *  0 springt -- ein winziger, aber echter Sprung, hörbar als leises
- *  Klicken am Ende jedes Sounds (besonders bei langen Decays wie der
- *  Kick auffällig). Ein abschliessender linearer Ramp auf echte 0 GENAU
- *  in diesem 50ms-Fenster (dieselbe Konstante wie in autoStop()) behebt
- *  das: die Quelle ist beim Stop bereits lautlos, kein Sprung mehr. */
-export function env(ctx, t, peak, dur) {
+/** ADR-Hüllkurve als Gain-Node: Attack (0 -> peak), dann exponentieller
+ *  Decay (peak -> 0.001, praktisch stumm), dann Release (0.001 -> echte 0).
+ *  `attack`/`release` (Sekunden) sind optional -- Default 0/0.05 reproduziert
+ *  exakt das alte, feste Verhalten (sofortiger Sprung auf `peak`, fixer
+ *  50ms-Tail), damit bestehende Spuren beim Umstieg unverändert klingen.
+ *
+ *  `exponentialRampToValueAtTime` kann nie exakt 0 erreichen (nur
+ *  asymptotisch) UND verlangt einen von 0 verschiedenen Startwert -- daher
+ *  landet der Decay bei 0.001 statt 0, und der letzte Schritt von dort auf
+ *  echte 0 läuft linear über `release` (das kann `linearRampToValueAtTime`
+ *  problemlos, exponentiell nicht). Ohne diesen letzten Schritt bliebe die
+ *  Gain bis zum harten stop() bei 0.001 hängen und spränge dann abrupt auf
+ *  0 -- ein winziges, aber echtes Klicken am Ende jedes Sounds.
+ *
+ *  g.totalDur trägt die volle Länge (attack+dur+release) ab `t` -- autoStop()
+ *  braucht diesen Wert (nicht nur `dur`), um Quelle/Zusatzknoten erst nach
+ *  dem vollständigen Ausklang abzubauen. */
+export function env(ctx, t, peak, dur, { attack = 0, release = 0.05 } = {}) {
   const g = ctx.createGain();
-  g.gain.setValueAtTime(Math.max(peak, 0.001), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.05);
+  const pk = Math.max(peak, 0.001);
+  const rel = Math.max(release, 0.005);
+  if (attack > 0) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(pk, t + attack);
+  } else {
+    g.gain.setValueAtTime(pk, t);
+  }
+  g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+  g.gain.linearRampToValueAtTime(0, t + attack + dur + rel);
+  g.totalDur = attack + dur + rel;
   return g;
 }
 
-/** Quelle sauber beenden und den Teilgraphen abbauen. `offset` (Sekunden
- *  in den Buffer hinein) ist optional -- ohne Angabe wie bisher immer bei
- *  0 starten. Ein zufälliger Offset lässt eine Rauschquelle bei jedem
- *  Anschlag eine ANDERE Stelle desselben (gecachten) Rauschbuffers
- *  abspielen statt immer denselben Ausschnitt -- Analogkit nutzt das für
- *  mehr Anschlag-zu-Anschlag-Variation (s. dort). */
+/** Quelle sauber beenden und den Teilgraphen abbauen. `dur` muss die VOLLE
+ *  Hüllkurvenlänge sein (z.B. `g.totalDur` von env() oben), nicht nur die
+ *  reine Decay-Zeit -- sonst stoppt die Quelle mitten in ihrem eigenen
+ *  Release-Ausklang. `offset` (Sekunden in den Buffer hinein) ist optional
+ *  -- ohne Angabe wie bisher immer bei 0 starten. Ein zufälliger Offset
+ *  lässt eine Rauschquelle bei jedem Anschlag eine ANDERE Stelle desselben
+ *  (gecachten) Rauschbuffers abspielen statt immer denselben Ausschnitt --
+ *  Analogkit nutzt das für mehr Anschlag-zu-Anschlag-Variation (s. dort). */
 export function autoStop(src, t, dur, nodes, offset = 0) {
   src.start(t, offset);
-  src.stop(t + dur + 0.05);
+  src.stop(t + dur);
   src.onended = () => { src.disconnect(); nodes.forEach((n) => n.disconnect()); };
 }
 

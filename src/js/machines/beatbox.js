@@ -22,6 +22,12 @@ import { noise, env, autoStop } from '../core/dsp.js';
 
 /* Jede Drum: (ctx, t, dest, {tune, decay, level}) */
 
+/** Kurzform für env()s optionales {attack, release} -- ADR gilt pro Spur
+ *  (nicht pro Layer): jeder interne Layer einer Stimme (z.B. Snares Ton +
+ *  Rauschen) bekommt dieselben Attack-/Release-Werte der Spur, damit sich
+ *  der ganze Sound wie EIN Instrument formen lässt. */
+const adr = (p) => ({ attack: p.attack, release: p.release });
+
 function kick(ctx, t, dest, p) {
   // Körper: Sinus mit Pitch-Hüllkurve. Zielfrequenz nach unten begrenzen —
   // unter ~30 Hz ist auf Phone-Lautsprechern nichts mehr hörbar und der
@@ -32,9 +38,9 @@ function kick(ctx, t, dest, p) {
   o.type = 'sine';
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f1, t + 0.1);
-  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay);
+  const g = env(ctx, t, 1.0 * p.level, 0.4 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.4 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 
   // Klick: 12 ms Hochpass-Rauschen als Attack-Transient. Startet immer an
   // derselben Buffer-Position → klingt bei jedem Anschlag identisch und
@@ -47,9 +53,9 @@ function kick(ctx, t, dest, p) {
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
     hp.frequency.value = 1500;
-    const cg = env(ctx, t, snap * p.level, 0.012);
+    const cg = env(ctx, t, snap * p.level, 0.012, adr(p));
     n.connect(hp).connect(cg).connect(dest);
-    autoStop(n, t, 0.012, [hp, cg]);
+    autoStop(n, t, cg.totalDur, [hp, cg]);
   }
 }
 
@@ -58,18 +64,18 @@ function snare(ctx, t, dest, p) {
   const o = ctx.createOscillator();
   o.type = 'triangle';
   o.frequency.value = 190 * p.tune;
-  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay);
+  const og = env(ctx, t, 0.5 * p.level, 0.1 * p.decay, adr(p));
   o.connect(og).connect(dest);
-  autoStop(o, t, 0.1 * p.decay, [og]);
+  autoStop(o, t, og.totalDur, [og]);
 
   const n = ctx.createBufferSource();
   n.buffer = noise(ctx);
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
   bp.frequency.value = 1800 * p.tune;
-  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay);
+  const ng = env(ctx, t, 0.8 * p.level, 0.18 * p.decay, adr(p));
   n.connect(bp).connect(ng).connect(dest);
-  autoStop(n, t, 0.18 * p.decay, [bp, ng]);
+  autoStop(n, t, ng.totalDur, [bp, ng]);
 }
 
 function clap(ctx, t, dest, p) {
@@ -80,18 +86,36 @@ function clap(ctx, t, dest, p) {
   bp.frequency.value = 1100 * p.tune;
   bp.Q.value = 1.5;
 
-  // 3 schnelle Retrigger, dann Ausklang — der typische Clap
+  // 3 schnelle Retrigger, dann Ausklang — der typische Clap. Nutzt env()
+  // NICHT (eigene Mehrfach-Retrigger-Automation) -- Attack/Release der Spur
+  // werden hier deshalb von Hand angewandt: Attack streckt NUR den ersten
+  // Anstieg (die 2 folgenden Retrigger bleiben scharf), Release ersetzt den
+  // finalen Schritt auf echte 0 (fehlte hier bisher komplett -- s.u.).
   const g = ctx.createGain();
   const dur = 0.036 + 0.2 * p.decay;
-  for (let i = 0; i < 3; i++) {
-    g.gain.setValueAtTime(0.9 * p.level, t + i * 0.012);
-    g.gain.linearRampToValueAtTime(0.2 * p.level, t + i * 0.012 + 0.01);
+  const attack = p.attack ?? 0;
+  const release = Math.max(p.release ?? 0.05, 0.005);
+  if (attack > 0) {
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.9 * p.level, t + attack);
+  } else {
+    g.gain.setValueAtTime(0.9 * p.level, t);
   }
-  g.gain.setValueAtTime(0.7 * p.level, t + 0.036);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.gain.linearRampToValueAtTime(0.2 * p.level, t + attack + 0.01);
+  for (let i = 1; i < 3; i++) {
+    g.gain.setValueAtTime(0.9 * p.level, t + attack + i * 0.012);
+    g.gain.linearRampToValueAtTime(0.2 * p.level, t + attack + i * 0.012 + 0.01);
+  }
+  g.gain.setValueAtTime(0.7 * p.level, t + attack + 0.036);
+  g.gain.exponentialRampToValueAtTime(0.001, t + attack + dur);
+  // Bisher fehlte hier der letzte lineare Schritt auf echte 0 (anders als
+  // bei env()/cp() in AnalogKit) -- die Quelle sprang beim harten stop()
+  // von 0.001 abrupt auf 0, ein winziges, aber echtes Klicken. Mit
+  // Release jetzt konsistent behoben.
+  g.gain.linearRampToValueAtTime(0, t + attack + dur + release);
 
   n.connect(bp).connect(g).connect(dest);
-  autoStop(n, t, dur, [bp, g]);
+  autoStop(n, t, attack + dur + release, [bp, g]);
 }
 
 const hat = (baseDur) => (ctx, t, dest, p) => {
@@ -100,9 +124,9 @@ const hat = (baseDur) => (ctx, t, dest, p) => {
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
   hp.frequency.value = 7000 * p.tune;
-  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay);
+  const g = env(ctx, t, 0.45 * p.level, baseDur * p.decay, adr(p));
   n.connect(hp).connect(g).connect(dest);
-  autoStop(n, t, baseDur * p.decay, [hp, g]);
+  autoStop(n, t, g.totalDur, [hp, g]);
 };
 
 const tom = (mult) => (ctx, t, dest, p) => {
@@ -111,9 +135,9 @@ const tom = (mult) => (ctx, t, dest, p) => {
   const f = 150 * mult * p.tune;
   o.frequency.setValueAtTime(f, t);
   o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.15);
-  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay);
+  const g = env(ctx, t, 0.8 * p.level, 0.3 * p.decay, adr(p));
   o.connect(g).connect(dest);
-  autoStop(o, t, 0.3 * p.decay, [g]);
+  autoStop(o, t, g.totalDur, [g]);
 };
 
 function perc(ctx, t, dest, p) {
@@ -121,14 +145,14 @@ function perc(ctx, t, dest, p) {
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
   bp.frequency.value = 900 * p.tune;
-  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay);
+  const g = env(ctx, t, 0.4 * p.level, 0.18 * p.decay, adr(p));
   bp.connect(g).connect(dest);
   for (const f of [540, 810]) {
     const o = ctx.createOscillator();
     o.type = 'square';
     o.frequency.value = f * p.tune;
     o.connect(bp);
-    autoStop(o, t, 0.18 * p.decay, [bp, g]);
+    autoStop(o, t, g.totalDur, [bp, g]);
   }
 }
 
