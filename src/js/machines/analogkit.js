@@ -328,7 +328,7 @@ const OH_OSC_BOOST = 2.0;
 const CC_OSC_BOOST = 1.95;
 const RC_OSC_BOOST = 1.8;
 
-function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1 }) {
+function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1, noiseMix = 1 }) {
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
   // änderung am laufenden, aber stummen Oszillator ist unhörbar).
@@ -406,7 +406,13 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1 }) {
   const nf = ctx.createBiquadFilter();
   nf.type = 'highpass';
   nf.frequency.value = Math.max(tr.metalFilt.frequency.value * 0.5, 2000);
-  const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45, 0.05), dur);
+  // noiseMix: Spur-Regler "Noise" (Default 1 = bisher fest eingemessenes
+  // Verhältnis Ton/Rauschen, 0 = reiner Ton, 2 = doppelt so viel Rauschen)
+  // -- direkt aus dem gemeldeten Pad-vs-Sequencer-Fall entstanden: sobald
+  // beide Layer zuverlässig gleich klingen, will man sie nach Geschmack
+  // gegeneinander abmischen können statt an einen festen Wert gebunden
+  // zu sein.
+  const ng = env(ctx, t, jitter(level * METAL_HEADROOM * 0.45 * noiseMix, 0.05), dur);
   n.connect(nf).connect(ng).connect(dest);
   autoStop(n, t, dur, [nf, ng], noiseOffset());
 }
@@ -420,7 +426,7 @@ function metallic(ctx, t, dest, { tr, dur, level, oscBoost = 1 }) {
  *  gepflegte Zahl in TRACK_DEFS). */
 const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
+    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost, noiseMix: p.noiseMix ?? 1,
   });
   fn.metalFreq = freq;
   fn.filterFreq = filterFreq;
@@ -437,7 +443,7 @@ function rc(ctx, t, dest, p) {
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
-    oscBoost: RC_OSC_BOOST,
+    oscBoost: RC_OSC_BOOST, noiseMix: p.noiseMix ?? 1,
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -472,10 +478,10 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }) },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }) },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }) },
-  { name: 'RC', synth: rc },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), noiseMix: 1 },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), noiseMix: 1 },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), noiseMix: 1 },
+  { name: 'RC', synth: rc, noiseMix: 1 },
 ];
 
 export class AnalogKit extends TrackedDrumMachine {
@@ -545,22 +551,6 @@ export class AnalogKit extends TrackedDrumMachine {
         return g;
       });
       tr.metalGatePoolIdx = 0;
-
-      // TEMPORÄR (Debug, s. tracked-drum-machine.js #trigger): reiner
-      // Abgriff auf die rohe Oszillatorsumme VOR jedem Gate/Filter, um
-      // live auf dem Gerät zu prüfen, ob der Oszillatorbus im Moment
-      // eines Pad-Press tatsächlich Signal führt. Kein Effekt auf den
-      // Klang (Dead-End-Tap, wie tr.meterAnalyser).
-      tr.metalBusAnalyser = engine.ctx.createAnalyser();
-      tr.metalBusAnalyser.fftSize = 256;
-      tr.metalBus.connect(tr.metalBusAnalyser);
-
-      // TEMPORÄR (Debug): zweiter Abgriff NACH Gate/Filter/Panner --
-      // zeigt, ob das (laut metalBusAnalyser gesunde) Signal bis zum
-      // Spur-Ausgang durchkommt oder irgendwo dazwischen verschwindet.
-      tr.postGateAnalyser = engine.ctx.createAnalyser();
-      tr.postGateAnalyser.fftSize = 256;
-      tr.panner.connect(tr.postGateAnalyser);
     }
   }
 
@@ -576,8 +566,6 @@ export class AnalogKit extends TrackedDrumMachine {
       }
       tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
-      tr.metalBusAnalyser?.disconnect();
-      tr.postGateAnalyser?.disconnect();
       for (const g of tr.metalGatePool ?? []) g.disconnect();
     }
   }
