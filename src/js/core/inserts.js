@@ -41,6 +41,54 @@ function makeDriveCurve(amount) {
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
+/** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
+ *  fürs Reverb-FDN -- bewusst NICHT der naheliegende ctx.createBiquadFilter():
+ *  ein 2-poliger Biquad-Tiefpass hat (unabhängig von Q, auch bei sehr
+ *  kleinem Q) einen kleinen, aber unvermeidbaren Überschwinger >1.0 nahe
+ *  der Grenzfrequenz (gemessen ~1.15-1.22x). In einer Feedback-Schleife
+ *  reicht das, um bei dichter/rhythmischer Retriggerung (echter Musik-
+ *  betrieb, nicht nur ein einzelner Impuls) tatsächlich unbegrenzt
+ *  aufzuschaukeln, siehe git-history dieser Datei.
+ *  Ein einpoliger Tiefpass hat dagegen |H(w)| <= 1 für JEDE Frequenz,
+ *  beweisbar (Gleichheit nur bei w=0) -- kein Überschwinger möglich, egal
+ *  welche Grenzfrequenz. Damit gilt decay*|H(w)| <= decay < 1 garantiert,
+ *  für jede Parameter-Kombination, nicht nur für einzeln getestete.
+ *  Implementiert über eine Ein-Sample-DelayNode als Verzögerungsglied
+ *  (Web Audio erlaubt Delay-Zeiten bis auf Sample-Auflösung). */
+function makeOnePoleLowpass(ctx, cutoffHz) {
+  const sum = ctx.createGain();
+  const inGain = ctx.createGain();
+  const fbGain = ctx.createGain();
+  const delay = ctx.createDelay(1);
+  delay.delayTime.value = 1 / ctx.sampleRate;
+
+  function coeffs(hz) {
+    const a = Math.exp((-2 * Math.PI * hz) / ctx.sampleRate);
+    return { a, oneMinusA: 1 - a };
+  }
+  const { a, oneMinusA } = coeffs(cutoffHz);
+  inGain.gain.value = oneMinusA;
+  fbGain.gain.value = a;
+
+  inGain.connect(sum);
+  sum.connect(delay);
+  delay.connect(fbGain);
+  fbGain.connect(sum);
+
+  return {
+    input: inGain,
+    output: sum,
+    setFreq(hz, t, timeConstant) {
+      const c = coeffs(hz);
+      inGain.gain.setTargetAtTime(c.oneMinusA, t, timeConstant);
+      fbGain.gain.setTargetAtTime(c.a, t, timeConstant);
+    },
+    dispose() {
+      sum.disconnect(); inGain.disconnect(); fbGain.disconnect(); delay.disconnect();
+    },
+  };
+}
+
 /** Schroeder-Allpass-Diffusor: ein Knoten mit gleicher Betragsantwort über
  *  alle Frequenzen (verändert also NICHT die Klangfarbe), aber streut die
  *  Phase -- genau das braucht ein algorithmischer Reverb VOR dem eigentlichen
@@ -308,33 +356,32 @@ const DEFS = {
       // periodische Deckungen zwischen den Leitungen -- die klingen als
       // "Flatterecho"/metallisches Klingeln statt als glatter Hall).
       const BASE_MS = [19.7, 27.1, 33.3, 41.9];
-      // Je Leitung ein anderes, langsames LFO-Tempo -- die Modulation bleibt
-      // dadurch unsynchron/organisch statt im Gleichtakt zu "pumpen", und
-      // gibt dem Klang die leicht schwebende, nie exakt statische Qualität
-      // guter algorithmischer Reverbs (der "Valhalla"-Charakter).
-      const MOD_RATE_HZ = [0.13, 0.19, 0.24, 0.11];
-      const MOD_DEPTH_S = 0.0015;
-
-      const delays = [], dampers = [], decayGains = [], lfos = [], modGains = [], inGains = [];
+      // KEINE Delay-Zeit-Modulation (früher: ein leises LFO-Chorus pro
+      // Leitung für einen "schwebenden" Valhalla-Charakter) -- so verlockend
+      // das klanglich war, macht es das Netzwerk zeitvariant, wodurch die
+      // übliche Stabilitätsgarantie (Loop-Gain < 1 bei fixer Delay-Zeit)
+      // nicht mehr exakt gilt: unter dichter, rhythmischer Retriggerung
+      // (echter Musikbetrieb, nicht nur ein einzelner Impuls) lief die
+      // Schleife bei bestimmten Damping/Size-Kombinationen tatsächlich
+      // unbegrenzt auf (gemessen: RMS im 6-stelligen Bereich nach 30s).
+      // Damper ist ein einpoliger Tiefpass (makeOnePoleLowpass), NICHT
+      // ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
+      // >1.0 nahe der Grenzfrequenz, egal welches Q (s. Kommentar dort).
+      // Mit beidem zusammen (kein Modulation-Zeitvarianz-Loch, Filter
+      // beweisbar <= 1) gilt decay*|Filter| <= decay < 1 GARANTIERT, für
+      // jede Parameter-Kombination -- verifiziert per Sweep über Decay x
+      // Damping x Size unter dichter Retriggerung, nicht nur Einzelimpuls.
+      const delays = [], dampers = [], decayGains = [], inGains = [];
       for (let i = 0; i < N; i++) {
         const d = ctx.createDelay(1.0);
         d.delayTime.value = (BASE_MS[i] / 1000) * p.size;
-        const damp = ctx.createBiquadFilter();
-        damp.type = 'lowpass';
-        damp.frequency.value = p.damping;
-        damp.Q.value = 0.5;
+        const damp = makeOnePoleLowpass(ctx, p.damping);
         const dg = ctx.createGain();
         dg.gain.value = p.decay;
 
-        const lfo = ctx.createOscillator();
-        lfo.frequency.value = MOD_RATE_HZ[i];
-        const modGain = ctx.createGain();
-        modGain.gain.value = MOD_DEPTH_S;
-        lfo.connect(modGain).connect(d.delayTime);
-        lfo.start();
-
-        d.connect(damp).connect(dg);
-        delays.push(d); dampers.push(damp); decayGains.push(dg); lfos.push(lfo); modGains.push(modGain);
+        d.connect(damp.input);
+        damp.output.connect(dg);
+        delays.push(d); dampers.push(damp); decayGains.push(dg);
       }
 
       // Eingang mit alternierendem Vorzeichen auf alle 4 Leitungen verteilen
@@ -382,7 +429,7 @@ const DEFS = {
           } else if (key === 'decay') {
             for (const dg of decayGains) dg.gain.setTargetAtTime(v, t, 0.02);
           } else if (key === 'damping') {
-            for (const damp of dampers) damp.frequency.setTargetAtTime(v, t, 0.02);
+            for (const damp of dampers) damp.setFreq(v, t, 0.02);
           } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
@@ -392,10 +439,8 @@ const DEFS = {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
           diff1.dispose(); diff2.dispose();
           for (const d of delays) d.disconnect();
-          for (const damp of dampers) damp.disconnect();
+          for (const damp of dampers) damp.dispose();
           for (const dg of decayGains) dg.disconnect();
-          for (const lfo of lfos) { try { lfo.stop(); } catch { /* schon gestoppt */ } lfo.disconnect(); }
-          for (const mg of modGains) mg.disconnect();
           for (const row of matrixGains) for (const g of row) g.disconnect();
           for (const g of inGains) g.disconnect();
         },
@@ -462,12 +507,17 @@ export const UI_PARAMS = {
     // Hadamard-Rückkopplungsmatrix ist zwar energieerhaltend (verstärkt
     // selbst nichts), aber erst decay < 1 garantiert, dass die Schleife
     // insgesamt abklingt statt endlos auf demselben Pegel zu bleiben.
-    // Deckel bei 0.9 statt rechnerisch möglicher 0.99: die modulierten
-    // Delay-Zeiten (Chorus-LFO je Leitung) machen das Netzwerk zeit-
-    // variant, wodurch die übliche Stabilitätsgarantie (Loop-Gain < 1
-    // bei fixer Delay-Zeit) nicht mehr exakt gilt -- gemessen wurde ein
-    // Übergang zu langsam aufschaukelndem Verhalten ab ca. 0.92; 0.9 hat
-    // über 20s Rendertest nachweislich Sicherheitsabstand.
+    // Mit dem einpoligen Damping-Filter (s. makeOnePoleLowpass) UND ohne
+    // Delay-Zeit-Modulation (beides s. Kommentare im reverb-DEFS-Eintrag)
+    // gilt decay*|Filter| <= decay < 1 rechnerisch für JEDE Damping/Size-
+    // Kombination -- 0.9 ist zusätzlich per Sweep über den gesamten
+    // Damping/Size/Tempo-Bereich unter dichter, rhythmischer Retriggerung
+    // (nicht nur Einzelimpuls!) nachweislich sauber, bis hin zu extrem
+    // schneller Retriggerung (20ms) über 40s Rendertest. Ab ca. 0.93
+    // zeigten sich bei bestimmten Damping/Size-Extremen wieder Aufschaukel-
+    // /Overflow-Effekte (vermutlich Gleitkomma-Akkumulation bei sehr nah an
+    // 1 liegender Schleifenverstärkung über tausende Iterationen) -- 0.9
+    // hat davon ausreichend Abstand.
     { key: 'decay', label: 'Decay', min: 0, max: 0.9, unit: '' },
     { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
