@@ -121,6 +121,9 @@
 .m-btn:disabled { opacity: .35; }
 .m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
+/* Inline-SVG-Glyphen in Buttons (ersetzen OS-Emoji, s. UI-Review) --
+   currentColor übernimmt automatisch die jeweilige Textfarbe des Buttons. */
+.m-icon { width: 15px; height: 15px; vertical-align: -3px; margin-right: 2px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
    liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
@@ -540,22 +543,19 @@ x-fader {
               0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
 }
 .cell.is-on::before { background: currentColor; }
+/* Playhead als Vollfüllung statt eines 2px-Rähmchens -- ein dünner Outline
+   war bei Bühnenabstand/hellem Umgebungslicht kaum auffindbar und ging auf
+   einem bereits leuchtenden is-on-Step (Farbe-auf-Farbe) fast unter. Volle
+   Amber-Füllung (wie ein TR-Lauflicht, das die Pad-Farbe für die Dauer des
+   Steps überstrahlt) ist aus jeder Entfernung sofort erkennbar -- auch auf
+   is-on-Zellen, weil .is-play denselben Specificity-Rang hat und HIER
+   NACH .is-on im Stylesheet steht (Kaskade entscheidet über Reihenfolge). */
 .cell.is-play {
-  outline: 2px solid var(--lcd-ink);
-  outline-offset: -2px;
+  background: var(--lcd-ink);
+  color: var(--bg-rail);
+  box-shadow: 0 0 10px var(--lcd-glow), 0 2px 4px rgba(0,0,0,.4);
 }
-/* Dezenter Hinweis auf pitch-fähigen Grids: Step lässt sich vertikal
-   ziehen, um die Tonhöhe zu setzen — verschwindet, sobald der Step an ist
-   (dann zeigt .cell__label die Note). */
-.cell__hint {
-  position: absolute;
-  top: 3px; right: 4px;
-  font-size: 8px;
-  line-height: 1;
-  opacity: .3;
-  pointer-events: none;
-}
-.cell.is-on .cell__hint { display: none; }
+.cell.is-play::after { display: none; } /* 808-Farbmarkierung würde unter der Amber-Füllung verwaschen */
 
 /* ===================== BeatBox-Pads ===================== */
 .pads {
@@ -910,7 +910,8 @@ x-knob.has-auto .knob__dial::after {
   touch-action: manipulation;
 }
 .rack-shortcut:active { transform: translateY(1px); filter: brightness(1.08); }
-.rack-shortcut__icon { font-size: 18px; line-height: 1; }
+.rack-shortcut__icon { color: var(--m-color, var(--ink)); display: flex; }
+.rack-shortcut__icon .m-icon { width: 20px; height: 20px; margin-right: 0; vertical-align: 0; }
 .rack-shortcut__label {
   font-weight: 700;
   font-size: 13px;

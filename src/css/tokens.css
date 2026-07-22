@@ -20,7 +20,10 @@
   /* --- Text (warmes Elfenbein statt kaltem Weiß) --- */
   --ink:            #ece4d2;
   --ink-dim:        #a89d85;
-  --ink-faint:      #6a6150;
+  /* Angehoben von #6a6150 (2.2:1 gegen Panel/Zell-Hintergrund -- bei
+     Tageslicht/Bühnenabstand praktisch unlesbar, s. UI-Review) auf einen
+     Wert mit >=3:1 gegen beide dunklen Flächen, gleicher warmer Ton. */
+  --ink-faint:      #8a7f68;
 
   /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
   --lcd-bg:         #1c1204;

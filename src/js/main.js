@@ -21,6 +21,31 @@ import { initJamView, renderJamView } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 
+/** Kleine, im Play/Stop-Icon-Stil gehaltene SVG-Glyphen (currentColor,
+ *  24x24 viewBox) für Mixer/Song/Jam -- ersetzen die drei OS-Emoji (🎚️🎬🕹️),
+ *  die je nach Plattform unterschiedlich aussehen und der einzige Bruch mit
+ *  der sonst konsequent gezeichneten Hardware-Optik waren (s. UI-Review). */
+const ICON_MIXER = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
+  + '<line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '<rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '<rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '</svg>';
+const ICON_SONG = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">'
+  + '<rect x="2" y="9" width="7" height="6" rx="1.5"/>'
+  + '<rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>'
+  + '<rect x="16" y="9" width="6" height="6" rx="1.5"/>'
+  + '</svg>';
+const ICON_JAM = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
+  + '<circle cx="12" cy="12" r="3" fill="currentColor"/>'
+  + '<line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '</svg>';
+
 /* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
 $('#btn-unlock').addEventListener('click', async () => {
   const hint = $('#btn-unlock small');
@@ -74,15 +99,15 @@ function boot() {
   // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
   // ohne den Umweg über das Projekte-Sheet.
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🎚️', label: 'Mixer', color: '#7fd6a0',
+    icon: ICON_MIXER, label: 'Mixer', color: '#7fd6a0',
     onOpen: () => $('#btn-open-mixer').click(),
   }));
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🎬', label: 'Song Timeline', color: '#ff4d3d',
+    icon: ICON_SONG, label: 'Song Timeline', color: '#ff4d3d',
     onOpen: () => $('#btn-open-song').click(),
   }));
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🕹️', label: 'Jam', color: '#ffb84d',
+    icon: ICON_JAM, label: 'Jam', color: '#ffb84d',
     onOpen: () => $('#btn-open-jam').click(),
   }));
 
@@ -965,9 +990,14 @@ function wireTransportUI() {
 
   // REC schärfen/entschärfen — aufgenommen wird nur bei laufendem Transport
   const btnRec = $('#btn-rec');
+  const transportEl = $('#transport');
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
+    // Periphere Leiste am Bildschirmrand (s. app.css) -- aus dem Augenwinkel
+    // lesbar, im Gegensatz zum kleinen Button selbst (wichtig bei Live-
+    // Nutzung/Bühnenlicht, s. UI-Review).
+    transportEl.classList.toggle('is-rec-armed', automation.armed);
     if (automation.armed) {
       hintOnce('rec-armed', () => showHintToast(
         'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'

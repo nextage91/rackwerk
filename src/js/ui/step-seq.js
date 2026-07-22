@@ -57,14 +57,11 @@ export class StepSeq {
       const cell = document.createElement('div');
       cell.className = 'cell' + (c % 4 === 0 ? ' cell--beat' : '');
       cell.dataset.cell = c;
-      // Dezenter Hinweis, dass sich der Step vertikal ziehen lässt (Tonhöhe) —
-      // verschwindet, sobald der Step an ist (dann zeigt das Label die Note).
-      if (this.pitchMode) {
-        const hint = document.createElement('span');
-        hint.className = 'cell__hint';
-        hint.textContent = '↕';
-        cell.appendChild(hint);
-      }
+      // Der frühere "↕"-Hinweis (Step vertikal ziehen = Tonhöhe) war bei
+      // 8px/30%-Opacity praktisch unlesbar (gemessen <1.5:1 Kontrast, s.
+      // UI-Review) -- ersatzlos entfernt statt aufgehellt, das wären sonst
+      // 16 dauerhaft sichtbare Mini-Icons pro Grid. Die Geste gehört ins
+      // Onboarding (dortige Überarbeitung ist ein eigener, größerer Posten).
       const label = document.createElement('span');
       label.className = 'cell__label';
       cell.appendChild(label);
@@ -178,15 +175,27 @@ export class StepSeq {
 
     this.grid.addEventListener('pointermove', (e) => {
       const drag = active.get(e.pointerId);
-      if (!drag || !this.pitchMode) return;
+      if (!drag) return;
       const dy = drag.startY - e.clientY;
       if (!drag.moved && Math.abs(dy) < TAP_THRESHOLD) return;
 
+      // Bewegung über der Schwelle markiert die Geste als "kein Tap" --
+      // WICHTIG auch im Nicht-Pitch-Modus (Drum-Grids): touch-action:none
+      // aufs Grid blockiert dort ohnehin das Scrollen (nötig, damit ein
+      // echter Pitch-Drag nicht mit Seiten-Scroll kollidiert). Ohne dieses
+      // frühe drag.moved=true würde eine abgebrochene Wisch-/Scroll-Geste
+      // beim Loslassen trotzdem als Tap gewertet und den Step stumm an/aus
+      // schalten -- genau das gemeldete "Step kippt beim Scrollversuch"-
+      // Problem. Im Pitch-Modus lief das schon immer so (drag.moved=true
+      // setzt hier gleich den Step an UND beginnt den Pitch-Drag); im
+      // Drum-Modus bleibt es jetzt bei "kein Toggle", ohne den Step
+      // zusätzlich zu verändern -- schlimmstenfalls ein No-Op statt einer
+      // stillen, unerwünschten Pattern-Änderung.
+      if (!drag.moved) drag.moved = true;
+      if (!this.pitchMode) return;
+
       const step = this.pattern[drag.idx];
-      if (!drag.moved) {
-        drag.moved = true;
-        step.on = true;
-      }
+      step.on = true;
       step.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
         drag.startMidi + Math.round(dy / SEMITONE_PX)));
       this.#renderCell(drag.idx % BAR_STEPS);

@@ -153,13 +153,30 @@ export class Rack {
     row.style.setProperty('--m-color', color);
     row.innerHTML = `
       <span class="rack-row__stripe"></span>
-      <span class="rack-row__name">${name}</span>
+      <span class="rack-row__name">${name}<span class="rack-row__led" data-led></span></span>
+      <span class="rack-row__pattern" data-pattern hidden></span>
       <span class="rack-row__actions">
         <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
         <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
       </span>
       <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
+    // Aktivitäts-LED + aktiver Pattern-Buchstabe direkt in der Kompakt-
+    // Zeile -- ohne das war das Rack bei laufendem Transport blind: man
+    // sah nicht, welche Maschine gerade spielt oder welches Pattern aktiv
+    // ist, ohne jede einzelne im Vollbild-Editor zu öffnen (s. UI-Review).
+    // machine.pulse() (schon vorhanden, feuert pro Trigger fürs eigene
+    // Faceplate-LED) blitzt jetzt zusätzlich dieses hier; onPatternChange
+    // ist derselbe lose Hook wie onMixerChange fürs Mute/Solo-Sync.
+    machine.rowLedEl = row.querySelector('[data-led]');
+    const patternEl = row.querySelector('[data-pattern]');
+    if (machine.patternIndex != null) {
+      patternEl.hidden = false;
+      patternEl.textContent = 'ABCD'[machine.patternIndex] ?? '';
+      machine.onPatternChange = () => {
+        patternEl.textContent = 'ABCD'[machine.patternIndex] ?? '';
+      };
+    }
     const muteBtn = row.querySelector('[data-mute]');
     const soloBtn = row.querySelector('[data-solo]');
     soloBtn.addEventListener('click', (e) => {

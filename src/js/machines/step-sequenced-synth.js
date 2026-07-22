@@ -46,6 +46,9 @@ export class StepSequencedSynth extends Machine {
     this.seq?.setPattern(this.pattern);
     this.patternBank?.setActive(i);
     automation.setBars(this.id, this.seq?.bars ?? 1);
+    // Loser Hook fürs Rack (kompakte Zeile zeigt den aktiven Pattern-
+    // Buchstaben) -- analog zu onMixerChange fürs Mute/Solo-Sync.
+    this.onPatternChange?.();
   }
 
   /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige

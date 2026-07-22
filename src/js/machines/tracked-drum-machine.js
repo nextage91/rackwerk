@@ -104,6 +104,9 @@ export class TrackedDrumMachine extends Machine {
     this.patternBank?.setActive(i);
     this.seq?.setPattern(this.tracks[this.selected].steps);
     automation.setBars(this.id, this.seq?.bars ?? 1);
+    // Loser Hook fürs Rack (kompakte Zeile zeigt den aktiven Pattern-
+    // Buchstaben) -- analog zu onMixerChange fürs Mute/Solo-Sync.
+    this.onPatternChange?.();
   }
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));

@@ -178,6 +178,37 @@ button {
 .rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
 .rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
 
+/* Aktivitäts-LED in der Kompakt-Zeile -- blitzt synchron zum Faceplate-LED
+   im Vollbild-Editor (s. machine.js#pulse), macht das Rack auch OHNE
+   geöffneten Editor zur Live-Übersicht, welche Maschine gerade spielt. */
+.rack-row__led {
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #1a1610;
+  box-shadow: 0 0 3px rgba(0,0,0,.9) inset, 0 1px 0 rgba(255,255,255,.06);
+  vertical-align: middle;
+}
+.rack-row__led.is-on {
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 8px var(--m-color-glow, var(--lcd-glow));
+}
+/* Aktiver Pattern-Buchstabe (A–D) -- zeigt ohne Öffnen des Editors, welche
+   Variante gerade läuft; folgt Song-Timeline-Wechseln live mit. */
+.rack-row__pattern {
+  min-width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--m-color-dim, rgba(255,184,77,.22));
+  color: var(--m-color, var(--lcd-ink));
+  font-family: var(--font-lcd);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* Vollbild-Editor pro Maschine — dieselbe Idee wie der Mixer-Vollbild-
    Sheet, nur pro Maschine statt einmalig. Enthält die UNVERÄNDERTE
    .machine-Faceplate aus machine.js (Header + Body).
@@ -303,10 +334,15 @@ button {
   .brand__name { display: none; }  /* schmale Phones: nur das Logo-Zeichen */
 }
 /* Sehr schmale Phones: Platz fürs LCD schaffen, damit die Transport-
-   Leiste nie überläuft. Erst das dekorative Logo, dann BPM-Label/Position
-   opfern — die BPM-Zahl und alle Buttons bleiben immer erhalten. */
+   Leiste nie überläuft. Erst das dekorative Logo, dann das "BPM"-Label
+   opfern -- NICHT die Position selbst clippen lassen (overflow:hidden auf
+   .transport__lcd schnitt vorher lautlos mitten in "1.1" ab, sichtbar nur
+   noch "1" -- sieht wie ein Bug aus und macht die für die Song-Aufnahme
+   wichtige Taktposition unlesbar). Die BPM-ZAHL selbst ist auch ohne
+   Einheiten-Label selbsterklärend, das Label ist verzichtbar. */
 @media (max-width: 400px) {
   .transport__brand { display: none; }
+  .lcd__label { display: none; }
   .transport { gap: 7px; }
 }
 @media (max-width: 344px) {
@@ -321,14 +357,40 @@ button {
   * { animation: none !important; transition: none !important; }
 }
 
-/* REC-Button */
-.t-btn--rec { color: var(--led-on); font-size: 16px; }
+/* REC-Button — im Ruhezustand wie eine unbeleuchtete Hardware-LED (grau),
+   nicht rot: Hardware-Konvention ist "rot = es wird aufgenommen", ein von
+   Anfang an roter Punkt macht scharf/entschärft aus Armlänge oder bei
+   hellem Umgebungslicht ununterscheidbar (s. UI-Review). */
+.t-btn--rec { color: var(--ink-dim); font-size: 16px; }
 .t-btn--rec.is-armed {
-  background: linear-gradient(#5a2626, #3a1a1a);
+  color: var(--led-on);
+  background: linear-gradient(#6a2828, #3a1a1a);
   box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
   animation: rec-pulse 1.2s ease-in-out infinite;
 }
 @keyframes rec-pulse { 50% { box-shadow: 0 0 4px rgba(255,77,77,.25), var(--shadow-panel); } }
+
+/* Peripheres REC-Signal: eine volle-Breite-Linie unter der Transport-
+   Leiste, die im Augenwinkel auffällt, ohne dass man den kleinen Button
+   fixieren muss (wichtig bei Live-Nutzung/Bühnenlicht). Sitzt auf dem
+   Transport-Header selbst (nicht auf dem Button), damit sie über die
+   gesamte Bildschirmbreite läuft. */
+.transport { position: relative; }
+.transport::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -2px;
+  height: 2px;
+  background: var(--led-on);
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.transport.is-rec-armed::after {
+  opacity: 1;
+  animation: rec-strip-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-strip-pulse { 50% { opacity: .35; } }
 
 /* PRJ-Button + Projekte-Sheet */
 .t-btn--prj { font-size: 11px; font-weight: 700; letter-spacing: .08em; }

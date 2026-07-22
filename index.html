@@ -38,7 +38,10 @@
   /* --- Text (warmes Elfenbein statt kaltem Weiß) --- */
   --ink:            #ece4d2;
   --ink-dim:        #a89d85;
-  --ink-faint:      #6a6150;
+  /* Angehoben von #6a6150 (2.2:1 gegen Panel/Zell-Hintergrund -- bei
+     Tageslicht/Bühnenabstand praktisch unlesbar, s. UI-Review) auf einen
+     Wert mit >=3:1 gegen beide dunklen Flächen, gleicher warmer Ton. */
+  --ink-faint:      #8a7f68;
 
   /* --- LCD (Amber, wie alte Hardware-Sequenzer) --- */
   --lcd-bg:         #1c1204;
@@ -265,6 +268,37 @@ button {
 .rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
 .rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
 
+/* Aktivitäts-LED in der Kompakt-Zeile -- blitzt synchron zum Faceplate-LED
+   im Vollbild-Editor (s. machine.js#pulse), macht das Rack auch OHNE
+   geöffneten Editor zur Live-Übersicht, welche Maschine gerade spielt. */
+.rack-row__led {
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #1a1610;
+  box-shadow: 0 0 3px rgba(0,0,0,.9) inset, 0 1px 0 rgba(255,255,255,.06);
+  vertical-align: middle;
+}
+.rack-row__led.is-on {
+  background: var(--m-color, var(--lcd-ink));
+  box-shadow: 0 0 8px var(--m-color-glow, var(--lcd-glow));
+}
+/* Aktiver Pattern-Buchstabe (A–D) -- zeigt ohne Öffnen des Editors, welche
+   Variante gerade läuft; folgt Song-Timeline-Wechseln live mit. */
+.rack-row__pattern {
+  min-width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--m-color-dim, rgba(255,184,77,.22));
+  color: var(--m-color, var(--lcd-ink));
+  font-family: var(--font-lcd);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* Vollbild-Editor pro Maschine — dieselbe Idee wie der Mixer-Vollbild-
    Sheet, nur pro Maschine statt einmalig. Enthält die UNVERÄNDERTE
    .machine-Faceplate aus machine.js (Header + Body).
@@ -390,10 +424,15 @@ button {
   .brand__name { display: none; }  /* schmale Phones: nur das Logo-Zeichen */
 }
 /* Sehr schmale Phones: Platz fürs LCD schaffen, damit die Transport-
-   Leiste nie überläuft. Erst das dekorative Logo, dann BPM-Label/Position
-   opfern — die BPM-Zahl und alle Buttons bleiben immer erhalten. */
+   Leiste nie überläuft. Erst das dekorative Logo, dann das "BPM"-Label
+   opfern -- NICHT die Position selbst clippen lassen (overflow:hidden auf
+   .transport__lcd schnitt vorher lautlos mitten in "1.1" ab, sichtbar nur
+   noch "1" -- sieht wie ein Bug aus und macht die für die Song-Aufnahme
+   wichtige Taktposition unlesbar). Die BPM-ZAHL selbst ist auch ohne
+   Einheiten-Label selbsterklärend, das Label ist verzichtbar. */
 @media (max-width: 400px) {
   .transport__brand { display: none; }
+  .lcd__label { display: none; }
   .transport { gap: 7px; }
 }
 @media (max-width: 344px) {
@@ -408,14 +447,40 @@ button {
   * { animation: none !important; transition: none !important; }
 }
 
-/* REC-Button */
-.t-btn--rec { color: var(--led-on); font-size: 16px; }
+/* REC-Button — im Ruhezustand wie eine unbeleuchtete Hardware-LED (grau),
+   nicht rot: Hardware-Konvention ist "rot = es wird aufgenommen", ein von
+   Anfang an roter Punkt macht scharf/entschärft aus Armlänge oder bei
+   hellem Umgebungslicht ununterscheidbar (s. UI-Review). */
+.t-btn--rec { color: var(--ink-dim); font-size: 16px; }
 .t-btn--rec.is-armed {
-  background: linear-gradient(#5a2626, #3a1a1a);
+  color: var(--led-on);
+  background: linear-gradient(#6a2828, #3a1a1a);
   box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
   animation: rec-pulse 1.2s ease-in-out infinite;
 }
 @keyframes rec-pulse { 50% { box-shadow: 0 0 4px rgba(255,77,77,.25), var(--shadow-panel); } }
+
+/* Peripheres REC-Signal: eine volle-Breite-Linie unter der Transport-
+   Leiste, die im Augenwinkel auffällt, ohne dass man den kleinen Button
+   fixieren muss (wichtig bei Live-Nutzung/Bühnenlicht). Sitzt auf dem
+   Transport-Header selbst (nicht auf dem Button), damit sie über die
+   gesamte Bildschirmbreite läuft. */
+.transport { position: relative; }
+.transport::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -2px;
+  height: 2px;
+  background: var(--led-on);
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.transport.is-rec-armed::after {
+  opacity: 1;
+  animation: rec-strip-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-strip-pulse { 50% { opacity: .35; } }
 
 /* PRJ-Button + Projekte-Sheet */
 .t-btn--prj { font-size: 11px; font-weight: 700; letter-spacing: .08em; }
@@ -1379,6 +1444,9 @@ button {
 .m-btn:disabled { opacity: .35; }
 .m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
+/* Inline-SVG-Glyphen in Buttons (ersetzen OS-Emoji, s. UI-Review) --
+   currentColor übernimmt automatisch die jeweilige Textfarbe des Buttons. */
+.m-icon { width: 15px; height: 15px; vertical-align: -3px; margin-right: 2px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
    liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
@@ -1798,22 +1866,19 @@ x-fader {
               0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
 }
 .cell.is-on::before { background: currentColor; }
+/* Playhead als Vollfüllung statt eines 2px-Rähmchens -- ein dünner Outline
+   war bei Bühnenabstand/hellem Umgebungslicht kaum auffindbar und ging auf
+   einem bereits leuchtenden is-on-Step (Farbe-auf-Farbe) fast unter. Volle
+   Amber-Füllung (wie ein TR-Lauflicht, das die Pad-Farbe für die Dauer des
+   Steps überstrahlt) ist aus jeder Entfernung sofort erkennbar -- auch auf
+   is-on-Zellen, weil .is-play denselben Specificity-Rang hat und HIER
+   NACH .is-on im Stylesheet steht (Kaskade entscheidet über Reihenfolge). */
 .cell.is-play {
-  outline: 2px solid var(--lcd-ink);
-  outline-offset: -2px;
+  background: var(--lcd-ink);
+  color: var(--bg-rail);
+  box-shadow: 0 0 10px var(--lcd-glow), 0 2px 4px rgba(0,0,0,.4);
 }
-/* Dezenter Hinweis auf pitch-fähigen Grids: Step lässt sich vertikal
-   ziehen, um die Tonhöhe zu setzen — verschwindet, sobald der Step an ist
-   (dann zeigt .cell__label die Note). */
-.cell__hint {
-  position: absolute;
-  top: 3px; right: 4px;
-  font-size: 8px;
-  line-height: 1;
-  opacity: .3;
-  pointer-events: none;
-}
-.cell.is-on .cell__hint { display: none; }
+.cell.is-play::after { display: none; } /* 808-Farbmarkierung würde unter der Amber-Füllung verwaschen */
 
 /* ===================== BeatBox-Pads ===================== */
 .pads {
@@ -2168,7 +2233,8 @@ x-knob.has-auto .knob__dial::after {
   touch-action: manipulation;
 }
 .rack-shortcut:active { transform: translateY(1px); filter: brightness(1.08); }
-.rack-shortcut__icon { font-size: 18px; line-height: 1; }
+.rack-shortcut__icon { color: var(--m-color, var(--ink)); display: flex; }
+.rack-shortcut__icon .m-icon { width: 20px; height: 20px; margin-right: 0; vertical-align: 0; }
 .rack-shortcut__label {
   font-weight: 700;
   font-size: 13px;
@@ -2238,9 +2304,32 @@ x-knob.has-auto .knob__dial::after {
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song Timeline</button>
-        <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
-        <button class="m-btn m-btn--wide" id="btn-open-jam">🕹️ Jam</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">
+            <rect x="2" y="9" width="7" height="6" rx="1.5"/>
+            <rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>
+            <rect x="16" y="9" width="6" height="6" rx="1.5"/>
+          </svg> Song Timeline
+        </button>
+        <button class="m-btn m-btn--wide" id="btn-open-mixer">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
+            <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
+            <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
+            <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
+          </svg> Mixer
+        </button>
+        <button class="m-btn m-btn--wide" id="btn-open-jam">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" fill="currentColor"/>
+            <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg> Jam
+        </button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -13945,14 +14034,11 @@ class StepSeq {
       const cell = document.createElement('div');
       cell.className = 'cell' + (c % 4 === 0 ? ' cell--beat' : '');
       cell.dataset.cell = c;
-      // Dezenter Hinweis, dass sich der Step vertikal ziehen lässt (Tonhöhe) —
-      // verschwindet, sobald der Step an ist (dann zeigt das Label die Note).
-      if (this.pitchMode) {
-        const hint = document.createElement('span');
-        hint.className = 'cell__hint';
-        hint.textContent = '↕';
-        cell.appendChild(hint);
-      }
+      // Der frühere "↕"-Hinweis (Step vertikal ziehen = Tonhöhe) war bei
+      // 8px/30%-Opacity praktisch unlesbar (gemessen <1.5:1 Kontrast, s.
+      // UI-Review) -- ersatzlos entfernt statt aufgehellt, das wären sonst
+      // 16 dauerhaft sichtbare Mini-Icons pro Grid. Die Geste gehört ins
+      // Onboarding (dortige Überarbeitung ist ein eigener, größerer Posten).
       const label = document.createElement('span');
       label.className = 'cell__label';
       cell.appendChild(label);
@@ -14066,15 +14152,27 @@ class StepSeq {
 
     this.grid.addEventListener('pointermove', (e) => {
       const drag = active.get(e.pointerId);
-      if (!drag || !this.pitchMode) return;
+      if (!drag) return;
       const dy = drag.startY - e.clientY;
       if (!drag.moved && Math.abs(dy) < TAP_THRESHOLD) return;
 
+      // Bewegung über der Schwelle markiert die Geste als "kein Tap" --
+      // WICHTIG auch im Nicht-Pitch-Modus (Drum-Grids): touch-action:none
+      // aufs Grid blockiert dort ohnehin das Scrollen (nötig, damit ein
+      // echter Pitch-Drag nicht mit Seiten-Scroll kollidiert). Ohne dieses
+      // frühe drag.moved=true würde eine abgebrochene Wisch-/Scroll-Geste
+      // beim Loslassen trotzdem als Tap gewertet und den Step stumm an/aus
+      // schalten -- genau das gemeldete "Step kippt beim Scrollversuch"-
+      // Problem. Im Pitch-Modus lief das schon immer so (drag.moved=true
+      // setzt hier gleich den Step an UND beginnt den Pitch-Drag); im
+      // Drum-Modus bleibt es jetzt bei "kein Toggle", ohne den Step
+      // zusätzlich zu verändern -- schlimmstenfalls ein No-Op statt einer
+      // stillen, unerwünschten Pattern-Änderung.
+      if (!drag.moved) drag.moved = true;
+      if (!this.pitchMode) return;
+
       const step = this.pattern[drag.idx];
-      if (!drag.moved) {
-        drag.moved = true;
-        step.on = true;
-      }
+      step.on = true;
       step.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
         drag.startMidi + Math.round(dy / SEMITONE_PX)));
       this.#renderCell(drag.idx % BAR_STEPS);
@@ -16250,9 +16348,13 @@ class Automation {
   }
 
   /* ---------- Persistenz ---------- */
-  /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
-  exportLanes(machineId) {
-    const prefix = `${machineId}:`;
+  /** Alle Lanes mit einem beliebigen Schlüssel-Präfix, Schlüssel ohne den
+   *  Präfix -- Grundlage für exportLanes() (Maschinen-Präfix) UND fürs
+   *  Insert-Entfernen-Undo (Insert-Präfix, s. machine.js#removeInsert):
+   *  ein Insert wird beim Löschen genau wie eine Maschine per Undo mit
+   *  seinen aufgenommenen Fahrten zurückgeholt, nicht nur mit den nackten
+   *  Parametern. */
+  exportLanesWithPrefix(prefix) {
     const out = {};
     for (const [key, lane] of this.lanes) {
       if (key.startsWith(prefix)) out[key.slice(prefix.length)] = Array.from(lane);
@@ -16260,15 +16362,31 @@ class Automation {
     return out;
   }
 
-  importLanes(machineId, lanes) {
+  /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
+  exportLanes(machineId) {
+    return this.exportLanesWithPrefix(`${machineId}:`);
+  }
+
+  /** Gegenstück zu exportLanesWithPrefix() -- schreibt Lanes unter einem
+   *  beliebigen Präfix zurück, ohne die has-auto-Sonderbehandlung fürs
+   *  Insert-Undo (dessen Lane-Schlüssel enthalten immer ein weiteres ':',
+   *  #renderInserts() setzt has-auto beim Neu-Registrieren des Knobs
+   *  ohnehin selbst, s. dort). */
+  importLanesWithPrefix(prefix, lanes) {
     if (!lanes) return;
     for (const [suffix, values] of Object.entries(lanes)) {
-      const key = `${machineId}:${suffix}`;
-      this.lanes.set(key, Float32Array.from(values));
+      this.lanes.set(`${prefix}${suffix}`, Float32Array.from(values));
+    }
+  }
+
+  importLanes(machineId, lanes) {
+    if (!lanes) return;
+    this.importLanesWithPrefix(`${machineId}:`, lanes);
+    for (const suffix of Object.keys(lanes)) {
       // LED nur für statische (maschinenweite) Knobs direkt setzen —
       // Per-Spur-Knobs aktualisiert die Maschine über onLanesImported()
       if (!suffix.includes(':')) {
-        this.targets.get(key)?.knob.classList.add('has-auto');
+        this.targets.get(`${machineId}:${suffix}`)?.knob.classList.add('has-auto');
       }
     }
   }
@@ -17278,18 +17396,42 @@ class Machine {
     return insert;
   }
 
+  /**
+   * Insert entfernen -- war bisher der einzige sofortige UND nicht rück-
+   * holbare Lösch-Weg der App (jede andere Löschaktion: Maschine, Pattern,
+   * Clip, hat ein Undo-Angebot), direkt neben dem genauso erreichbaren
+   * BYP-Button. Bekommt hier denselben Undo-Toast wie alle anderen (s.
+   * UI-Review) -- Params/Bypass UND aufgenommene Automation-Fahrten
+   * werden vor dem Verwerfen gesichert und beim Undo unter demselben
+   * Insert (gleiche id, createInsert() übernimmt saved.id) wiederhergestellt.
+   */
   removeInsert(id) {
     const idx = this.inserts.findIndex((i) => i.id === id);
     if (idx === -1) return;
     const [insert] = this.inserts.splice(idx, 1);
     this.#rewireInsertChain();
+
+    const savedInsert = insert.serialize();
+    const lanePrefix = `${this.id}:insert:${id}:`;
+    const savedLanes = automation.exportLanesWithPrefix(lanePrefix);
+    const insertIndex = idx;
+
     insert.dispose();
     // Automation-Lanes des entfernten Inserts mit aufräumen -- ohne das
     // blieben sie als unerreichbare Leichen in automation.lanes stehen
     // (insert.id wird nie wiederverwendet, s. inserts.js#createInsert,
     // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
-    automation.clearLanesWithPrefix(`${this.id}:insert:${id}:`);
+    automation.clearLanesWithPrefix(lanePrefix);
     this.#renderInserts();
+
+    const label = INSERT_DISPLAY[insert.type]?.name ?? insert.name;
+    undo.offer(`${label} removed`, () => {
+      const restored = createInsert(savedInsert.type, savedInsert);
+      this.inserts.splice(insertIndex, 0, restored);
+      this.#rewireInsertChain();
+      automation.importLanesWithPrefix(lanePrefix, savedLanes);
+      this.#renderInserts();
+    });
   }
 
   moveInsert(id, dir) {
@@ -17714,12 +17856,20 @@ class Machine {
    * zum hörbaren Klang blinkt (nicht zum Planungs-Zeitpunkt).
    */
   pulse(time = 0) {
-    if (!this.ledEl) return;
+    // Zwei LEDs möglich: das eigene Faceplate-LED (nur sichtbar im offenen
+    // Vollbild-Editor) UND das Pendant in der kompakten Rack-Zeile
+    // (rack.js#mount setzt rowLedEl) -- beide blitzen synchron, damit das
+    // Rack auch ohne geöffneten Editor eine Live-Aktivitätsanzeige hat.
+    if (!this.ledEl && !this.rowLedEl) return;
     const delay = Math.max(0, (time - engine.now) * 1000);
     setTimeout(() => {
-      this.ledEl.classList.add('is-on');
+      this.ledEl?.classList.add('is-on');
+      this.rowLedEl?.classList.add('is-on');
       clearTimeout(this.#ledTimer);
-      this.#ledTimer = setTimeout(() => this.ledEl.classList.remove('is-on'), 90);
+      this.#ledTimer = setTimeout(() => {
+        this.ledEl?.classList.remove('is-on');
+        this.rowLedEl?.classList.remove('is-on');
+      }, 90);
     }, delay);
   }
 
@@ -17894,6 +18044,9 @@ class TrackedDrumMachine extends Machine {
     this.patternBank?.setActive(i);
     this.seq?.setPattern(this.tracks[this.selected].steps);
     automation.setBars(this.id, this.seq?.bars ?? 1);
+    // Loser Hook fürs Rack (kompakte Zeile zeigt den aktiven Pattern-
+    // Buchstaben) -- analog zu onMixerChange fürs Mute/Solo-Sync.
+    this.onPatternChange?.();
   }
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
@@ -18321,6 +18474,9 @@ class StepSequencedSynth extends Machine {
     this.seq?.setPattern(this.pattern);
     this.patternBank?.setActive(i);
     automation.setBars(this.id, this.seq?.bars ?? 1);
+    // Loser Hook fürs Rack (kompakte Zeile zeigt den aktiven Pattern-
+    // Buchstaben) -- analog zu onMixerChange fürs Mute/Solo-Sync.
+    this.onPatternChange?.();
   }
 
   /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
@@ -20057,13 +20213,30 @@ class Rack {
     row.style.setProperty('--m-color', color);
     row.innerHTML = `
       <span class="rack-row__stripe"></span>
-      <span class="rack-row__name">${name}</span>
+      <span class="rack-row__name">${name}<span class="rack-row__led" data-led></span></span>
+      <span class="rack-row__pattern" data-pattern hidden></span>
       <span class="rack-row__actions">
         <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
         <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
       </span>
       <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
+    // Aktivitäts-LED + aktiver Pattern-Buchstabe direkt in der Kompakt-
+    // Zeile -- ohne das war das Rack bei laufendem Transport blind: man
+    // sah nicht, welche Maschine gerade spielt oder welches Pattern aktiv
+    // ist, ohne jede einzelne im Vollbild-Editor zu öffnen (s. UI-Review).
+    // machine.pulse() (schon vorhanden, feuert pro Trigger fürs eigene
+    // Faceplate-LED) blitzt jetzt zusätzlich dieses hier; onPatternChange
+    // ist derselbe lose Hook wie onMixerChange fürs Mute/Solo-Sync.
+    machine.rowLedEl = row.querySelector('[data-led]');
+    const patternEl = row.querySelector('[data-pattern]');
+    if (machine.patternIndex != null) {
+      patternEl.hidden = false;
+      patternEl.textContent = 'ABCD'[machine.patternIndex] ?? '';
+      machine.onPatternChange = () => {
+        patternEl.textContent = 'ABCD'[machine.patternIndex] ?? '';
+      };
+    }
     const muteBtn = row.querySelector('[data-mute]');
     const soloBtn = row.querySelector('[data-solo]');
     soloBtn.addEventListener('click', (e) => {
@@ -21275,6 +21448,31 @@ return { serializeProject, loadProject, importMachines, newProject };
 
 const $ = (sel) => document.querySelector(sel);
 
+/** Kleine, im Play/Stop-Icon-Stil gehaltene SVG-Glyphen (currentColor,
+ *  24x24 viewBox) für Mixer/Song/Jam -- ersetzen die drei OS-Emoji (🎚️🎬🕹️),
+ *  die je nach Plattform unterschiedlich aussehen und der einzige Bruch mit
+ *  der sonst konsequent gezeichneten Hardware-Optik waren (s. UI-Review). */
+const ICON_MIXER = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
+  + '<line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '<rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '<rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>'
+  + '</svg>';
+const ICON_SONG = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">'
+  + '<rect x="2" y="9" width="7" height="6" rx="1.5"/>'
+  + '<rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>'
+  + '<rect x="16" y="9" width="6" height="6" rx="1.5"/>'
+  + '</svg>';
+const ICON_JAM = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
+  + '<circle cx="12" cy="12" r="3" fill="currentColor"/>'
+  + '<line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '<line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  + '</svg>';
+
 /* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
 $('#btn-unlock').addEventListener('click', async () => {
   const hint = $('#btn-unlock small');
@@ -21328,15 +21526,15 @@ function boot() {
   // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
   // ohne den Umweg über das Projekte-Sheet.
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🎚️', label: 'Mixer', color: '#7fd6a0',
+    icon: ICON_MIXER, label: 'Mixer', color: '#7fd6a0',
     onOpen: () => $('#btn-open-mixer').click(),
   }));
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🎬', label: 'Song Timeline', color: '#ff4d3d',
+    icon: ICON_SONG, label: 'Song Timeline', color: '#ff4d3d',
     onOpen: () => $('#btn-open-song').click(),
   }));
   $('#rack').appendChild(buildRackShortcut({
-    icon: '🕹️', label: 'Jam', color: '#ffb84d',
+    icon: ICON_JAM, label: 'Jam', color: '#ffb84d',
     onOpen: () => $('#btn-open-jam').click(),
   }));
 
@@ -22219,9 +22417,14 @@ function wireTransportUI() {
 
   // REC schärfen/entschärfen — aufgenommen wird nur bei laufendem Transport
   const btnRec = $('#btn-rec');
+  const transportEl = $('#transport');
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
+    // Periphere Leiste am Bildschirmrand (s. app.css) -- aus dem Augenwinkel
+    // lesbar, im Gegensatz zum kleinen Button selbst (wichtig bei Live-
+    // Nutzung/Bühnenlicht, s. UI-Review).
+    transportEl.classList.toggle('is-rec-armed', automation.armed);
     if (automation.armed) {
       hintOnce('rec-armed', () => showHintToast(
         'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'
