@@ -25,6 +25,7 @@ const INSERT_DISPLAY = {
   eq: { name: 'Parametric EQ', badge: 'RACK-EQ' },
   drive: { name: 'Drive / Saturation', badge: 'TUBE-DRIVE' },
   filterDelay: { name: 'Filter Delay', badge: 'FLT-DELAY' },
+  reverb: { name: 'Algorithmic Reverb', badge: 'FDN-VERB' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
