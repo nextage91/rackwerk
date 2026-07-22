@@ -921,16 +921,6 @@ function buildColumn(machine) {
   col.style.setProperty('--ch-color', color);
   col.style.setProperty('--ch-glow', `rgba(${r},${g},${b},.5)`);
 
-  // IMMER rendern (auch leer für Nicht-Drum-Maschinen), nie ganz weglassen:
-  // ein bedingt weggelassenes Element macht die Fixhöhe von .strip je nach
-  // Maschinentyp unterschiedlich hoch, was Fader/Encoder/XY-Pad zwischen
-  // den Spalten gegeneinander verschiebt (schon mal gesehen, s. Verlauf
-  // zur Makro-Knob-Ausrichtung). .channel__track reserviert seine Höhe
-  // per CSS auch leer.
-  const trackLabel = `<div class="channel__track">${
-    TRACK_SCOPED_TYPES.has(machine.constructor.meta.type) ? (machine.tracks[machine.selected]?.name ?? '') : ''
-  }</div>`;
-
   col.innerHTML = `
     <div class="channel__head">
       <span class="channel__stripe"></span>
@@ -946,32 +936,99 @@ function buildColumn(machine) {
 
   col.appendChild(buildXYPad(machine));
 
-  const strip = document.createElement('div');
-  strip.className = 'strip';
-  strip.innerHTML = `
-    <div class="strip__row">
-      <button type="button" class="msbtn is-solo${machine.soloed ? ' is-active' : ''}">SOLO</button>
-      <button type="button" class="msbtn is-mute${machine.muted ? ' is-active' : ''}">MUTE</button>
-    </div>
-    <div class="fader-row"></div>
-    ${trackLabel}
-  `;
-  const soloBtn = strip.querySelector('.is-solo');
-  const muteBtn = strip.querySelector('.is-mute');
-  soloBtn.addEventListener('click', () => { machine.setSoloed(!machine.soloed); soloBtn.classList.toggle('is-active', machine.soloed); });
-  muteBtn.addEventListener('click', () => { machine.setMuted(!machine.muted); muteBtn.classList.toggle('is-active', machine.muted); });
+  // Makro-Knobs sitzen hinter einem Tap-Button statt dauerhaft sichtbar
+  // neben dem Fader -- bei der jetzt responsiven, schmaleren Spaltenbreite
+  // (3 statt 2 Spuren gleichzeitig sichtbar, s. .channel in app.css) ist
+  // kein Platz mehr für 4 Knobs nebeneinander UND ein ordentlich grosses
+  // X/Y-Pad. buildMacros() bleibt unverändert (dieselben ans echte Ziel
+  // weitergereichten Proxy-Regler) -- openMacroPopup() ruft sie bei JEDEM
+  // Öffnen frisch auf, zeigt bei Drum-Maschinen also immer die gerade
+  // gewählte Spur, nicht einen veralteten Stand vom Sheet-Öffnen. Der
+  // Button-Text zeigt dieselbe Spur schon vorab an (z. B. "••• Kick"),
+  // damit vor dem Antippen klar ist, wessen Regler sich dahinter verbergen.
+  const trackLabel = TRACK_SCOPED_TYPES.has(machine.constructor.meta.type)
+    ? (machine.tracks[machine.selected]?.name ?? '')
+    : '';
+  const macroBtn = document.createElement('button');
+  macroBtn.type = 'button';
+  macroBtn.className = 'macro-toggle';
+  macroBtn.textContent = trackLabel ? `••• ${trackLabel}` : '•••';
+  macroBtn.setAttribute('aria-label', 'Macro knobs');
+  macroBtn.addEventListener('click', () => openMacroPopup(machine, macroBtn));
+  col.appendChild(macroBtn);
 
+  // Fader wächst in den restlichen Platz der Spalte (vorher: feste 142px
+  // neben den Makro-Knobs). Reihenfolge von oben nach unten jetzt: Clips,
+  // Stop, X/Y-Pad, Makro-Button, Fader, Solo/Mute GANZ UNTEN -- vorher
+  // blieb unter dem Pad ungenutzter Leerraum stehen, weil der Fader nur
+  // eine feste Höhe hatte.
+  const faderRow = document.createElement('div');
+  faderRow.className = 'fader-row';
   const fader = document.createElement('x-fader');
   fader.setAttribute('default', '1');
   fader.setAttribute('value', String(machine.level));
   fader.addEventListener('input', (e) => machine.setLevel(e.detail.value));
-  strip.querySelector('.fader-row').appendChild(fader);
-  strip.querySelector('.fader-row').appendChild(buildMacros(machine));
+  faderRow.appendChild(fader);
+  col.appendChild(faderRow);
 
-  col.appendChild(strip);
+  const stripRow = document.createElement('div');
+  stripRow.className = 'strip__row';
+  stripRow.innerHTML = `
+    <button type="button" class="msbtn is-solo${machine.soloed ? ' is-active' : ''}">SOLO</button>
+    <button type="button" class="msbtn is-mute${machine.muted ? ' is-active' : ''}">MUTE</button>
+  `;
+  const soloBtn = stripRow.querySelector('.is-solo');
+  const muteBtn = stripRow.querySelector('.is-mute');
+  soloBtn.addEventListener('click', () => { machine.setSoloed(!machine.soloed); soloBtn.classList.toggle('is-active', machine.soloed); });
+  muteBtn.addEventListener('click', () => { machine.setMuted(!machine.muted); muteBtn.classList.toggle('is-active', machine.muted); });
+  col.appendChild(stripRow);
 
   columnEls.set(machine, { col, clipsEl });
   return col;
+}
+
+/** Makro-Knobs-Popup (Tap auf ".macro-toggle") -- ein einzelnes, modul-
+ *  weites Popup wie clipMenu/xyMenu (nie mehr als eines gleichzeitig
+ *  offen), gleiche Positionierungs-/Einklemm-Logik wie openXYPicker.
+ *  Kein Auto-Dismiss-Timer (anders als openClipDeleteMenu): die Knobs
+ *  darin sollen tatsächlich bedient werden, nicht nur kurz angetippt. */
+let macroPop = null;
+const dismissMacroPop = () => {
+  macroPop?.remove();
+  macroPop = null;
+  document.removeEventListener('pointerdown', onOutsideMacroPop, true);
+};
+const onOutsideMacroPop = (e) => { if (macroPop && !macroPop.contains(e.target)) dismissMacroPop(); };
+
+function openMacroPopup(machine, anchorEl) {
+  dismissMacroPop();
+  macroPop = document.createElement('div');
+  macroPop.className = 'macro-pop';
+
+  const head = document.createElement('div');
+  head.className = 'macro-pop__head';
+  const title = document.createElement('span');
+  title.className = 'macro-pop__title';
+  title.textContent = machine.constructor.meta.name;
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'macro-pop__close';
+  closeBtn.textContent = '✕';
+  closeBtn.addEventListener('click', dismissMacroPop);
+  head.append(title, closeBtn);
+  macroPop.appendChild(head);
+  macroPop.appendChild(buildMacros(machine));
+
+  document.body.appendChild(macroPop);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(
+    window.innerWidth - macroPop.offsetWidth - 8,
+    r.left + r.width / 2 - macroPop.offsetWidth / 2,
+  ));
+  const top = Math.max(8, Math.min(window.innerHeight - macroPop.offsetHeight - 8, r.top - macroPop.offsetHeight - 8));
+  macroPop.style.left = `${left}px`;
+  macroPop.style.top = `${top}px`;
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideMacroPop, true), 0);
 }
 
 /** Baut die komplette Jam-Ansicht neu — beim Öffnen des Sheets aufgerufen

@@ -818,12 +818,18 @@ button {
    dann Solo/Mute + Fader + 4 Makro-Knobs -- wie ein eigener Kanalzug mit
    Clip-Launcher obendrauf. */
 .channel {
-  flex: 0 0 156px;
+  /* Responsiv statt fest 156px: (100% - 2*8px Lücke)/3 -- damit passen
+     immer genau 3 Spuren ins Bild, unabhängig von der Bildschirmbreite
+     (vorher waren bei ~390px nur ~2 vollständig sichtbar, 4 Spalten
+     wären zwar rechnerisch möglich gewesen, machten das X/Y-Pad aber zu
+     schmal zum zuverlässigen Greifen, s. UI-Review). Weitere Maschinen
+     ab der 4. bleiben wie bisher per Scroll-Snap erreichbar. */
+  flex: 0 0 calc(33.333% - 5.333px);
   /* Ohne min-width:0 überschreibt ein Flex-Kind NIE seine Inhalts-Mindest-
      breite, selbst mit flex-shrink:0 -- ein längeres, eigentlich per
      text-overflow:ellipsis gedachtes Label (z. B. ein Achsen-Chip mit
      "TRANSPOSE" statt "DELAY", oder ein noch längeres Insert-Effekt-Label)
-     sprengte dadurch lautlos die feste 156px-Spaltenbreite (bis zu +46px
+     sprengte dadurch lautlos die feste Spaltenbreite (bis zu +46px
      beobachtet), statt abgeschnitten zu werden. */
   min-width: 0;
   scroll-snap-align: start;
@@ -1179,7 +1185,6 @@ button {
   font-size: 11px;
 }
 
-.strip { flex: none; display: flex; flex-direction: column; gap: 6px; }
 .strip__row { display: flex; gap: 4px; }
 .msbtn {
   flex: 1 1 0;
@@ -1197,36 +1202,87 @@ button {
 .msbtn.is-solo.is-active { color: #0f130f; background: linear-gradient(#7fe28e, #4faf5f); }
 .msbtn.is-mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 
-.fader-row { flex: none; height: 142px; display: flex; align-items: stretch; gap: 8px; }
+/* Fader wächst in den restlichen Platz der Spalte (vorher: fixe 142px
+   neben den immer sichtbaren Makro-Knobs) -- Solo/Mute sitzen jetzt als
+   eigene Reihe GANZ UNTEN, nicht mehr über dem Fader (Reihenfolge von
+   oben nach unten: Clips, Stop, X/Y-Pad, Makro-Button, Fader, Solo/Mute
+   -- Nutzer-Feedback: vorher blieb unter dem Pad/Makro-Button ungenutzter
+   Leerraum stehen, weil der Fader nur eine feste Höhe hatte). */
+.fader-row { flex: 1 1 auto; min-height: 50px; display: flex; justify-content: center; padding: 4px 0; }
 .fader-row x-fader { flex: 0 0 44px; }
 
+/* Makro-Knobs-Tap-Button: ersetzt die vorher immer sichtbare, feste
+   Knob-Reihe neben dem Fader -- bei der jetzt responsiven, schmaleren
+   Spaltenbreite (3 statt 2 Spuren gleichzeitig sichtbar, s. .channel)
+   ist kein Platz mehr für 4 Knobs nebeneinander UND ein ordentlich
+   grosses X/Y-Pad. Zeigt bei Drum-Maschinen zusätzlich die aktuell
+   gewählte Spur (z. B. "••• Kick"), damit vor dem Öffnen klar ist,
+   wessen Regler man antippt. */
+.macro-toggle {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border-radius: 6px;
+  background: var(--bg-panel-deep);
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: .04em;
+  touch-action: manipulation;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+}
+.macro-toggle:active { color: var(--lcd-ink); }
+
+/* Popup mit den 4 Makro-Knobs (Tap auf .macro-toggle) -- derselbe
+   Chip-Baukasten wie .xy-picker (Positionierung/Einklemmen ans Viewport,
+   ein einzelnes modulweites Popup). buildMacros() liefert dieselben
+   Proxy-Knobs, die vorher inline standen, unverändert -- nur der
+   Container ist jetzt ein Popup statt ein Dauer-sichtbarer Spaltenteil. */
+.macro-pop {
+  position: fixed;
+  z-index: 60;
+  width: 240px;
+  padding: 10px;
+  border-radius: 12px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+}
+.macro-pop__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.macro-pop__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lcd-ink);
+}
+.macro-pop__close {
+  flex: none;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(255,236,190,.1);
+  color: var(--lcd-ink);
+  font-size: 12px;
+  line-height: 1;
+}
+.macro-pop__close:active { background: rgba(255,236,190,.2); }
+
 .macros {
-  flex: 1 1 auto;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   grid-template-rows: repeat(2, 1fr);
-  gap: 2px 4px;
+  gap: 6px 4px;
   place-items: center;
 }
-.macros x-knob { --knob-size: 30px; gap: 3px; }
-/* Label/Wert dürfen in der schmalen Jam-Spalte NICHT umbrechen: ein
-   zweizeiliger Wert (z. B. "1800 Hz") macht diesen einen Knob höher als
-   seinen Zeilen-Nachbarn -- place-items:center zentriert dann ungleich
-   hohe Zellen, was wie ein "verschobenes" Raster aussieht. Kleinere
-   Schrift statt Umbruch hält alle vier Knobs einer Reihe gleich hoch. */
-.macros x-knob .knob__label { font-size: 8px; letter-spacing: .02em; white-space: nowrap; }
-.macros x-knob .knob__value { font-size: 8px; white-space: nowrap; }
-
-.channel__track {
-  text-align: center;
-  font-size: 10px;
-  color: var(--ink-faint);
-  letter-spacing: .04em;
-  /* Immer gerendert (auch leer, s. jam-view.js#buildColumn) -- feste
-     Höhe statt der Schriftmetrik überlassen, damit ein leeres Element
-     (SubSynth & co.) exakt gleich hoch ist wie eines mit Text (BeatBox/
-     AnalogKit) und .strip dadurch bei jedem Maschinentyp gleich hoch
-     bleibt (sonst verschieben sich Fader/Encoder/XY-Pad zwischen Spalten). */
-  line-height: 12px;
-  min-height: 12px;
-}
+.macros x-knob { --knob-size: 34px; gap: 3px; }
+/* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
+   "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
+   place-items:center zentriert dann ungleich hohe Zellen, was wie ein
+   "verschobenes" Raster aussieht. Kleinere Schrift statt Umbruch hält
+   alle vier Knobs einer Reihe gleich hoch. */
+.macros x-knob .knob__label { font-size: 9px; letter-spacing: .02em; white-space: nowrap; }
+.macros x-knob .knob__value { font-size: 9px; white-space: nowrap; }
