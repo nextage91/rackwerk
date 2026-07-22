@@ -14,7 +14,7 @@
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
-import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
+import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
 import { masterFX } from '../core/fx.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -26,6 +26,7 @@ const INSERT_DISPLAY = {
   drive: { name: 'Drive / Saturation', badge: 'TUBE-DRIVE' },
   filterDelay: { name: 'Filter Delay', badge: 'FLT-DELAY' },
   reverb: { name: 'Algorithmic Reverb', badge: 'FDN-VERB' },
+  resonator: { name: 'Resonator', badge: 'RESO-BANK' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -649,6 +650,15 @@ export class Machine {
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
         `;
+      } else if (insert.type === 'resonator') {
+        bodyHtml = `
+          <div class="seg">
+            ${RESONATOR_INTERVALS.map((t) => `
+              <button type="button" class="seg__btn${insert.params.interval === t.value ? ' is-active' : ''}" data-resonator-interval="${t.value}">${t.label}</button>
+            `).join('')}
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+        `;
       } else {
         bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
       }
@@ -724,6 +734,12 @@ export class Machine {
       for (const btn of row.querySelectorAll('[data-filterdelay-type]')) {
         btn.addEventListener('click', () => {
           this.setInsertParam(id, 'filterType', btn.dataset.filterdelayType);
+          this.#renderInserts();
+        });
+      }
+      for (const btn of row.querySelectorAll('[data-resonator-interval]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'interval', btn.dataset.resonatorInterval);
           this.#renderInserts();
         });
       }

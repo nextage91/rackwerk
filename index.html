@@ -14370,7 +14370,7 @@ return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS } = (() => {
+const { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -14504,6 +14504,44 @@ const HADAMARD_4 = [
   [0.5, 0.5, -0.5, -0.5],
   [0.5, -0.5, -0.5, 0.5],
 ];
+
+/** Frequenzverhältnisse relativ zur Grundtonhöhe je Resonator-"Akkord" --
+ *  bewusst 5 Werte je Set (feste Bank-Grösse N=5 im Resonator-DEFS).
+ *  'harmonic' ist die natürliche Obertonreihe (glockig/saitig), die
+ *  anderen sind gleichstufig temperierte Intervall-Stapel. */
+const RESONATOR_INTERVAL_RATIOS = {
+  harmonic: [1, 2, 3, 4, 5],
+  octaves: [0.5, 1, 2, 4, 8],
+  fifths: [1, 1.5, 2, 3, 4],
+  minor: [1, Math.pow(2, 3 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
+  major: [1, Math.pow(2, 4 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
+};
+
+/** Resonance-Regler (0..1) auf eine Bandpass-Güte (Q) abbilden. Anders als
+ *  bei Lowpass/Highpass ist ein hoher Q hier UNBEDENKLICH -- Web Audios
+ *  Bandpass hat laut Spezifikation IMMER exakt 1.0 (0dB) Spitzenpegel GENAU
+ *  auf der Mittenfrequenz, für JEDEN Q-Wert (gemessen bis Q=1000, kein
+ *  Überschwingen möglich, s. DEFS.resonator). Hoher Q bedeutet hier nur
+ *  schmalere Bandbreite = längeres Nachklingen (gemessen: Q=1 klingt ~5ms
+ *  nach, Q=400 ~500ms -- exponentiell steigender Zusammenhang, daher log-
+ *  artige statt lineare Kurve, damit der Regler über den ganzen Bereich
+ *  gleichmässig "greift"). */
+function resonanceToQ(resonance) {
+  return 1 * Math.pow(400, resonance); // 1 (kurzes "Blup") .. 400 (langes Klingeln/Sustain)
+}
+
+/** Pegelausgleich für den Resonator: ein schmalbandigerer (höher-Q)
+ *  Bandpass fängt bei einer kurzen/breitbandigen Anregung nur einen
+ *  entsprechend kleineren Ausschnitt der Energie ein (gemessen: Spitzenpegel
+ *  fällt ~1/Q). sqrt(Q) gleicht das nur teilweise aus -- bewusst nicht
+ *  voll (1/Q komplett kompensieren würde niedrige Resonance-Werte unnötig
+ *  laut machen), nur genug, damit "mehr Resonance" sich nach länger/
+ *  dramatischer nachklingend anfühlt statt nach leiser. Auf Q=1 (kürzeste
+ *  Klingelzeit) normiert, damit der Referenzpegel bei Resonance=0 unverändert
+ *  bleibt. */
+function makeupFor(q) {
+  return Math.sqrt(q);
+}
 
 /** Feste Schwelle statt Regler — wie beim 1176-Vorbild: kein Threshold-
  *  Knopf, stattdessen treibt Input den Pegel in einen fest eingestellten
@@ -14819,6 +14857,112 @@ const DEFS = {
       };
     },
   },
+  resonator: {
+    name: 'Resonator',
+    // Bewusst KEIN Delay-Feedback-Design wie Filter Delay/Reverb (beide
+    // haben uns schon eine Instabilität eingebrockt) -- stattdessen eine
+    // Bank paralleler resonanter Bandpass-Filter (BiquadFilterNode), auf
+    // Intervalle einer Grundtonhöhe gestimmt. Ein Bandpass hat laut
+    // Web-Audio-Spezifikation IMMER konstanten 0dB-Spitzenpegel, egal wie
+    // hoch Q gesetzt wird (kein Überschwingen wie bei Lowpass/Highpass,
+    // s. Kommentare bei Filter Delay) -- UND jeder Filter ist ein
+    // eigenständiger, für sich genommen stets stabiler 2-poliger IIR
+    // (kein externes Feedback über mehrere Nodes/Iterationen wie beim
+    // FDN-Reverb). Klingt wie ein angeschlagenes Glas/eine Saite, die auf
+    // die eingehende Frequenz mitschwingt -- klassischer "Resonator"-
+    // Pedal-Sound.
+    defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic' },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const N = 5;
+      let ratios = RESONATOR_INTERVAL_RATIOS[p.interval] ?? RESONATOR_INTERVAL_RATIOS.harmonic;
+      let pitch = p.pitch;
+      const q = resonanceToQ(p.resonance);
+
+      const bands = [];
+      for (let i = 0; i < N; i++) {
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = pitch * ratios[i];
+        bp.Q.value = q;
+        input.connect(bp);
+        bands.push(bp);
+      }
+
+      // Pegel-Kompensation: zwei Effekte gegenläufig ausgleichen. (1) N
+      // parallele Bandpässe wären sonst lauter als der Dry-Pfad (1/N).
+      // (2) Ein schmalbandigerer (höher-Q) Filter fängt bei einer kurzen/
+      // breitbandigen Anregung (Drum-Transiente) nur einen ENTSPRECHEND
+      // kleineren Ausschnitt der Eingangsenergie ein -- gemessen fällt der
+      // Spitzenpegel etwa mit 1/Q (Resonance ganz auf: über 400x leiser
+      // als Resonance ganz zu). Ohne Ausgleich würde "mehr Resonance"
+      // sich anfühlen wie "leiser" statt "länger/dramatischer nachklingend"
+      // -- makeupFor(q) gleicht das mit sqrt(Q) grob aus (voller 1/Q-
+      // Ausgleich würde die tiefen Resonance-Werte dagegen unnötig laut
+      // machen).
+      const sum = ctx.createGain();
+      sum.gain.value = makeupFor(q) / N;
+      for (const bp of bands) bp.connect(sum);
+
+      // limiter: makeupFor() ist auf eine KURZE/breitbandige Anregung
+      // kalibriert (Drum-Transiente) -- bei einer GEHALTENEN Note exakt auf
+      // der Resonanzfrequenz (z. B. ein Bass/Pad-Synth durch den Resonator)
+      // erreicht ein Bandpass dagegen unabhängig von Q seinen vollen,
+      // eingeschwungenen 0dB-Spitzenpegel (Definition laut Web-Audio-Spec)
+      // -- die transienten-kalibrierte Extra-Verstärkung von makeupFor()
+      // würde DANN klar übersteuern (gemessen: bis über 3x Vollausschlag
+      // bei hoher Resonance). Ein schneller Limiter fängt genau diesen Fall
+      // ab, ohne die (ohnehin leisen) Transienten hörbar zu beschneiden.
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -3;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.15;
+      sum.connect(limiter);
+
+      const damp = makeOnePoleLowpass(ctx, p.damping);
+      limiter.connect(damp.input);
+
+      input.connect(dry).connect(output);
+      damp.output.connect(wet).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'pitch') {
+            pitch = v;
+            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i], t, 0.02);
+          } else if (key === 'resonance') {
+            const newQ = resonanceToQ(v);
+            for (const bp of bands) bp.Q.setTargetAtTime(newQ, t, 0.02);
+            sum.gain.setTargetAtTime(makeupFor(newQ) / N, t, 0.02);
+          } else if (key === 'damping') {
+            damp.setFreq(v, t, 0.02);
+          } else if (key === 'interval') {
+            ratios = RESONATOR_INTERVAL_RATIOS[v] ?? RESONATOR_INTERVAL_RATIOS.harmonic;
+            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i], t, 0.03);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
+          limiter.disconnect();
+          damp.dispose();
+          for (const bp of bands) bp.disconnect();
+        },
+      };
+    },
+  },
 };
 
 const INSERT_TYPES = Object.keys(DEFS);
@@ -14834,6 +14978,7 @@ const INSERT_COLORS = {
   drive: '#e8643f',  // Sättigung: warmes Glühen
   filterDelay: '#6f9ceb', // Delay: kühles Blau, wie ein Tape-/Digital-Delay-Rack
   reverb: '#a888e0', // Reverb: Violett, wie ein Hall-/Space-Rack
+  resonator: '#e0c840', // Resonator: Messing/Glockenspiel-Gelb, wie angeschlagenes Metall
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -14894,6 +15039,12 @@ const UI_PARAMS = {
     { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
+  resonator: [
+    { key: 'pitch', label: 'Pitch', min: 55, max: 880, curve: 'log', unit: 'Hz' },
+    { key: 'resonance', label: 'Resonance', min: 0, max: 1, unit: '' },
+    { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
 };
 
 /** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
@@ -14908,6 +15059,16 @@ const FILTER_DELAY_TYPES = [
   { value: 'lowpass', label: 'Low Pass' },
   { value: 'highpass', label: 'High Pass' },
   { value: 'bandpass', label: 'Band Pass' },
+];
+
+/** Resonator-Intervall-Set (welche Töne relativ zur Grundtonhöhe
+ *  mitklingen) ist ebenfalls ein Enum, kein Knob. */
+const RESONATOR_INTERVALS = [
+  { value: 'harmonic', label: 'Harmonic' },
+  { value: 'octaves', label: 'Octaves' },
+  { value: 'fifths', label: 'Fifths' },
+  { value: 'minor', label: 'Minor' },
+  { value: 'major', label: 'Major' },
 ];
 
 let nextInsertId = 1;
@@ -14984,7 +15145,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, INSERT_COLORS, RATIO_MODE_BUTTONS };
+return { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS };
 })();
 
 /* ===== js/core/transport.js ===== */
@@ -16470,6 +16631,7 @@ const INSERT_DISPLAY = {
   drive: { name: 'Drive / Saturation', badge: 'TUBE-DRIVE' },
   filterDelay: { name: 'Filter Delay', badge: 'FLT-DELAY' },
   reverb: { name: 'Algorithmic Reverb', badge: 'FDN-VERB' },
+  resonator: { name: 'Resonator', badge: 'RESO-BANK' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -17093,6 +17255,15 @@ class Machine {
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
         `;
+      } else if (insert.type === 'resonator') {
+        bodyHtml = `
+          <div class="seg">
+            ${RESONATOR_INTERVALS.map((t) => `
+              <button type="button" class="seg__btn${insert.params.interval === t.value ? ' is-active' : ''}" data-resonator-interval="${t.value}">${t.label}</button>
+            `).join('')}
+          </div>
+          <div class="insert-row__params">${knobsHtml}</div>
+        `;
       } else {
         bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
       }
@@ -17168,6 +17339,12 @@ class Machine {
       for (const btn of row.querySelectorAll('[data-filterdelay-type]')) {
         btn.addEventListener('click', () => {
           this.setInsertParam(id, 'filterType', btn.dataset.filterdelayType);
+          this.#renderInserts();
+        });
+      }
+      for (const btn of row.querySelectorAll('[data-resonator-interval]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'interval', btn.dataset.resonatorInterval);
           this.#renderInserts();
         });
       }
