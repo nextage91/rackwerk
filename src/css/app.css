@@ -950,6 +950,126 @@ button {
   white-space: nowrap;
 }
 .xy-picker__btn:active { background: rgba(255,236,190,.16); }
+.xy-picker__btn.is-disabled {
+  /* Schon auf der anderen Achse gemappt -- sichtbar, aber nicht wählbar
+     (verhindert versehentliches Doppel-Mapping desselben Parameters). */
+  opacity: .35;
+  pointer-events: none;
+}
+.xy-picker__subhead {
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 4px 6px 0;
+}
+/* Eine Zeile in der "Mapped"-Liste: Name+Range links, Range-/Entfernen-
+   Buttons rechts. */
+.xy-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 2px 4px 2px 12px;
+  border-radius: 8px;
+  background: rgba(255,236,190,.06);
+}
+.xy-picker__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.xy-picker__row-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lcd-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xy-picker__row-range {
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.xy-picker__row-btn {
+  flex: none;
+  min-width: 36px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: rgba(255,236,190,.1);
+  color: var(--lcd-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+.xy-picker__row-btn:active { background: rgba(255,236,190,.2); }
+.xy-picker__row-btn--danger { color: #ff8a8a; }
+
+/* Range-Editor-Kopfzeile mit Zurück-Pfeil zur Liste. */
+.xy-picker__head--nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lcd-ink);
+}
+.xy-picker__back {
+  flex: none;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(255,236,190,.1);
+  color: var(--lcd-ink);
+  font-size: 16px;
+  line-height: 1;
+}
+.xy-picker__back:active { background: rgba(255,236,190,.2); }
+
+/* Zwei-Griff-Range-Slider (Range-Editor eines gestackten Parameters). */
+.xy-range { padding: 8px 10px 4px; }
+.xy-range__readout {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lcd-ink);
+  margin-bottom: 10px;
+}
+.xy-range__track {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,236,190,.15);
+  margin: 14px 8px 10px;
+  touch-action: none;
+}
+.xy-range__fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  border-radius: 2px;
+  background: var(--ch-color, var(--lcd-ink));
+}
+.xy-range__thumb {
+  position: absolute;
+  top: 50%;
+  width: 18px; height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  background: var(--ch-color, var(--lcd-ink));
+  box-shadow: 0 0 6px var(--ch-glow, var(--lcd-glow)), 0 1px 0 var(--edge-light) inset;
+  touch-action: none;
+}
+.xy-range__reset {
+  width: 100%;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
 
 .strip { flex: none; display: flex; flex-direction: column; gap: 6px; }
 .strip__row { display: flex; gap: 4px; }

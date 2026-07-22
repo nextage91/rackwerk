@@ -116,20 +116,58 @@ function valueFromNorm(norm, meta) {
 
 /* ---------- X/Y-Pad-Zuordnung (pro Maschine, nicht persistiert -- wie
  * jamState: eine Performance-Einstellung fürs aktuelle Jammen, kein
- * Projekt-Zustand). Default deckt sich mit dem alten, festen Verhalten
- * (Delay/Reverb), damit sich fürs bestehende Jam-Setup nichts ändert,
- * solange niemand die Achse umbelegt. ---------- */
+ * Projekt-Zustand). Jede Achse trägt jetzt eine LISTE von Einträgen
+ * { key, from, to } statt eines einzelnen Schlüssels -- "stacken" heisst
+ * einfach: mehr als ein Eintrag in der Liste, jeder bekommt beim Ziehen
+ * dieselbe normalisierte Pad-Position, nur auf sein eigenes [from,to]
+ * statt auf sein volles [min,max] abgebildet (Regler-Kurve, s.
+ * normFromValue/valueFromNorm oben). from/to defaulten auf den vollen
+ * Regler-Bereich (from=min, to=max) -- deckt sich exakt mit dem alten,
+ * unbeschränkten Verhalten, bis jemand die Range aktiv einengt. from>to
+ * ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die Zuordnung
+ * einfach um (Pad nach rechts -> Wert sinkt), ganz ohne Sonderfall in der
+ * Mathematik. Default deckt sich mit dem alten, festen Verhalten (Delay/
+ * Reverb, je 1 Eintrag über den vollen 0..1-Bereich). */
 const xyState = new WeakMap();
 function xyStateFor(machine) {
   let st = xyState.get(machine);
-  if (!st) { st = { xKey: 'sendDelay', yKey: 'sendReverb' }; xyState.set(machine, st); }
+  if (!st) {
+    st = {
+      x: [{ key: 'sendDelay', from: 0, to: 1 }],
+      y: [{ key: 'sendReverb', from: 0, to: 1 }],
+    };
+    xyState.set(machine, st);
+  }
   return st;
 }
+const otherAxis = (axis) => (axis === 'x' ? 'y' : 'x');
 
-/** Achsen-Wahlmenü: derselbe Popup-Baukasten wie openClipDeleteMenu (ein
- *  einzelnes, modulweites Chip, damit nie zwei gleichzeitig offen stehen),
- *  aber mit einer ganzen Options-Liste statt eines einzelnen Buttons. */
+/** Kurztext für eine Range-Zeile in der Mapped-Liste, z. B. "500 Hz –
+ *  3000 Hz". Ganzzahlig gerundet ausser bei kleinen Bereichen (z. B. Tune
+ *  0.5..2, trotz Log-Kurve, oder Resonance 0..1), wo zwei Nachkommastellen
+ *  den Unterschied zwischen den Griffen überhaupt noch erkennbar machen --
+ *  bewusst NICHT an der Kurve (log/lin) festgemacht: Tune ist log-kurvig,
+ *  aber klein-zahlig, Cutoff ist ebenfalls log-kurvig, aber gross-zahlig.
+ *  Die tatsächliche Grössenordnung des Werts entscheidet, nicht die Kurve. */
+function formatRangeText(from, to, meta) {
+  const fmt = (v) => {
+    const n = Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 100) / 100;
+    return `${n}${meta.unit ? ' ' + meta.unit : ''}`;
+  };
+  return `${fmt(from)} – ${fmt(to)}`;
+}
+
+/** Achsen-Verwaltungsmenü: derselbe Popup-Baukasten wie openClipDeleteMenu
+ *  (ein einzelnes, modulweites Chip, damit nie zwei gleichzeitig offen
+ *  stehen), aber mit zwei Unteransichten INNERHALB desselben Popups
+ *  (xyMenuView) statt eines einmaligen Auswahl-Klicks: eine Liste
+ *  (gestackte Parameter + Hinzufügen-Liste) und ein Range-Editor pro
+ *  Parameter, zwischen denen ein Zurück-Pfeil wechselt -- so bleibt
+ *  Stacken/Entfernen/Range-Einstellen alles in derselben, an der
+ *  Achsen-Beschriftung verankerten Fläche statt mehrerer Popups
+ *  übereinander. */
 let xyMenu = null;
+let xyMenuView = { mode: 'list' };
 const dismissXYMenu = () => {
   xyMenu?.remove();
   xyMenu = null;
@@ -137,22 +175,7 @@ const dismissXYMenu = () => {
 };
 const onOutsideXYMenu = (e) => { if (xyMenu && !xyMenu.contains(e.target)) dismissXYMenu(); };
 
-function openXYPicker(machine, axisLabel, anchorEl, onPick) {
-  dismissXYMenu();
-  xyMenu = document.createElement('div');
-  xyMenu.className = 'xy-picker';
-  xyMenu.innerHTML = `<div class="xy-picker__head">${axisLabel} axis</div>`;
-  for (const { key, label } of availableXYParams(machine)) {
-    const btn = document.createElement('button');
-    btn.className = 'xy-picker__btn';
-    btn.textContent = label;
-    btn.addEventListener('click', () => {
-      onPick(key);
-      dismissXYMenu();
-    });
-    xyMenu.appendChild(btn);
-  }
-  document.body.appendChild(xyMenu);
+function positionXYMenu(anchorEl) {
   const r = anchorEl.getBoundingClientRect();
   const left = Math.max(8, Math.min(
     window.innerWidth - xyMenu.offsetWidth - 8,
@@ -161,7 +184,198 @@ function openXYPicker(machine, axisLabel, anchorEl, onPick) {
   const top = Math.max(8, Math.min(window.innerHeight - xyMenu.offsetHeight - 8, r.top - xyMenu.offsetHeight - 8));
   xyMenu.style.left = `${left}px`;
   xyMenu.style.top = `${top}px`;
+}
+
+function openXYPicker(machine, axis, anchorEl, onChange) {
+  dismissXYMenu();
+  xyMenuView = { mode: 'list' };
+  xyMenu = document.createElement('div');
+  xyMenu.className = 'xy-picker';
+  document.body.appendChild(xyMenu);
+  renderXYMenu(machine, axis, anchorEl, onChange);
   setTimeout(() => document.addEventListener('pointerdown', onOutsideXYMenu, true), 0);
+}
+
+function renderXYMenu(machine, axis, anchorEl, onChange) {
+  xyMenu.innerHTML = '';
+  if (xyMenuView.mode === 'range') {
+    renderXYRangeEditor(machine, axis, anchorEl, onChange, xyMenuView.key);
+  } else {
+    renderXYList(machine, axis, anchorEl, onChange);
+  }
+  // Inhalt (und damit die Popup-Grösse) ändert sich mit jeder Aktion --
+  // Position nach JEDEM Rendern neu einklemmen, nicht nur beim Öffnen.
+  positionXYMenu(anchorEl);
+}
+
+function renderXYList(machine, axis, anchorEl, onChange) {
+  const st = xyStateFor(machine);
+  const entries = st[axis];
+  const mappedKeys = new Set(entries.map((e) => e.key));
+  const otherKeys = new Set(st[otherAxis(axis)].map((e) => e.key));
+
+  const head = document.createElement('div');
+  head.className = 'xy-picker__head';
+  head.textContent = `${axis.toUpperCase()} axis`;
+  xyMenu.appendChild(head);
+
+  if (entries.length) {
+    const mappedHead = document.createElement('div');
+    mappedHead.className = 'xy-picker__subhead';
+    mappedHead.textContent = 'Mapped';
+    xyMenu.appendChild(mappedHead);
+
+    for (const entry of entries) {
+      const meta = readKnobMeta(machine, entry.key);
+      const row = document.createElement('div');
+      row.className = 'xy-picker__row';
+      row.innerHTML = `
+        <span class="xy-picker__row-main">
+          <span class="xy-picker__row-label">${meta?.label ?? entry.key}</span>
+          <span class="xy-picker__row-range">${meta ? formatRangeText(entry.from, entry.to, meta) : ''}</span>
+        </span>
+        <button type="button" class="xy-picker__row-btn" data-action="range">Range</button>
+        <button type="button" class="xy-picker__row-btn xy-picker__row-btn--danger" data-action="remove">✕</button>
+      `;
+      row.querySelector('[data-action="range"]').addEventListener('click', () => {
+        xyMenuView = { mode: 'range', key: entry.key };
+        renderXYMenu(machine, axis, anchorEl, onChange);
+      });
+      row.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        st[axis] = entries.filter((e) => e.key !== entry.key);
+        onChange();
+        renderXYMenu(machine, axis, anchorEl, onChange);
+      });
+      xyMenu.appendChild(row);
+    }
+  }
+
+  const addHead = document.createElement('div');
+  addHead.className = 'xy-picker__subhead';
+  addHead.textContent = entries.length ? 'Add another' : 'Add';
+  xyMenu.appendChild(addHead);
+
+  for (const { key, label } of availableXYParams(machine)) {
+    if (mappedKeys.has(key)) continue; // schon auf DIESER Achse -- nicht doppelt anbieten
+    const btn = document.createElement('button');
+    btn.className = 'xy-picker__btn';
+    btn.textContent = label;
+    if (otherKeys.has(key)) {
+      // Ausgegraut statt versteckt: sichtbar bleibt, DASS es diesen
+      // Parameter gibt, nur eben schon auf der anderen Achse belegt --
+      // verhindert versehentliches Doppel-Mapping (s. Nutzer-Anfrage),
+      // ohne die Liste stumm zu verkürzen.
+      btn.disabled = true;
+      btn.classList.add('is-disabled');
+    } else {
+      btn.addEventListener('click', () => {
+        const meta = readKnobMeta(machine, key);
+        st[axis] = [...entries, { key, from: parseFloat(meta?.min ?? '0'), to: parseFloat(meta?.max ?? '1') }];
+        onChange();
+        renderXYMenu(machine, axis, anchorEl, onChange);
+      });
+    }
+    xyMenu.appendChild(btn);
+  }
+}
+
+/** Zwei-Griff-Range-Slider für einen einzelnen gestackten Parameter --
+ *  fühlt sich fürs Eingrenzen eines Ausschnitts intuitiver an als zwei
+ *  einzelne Drehregler (eher wie ein Foto-Zuschnitt/Preisfilter). Beide
+ *  Griffe nutzen dieselbe normFromValue/valueFromNorm-Kurve wie das Pad
+ *  selbst, nur bezogen auf den VOLLEN Regler-Bereich (nicht die aktuelle
+ *  Einschränkung) -- der Track zeigt also immer den kompletten möglichen
+ *  Bereich, die Füllung dazwischen die aktuell gewählte Einschränkung. */
+function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
+  const st = xyStateFor(machine);
+  const entry = st[axis].find((e) => e.key === key);
+  const meta = readKnobMeta(machine, key);
+  if (!entry || !meta) { xyMenuView = { mode: 'list' }; renderXYList(machine, axis, anchorEl, onChange); return; }
+
+  const head = document.createElement('div');
+  head.className = 'xy-picker__head xy-picker__head--nav';
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'xy-picker__back';
+  backBtn.textContent = '‹';
+  backBtn.addEventListener('click', () => {
+    xyMenuView = { mode: 'list' };
+    renderXYMenu(machine, axis, anchorEl, onChange);
+  });
+  const headLabel = document.createElement('span');
+  headLabel.textContent = `${meta.label} range`;
+  head.append(backBtn, headLabel);
+  xyMenu.appendChild(head);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'xy-range';
+  wrap.innerHTML = `
+    <div class="xy-range__readout">
+      <span class="xy-range__val xy-range__val--from"></span>
+      <span class="xy-range__val xy-range__val--to"></span>
+    </div>
+    <div class="xy-range__track">
+      <div class="xy-range__fill"></div>
+      <div class="xy-range__thumb xy-range__thumb--from"></div>
+      <div class="xy-range__thumb xy-range__thumb--to"></div>
+    </div>
+  `;
+  xyMenu.appendChild(wrap);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'xy-picker__btn xy-range__reset';
+  resetBtn.textContent = 'Reset to full range';
+  resetBtn.addEventListener('click', () => {
+    entry.from = parseFloat(meta.min);
+    entry.to = parseFloat(meta.max);
+    onChange();
+    syncThumbs();
+  });
+  xyMenu.appendChild(resetBtn);
+
+  const track = wrap.querySelector('.xy-range__track');
+  const fill = wrap.querySelector('.xy-range__fill');
+  const fromThumb = wrap.querySelector('.xy-range__thumb--from');
+  const toThumb = wrap.querySelector('.xy-range__thumb--to');
+  const fromVal = wrap.querySelector('.xy-range__val--from');
+  const toVal = wrap.querySelector('.xy-range__val--to');
+
+  function syncThumbs() {
+    const fromN = Math.min(1, Math.max(0, normFromValue(entry.from, meta)));
+    const toN = Math.min(1, Math.max(0, normFromValue(entry.to, meta)));
+    fromThumb.style.left = `${fromN * 100}%`;
+    toThumb.style.left = `${toN * 100}%`;
+    const lo = Math.min(fromN, toN), hi = Math.max(fromN, toN);
+    fill.style.left = `${lo * 100}%`;
+    fill.style.width = `${(hi - lo) * 100}%`;
+    const oneLine = (v) => (Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 100) / 100);
+    fromVal.textContent = `${oneLine(entry.from)}${meta.unit ? ' ' + meta.unit : ''}`;
+    toVal.textContent = `${oneLine(entry.to)}${meta.unit ? ' ' + meta.unit : ''}`;
+  }
+  syncThumbs();
+
+  function makeThumbDraggable(thumbEl, which) {
+    let dragging = false;
+    thumbEl.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      thumbEl.setPointerCapture(e.pointerId);
+      e.stopPropagation();
+    });
+    thumbEl.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const r = track.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      entry[which] = valueFromNorm(frac, meta);
+      onChange();
+      syncThumbs();
+    });
+    const end = () => { dragging = false; };
+    thumbEl.addEventListener('pointerup', end);
+    thumbEl.addEventListener('pointercancel', end);
+  }
+  makeThumbDraggable(fromThumb, 'from');
+  makeThumbDraggable(toThumb, 'to');
 }
 
 /* ---------- Jam-Wiedergabezustand (pro Maschine, nicht persistiert) ---------- */
@@ -435,15 +649,17 @@ function makeReorderable(clipsEl, machine) {
   clipsEl.addEventListener('pointercancel', release);
 }
 
-/** Frei belegbares X/Y-Pad: jede Achse ist auf einen beliebigen data-p-
- *  Knob der Maschine gemappt (Tippen auf das Achsen-Label öffnet den
- *  Picker, s. openXYPicker). Die Pad-Mitte entspricht IMMER der Mitte des
- *  aktuell zugeordneten Reglerbereichs (normFromValue/valueFromNorm,
- *  dieselbe Kurven-Mathematik wie <x-knob>) -- bei einem symmetrischen
- *  Bereich wie Transpose (-24..24) landet der Neutralwert dadurch exakt
+/** Frei belegbares X/Y-Pad: jede Achse trägt eine LISTE gestackter data-p-
+ *  Knobs, jeweils mit einer eigenen [from,to]-Einschränkung (Tippen auf
+ *  das Achsen-Label öffnet die Verwaltung, s. openXYPicker). Die
+ *  Pad-Mitte entspricht dem Mittelwert des ERSTEN gestackten Eintrags
+ *  innerhalb SEINES [from,to] (normFromValue/valueFromNorm, dieselbe
+ *  Kurven-Mathematik wie <x-knob>) -- bei einem symmetrischen Bereich wie
+ *  Transpose (-24..24), ungekürzt, landet der Neutralwert dadurch exakt
  *  in der Pad-Mitte und Ziehen nach links ergibt einen negativen Wert,
- *  ganz ohne eigene bipolare Sonderbehandlung. Default bleibt Delay/
- *  Reverb (deckt sich mit dem alten, festen Verhalten). */
+ *  ganz ohne eigene bipolare Sonderbehandlung. Default bleibt je 1
+ *  Eintrag Delay/Reverb über den vollen Bereich (deckt sich mit dem
+ *  alten, festen Verhalten). */
 function buildXYPad(machine) {
   const wrap = document.createElement('div');
   wrap.className = 'xy-wrap';
@@ -461,20 +677,48 @@ function buildXYPad(machine) {
   const yBtn = wrap.querySelector('.xypad__axis--y');
   const st = xyStateFor(machine);
 
+  const axisLabel = (axis) => {
+    const entries = st[axis];
+    if (!entries.length) return axis === 'x' ? '— →' : '↑ —';
+    const first = (readKnobMeta(machine, entries[0].key)?.label ?? entries[0].key).toUpperCase();
+    const suffix = entries.length > 1 ? ` +${entries.length - 1}` : '';
+    return axis === 'x' ? `${first}${suffix} →` : `↑ ${first}${suffix}`;
+  };
   const syncLabels = () => {
-    xBtn.textContent = `${(readKnobMeta(machine, st.xKey)?.label ?? st.xKey).toUpperCase()} →`;
-    yBtn.textContent = `↑ ${(readKnobMeta(machine, st.yKey)?.label ?? st.yKey).toUpperCase()}`;
+    xBtn.textContent = axisLabel('x');
+    yBtn.textContent = axisLabel('y');
+  };
+  // Normalisierte Pad-Position einer Achse: der ERSTE gestackte Eintrag
+  // ist der visuelle "Anker" -- bei mehreren gestackten Parametern mit
+  // ggf. unterschiedlichem aktuellem Stand liesse sich sonst kein
+  // einzelner sinnvoller Punkt mehr zeigen.
+  const axisNorm = (axis) => {
+    const entry = st[axis][0];
+    if (!entry) return 0.5;
+    const meta = readKnobMeta(machine, entry.key);
+    if (!meta) return 0.5;
+    return normFromValue(parseFloat(meta.value), { ...meta, min: String(entry.from), max: String(entry.to) });
   };
   const syncDot = () => {
-    const xMeta = readKnobMeta(machine, st.xKey);
-    const yMeta = readKnobMeta(machine, st.yKey);
-    const x = xMeta ? normFromValue(parseFloat(xMeta.value), xMeta) : 0.5;
-    const y = yMeta ? normFromValue(parseFloat(yMeta.value), yMeta) : 0.5;
-    dot.style.left = `${Math.min(1, Math.max(0, x)) * 100}%`;
-    dot.style.top = `${(1 - Math.min(1, Math.max(0, y))) * 100}%`;
+    const x = Math.min(1, Math.max(0, axisNorm('x')));
+    const y = Math.min(1, Math.max(0, axisNorm('y')));
+    dot.style.left = `${x * 100}%`;
+    dot.style.top = `${(1 - y) * 100}%`;
   };
   syncLabels();
   syncDot();
+
+  // Wendet die normalisierte Pad-Position auf ALLE gestackten Einträge
+  // einer Achse an -- jeder auf sein eigenes [from,to] bezogen, nicht auf
+  // sein volles [min,max] (genau das ist die Bereichs-Einschränkung).
+  const applyAxis = (axis, norm) => {
+    for (const entry of st[axis]) {
+      const meta = readKnobMeta(machine, entry.key);
+      if (!meta) continue;
+      const rangeMeta = { ...meta, min: String(entry.from), max: String(entry.to) };
+      nudgeParam(meta.knob, valueFromNorm(norm, rangeMeta));
+    }
+  };
 
   let dragging = false;
   // Startet ein Pointerdown auf/nahe einem Achsen-Label (deren Tap-Fläche
@@ -498,10 +742,8 @@ function buildXYPad(machine) {
     const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
     dot.style.left = `${x * 100}%`;
     dot.style.top = `${y * 100}%`;
-    const xMeta = readKnobMeta(machine, st.xKey);
-    const yMeta = readKnobMeta(machine, st.yKey);
-    if (xMeta) nudgeParam(xMeta.knob, valueFromNorm(x, xMeta));
-    if (yMeta) nudgeParam(yMeta.knob, valueFromNorm(1 - y, yMeta));
+    applyAxis('x', x);
+    applyAxis('y', 1 - y);
   };
   pad.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.xypad__axis')) {
@@ -525,16 +767,9 @@ function buildXYPad(machine) {
   pad.addEventListener('pointerup', releasePad);
   pad.addEventListener('pointercancel', releasePad);
 
-  xBtn.addEventListener('click', () => openXYPicker(machine, 'X', xBtn, (key) => {
-    st.xKey = key;
-    syncLabels();
-    syncDot();
-  }));
-  yBtn.addEventListener('click', () => openXYPicker(machine, 'Y', yBtn, (key) => {
-    st.yKey = key;
-    syncLabels();
-    syncDot();
-  }));
+  const onAxisChange = () => { syncLabels(); syncDot(); };
+  xBtn.addEventListener('click', () => openXYPicker(machine, 'x', xBtn, onAxisChange));
+  yBtn.addEventListener('click', () => openXYPicker(machine, 'y', yBtn, onAxisChange));
 
   return wrap;
 }
