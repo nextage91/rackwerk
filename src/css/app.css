@@ -860,11 +860,37 @@ button {
 
 /* Feste Höhe statt flex:1 -- sonst frisst das Pad den ganzen restlichen
    Platz und drängt Solo/Mute/Fader/Makros aus der Spalte (schon einmal
-   passiert, s. Verlauf). */
-.xy-wrap { flex: none; height: 108px; }
+   passiert, s. Verlauf). Die Achsen-Buttons sitzen als eigene Reihe ÜBER
+   dem Pad (statt als Ecken-Labels IM Pad) -- das Pad selbst schrumpft
+   entsprechend, die Spalte behält ihr Gesamt-Höhenbudget. */
+.xy-wrap { flex: none; height: 108px; display: flex; flex-direction: column; gap: 4px; }
+.xy-axes { flex: 0 0 auto; display: flex; gap: 4px; }
+.xy-axis-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  font-size: 9px;
+  letter-spacing: .03em;
+  padding: 5px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,236,190,.18);
+  background: var(--bg-panel-deep);
+  color: var(--ink-faint);
+  touch-action: manipulation;
+}
+.xy-axis-btn:active { color: var(--lcd-ink); border-color: rgba(255,236,190,.4); }
+.xy-axis-btn__tag {
+  font-weight: 700;
+  color: var(--ch-color, var(--lcd-ink));
+  opacity: .85;
+}
+.xy-axis-btn__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xy-axis-btn__chev { font-size: 8px; opacity: .55; }
 .xypad {
   position: relative;
-  width: 100%; height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
   border-radius: var(--r-ctl);
   background: var(--bg-panel-deep);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
@@ -899,22 +925,6 @@ button {
   box-shadow: 0 0 10px var(--ch-glow, var(--lcd-glow));
   pointer-events: none;
 }
-.xypad__axis {
-  position: absolute;
-  font-size: 8px;
-  letter-spacing: .1em;
-  color: var(--ink-faint);
-  background: none;
-  border: none;
-  padding: 6px;
-  margin: -6px;
-  line-height: 1;
-  touch-action: manipulation;
-}
-.xypad__axis:active { color: var(--lcd-ink); }
-.xypad__axis--x { right: 4px; bottom: 3px; }
-.xypad__axis--y { left: 4px; top: 3px; }
-
 /* Achsen-Wahlmenü (Tippen auf ein Achsen-Label im X/Y-Pad) -- derselbe
    Chip-Baukasten wie .pat-chip, aber als umbrechende Liste statt einer
    Reihe (Anzahl der Optionen variiert stark je Maschinentyp). */
