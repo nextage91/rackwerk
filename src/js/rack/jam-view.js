@@ -664,29 +664,35 @@ function buildXYPad(machine) {
   const wrap = document.createElement('div');
   wrap.className = 'xy-wrap';
   wrap.innerHTML = `
+    <div class="xy-axes">
+      <button type="button" class="xy-axis-btn xy-axis-btn--x">
+        <span class="xy-axis-btn__tag">X</span><span class="xy-axis-btn__label"></span><span class="xy-axis-btn__chev">⌄</span>
+      </button>
+      <button type="button" class="xy-axis-btn xy-axis-btn--y">
+        <span class="xy-axis-btn__tag">Y</span><span class="xy-axis-btn__label"></span><span class="xy-axis-btn__chev">⌄</span>
+      </button>
+    </div>
     <div class="xypad">
       <div class="xypad__grid"></div>
       <div class="xypad__dot"></div>
-      <button type="button" class="xypad__axis xypad__axis--x"></button>
-      <button type="button" class="xypad__axis xypad__axis--y"></button>
     </div>
   `;
   const pad = wrap.querySelector('.xypad');
   const dot = pad.querySelector('.xypad__dot');
-  const xBtn = wrap.querySelector('.xypad__axis--x');
-  const yBtn = wrap.querySelector('.xypad__axis--y');
+  const xBtn = wrap.querySelector('.xy-axis-btn--x');
+  const yBtn = wrap.querySelector('.xy-axis-btn--y');
   const st = xyStateFor(machine);
 
   const axisLabel = (axis) => {
     const entries = st[axis];
-    if (!entries.length) return axis === 'x' ? '— →' : '↑ —';
+    if (!entries.length) return '—';
     const first = (readKnobMeta(machine, entries[0].key)?.label ?? entries[0].key).toUpperCase();
     const suffix = entries.length > 1 ? ` +${entries.length - 1}` : '';
-    return axis === 'x' ? `${first}${suffix} →` : `↑ ${first}${suffix}`;
+    return `${first}${suffix}`;
   };
   const syncLabels = () => {
-    xBtn.textContent = axisLabel('x');
-    yBtn.textContent = axisLabel('y');
+    xBtn.querySelector('.xy-axis-btn__label').textContent = axisLabel('x');
+    yBtn.querySelector('.xy-axis-btn__label').textContent = axisLabel('y');
   };
   // Normalisierte Pad-Position einer Achse: der ERSTE gestackte Eintrag
   // ist der visuelle "Anker" -- bei mehreren gestackten Parametern mit
@@ -720,22 +726,10 @@ function buildXYPad(machine) {
     }
   };
 
-  let dragging = false;
-  // Startet ein Pointerdown auf/nahe einem Achsen-Label (deren Tap-Fläche
-  // per CSS-Padding bewusst über den sichtbaren Text hinausreicht, sitzt
-  // aber direkt in der Pad-Ecke), erst bei ECHTER Bewegung über
-  // TAP_THRESHOLD zu einem Drag machen -- sonst würde jeder Tap aufs Label
-  // (öffnet den Picker) den Punkt zugleich in die Ecke springen lassen,
-  // und ein Drag, der zufällig genau in der Ecke beginnt, könnte nie
-  // starten. Ein Pointerdown ausserhalb der Labels bleibt wie gehabt ein
-  // sofortiger Sprung (kein Schwellwert nötig, kein Label im Weg).
-  // WICHTIG: setPointerCapture() NUR aufrufen, wenn es wirklich zu einem
-  // Drag wird -- sonst leitet Chromium das nachfolgende SYNTHETISCHE
-  // click-Event vom Achsen-Button auf das Pad um (der Button feuert dann
-  // nie), ein reiner Tap aufs Label würde den Picker also nie öffnen.
-  // (jsdom bildet dieses Capture-Verhalten nicht nach, daher fiel das
-  // erst im echten Browser auf.)
-  let pendingStart = null;
+  // Die Achsen-Buttons sitzen jetzt in einer eigenen Reihe ÜBER dem Pad
+  // (nicht mehr als überlappende Ecken-Labels IM Pad), daher kann jeder
+  // Pointerdown aufs Pad sofort und uneingeschränkt zum Drag werden -- kein
+  // Tap-vs-Drag-Schwellwert und keine target-Prüfung mehr nötig.
   const setFromEvent = (e) => {
     const r = pad.getBoundingClientRect();
     const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
@@ -745,25 +739,16 @@ function buildXYPad(machine) {
     applyAxis('x', x);
     applyAxis('y', 1 - y);
   };
+  let dragging = false;
   pad.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.xypad__axis')) {
-      pendingStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
-      return;
-    }
     dragging = true;
     pad.setPointerCapture(e.pointerId);
     setFromEvent(e);
   });
   pad.addEventListener('pointermove', (e) => {
-    if (dragging) { setFromEvent(e); return; }
-    if (!pendingStart || e.pointerId !== pendingStart.pointerId) return;
-    const dx = e.clientX - pendingStart.x, dy = e.clientY - pendingStart.y;
-    if (Math.hypot(dx, dy) < TAP_THRESHOLD) return;
-    dragging = true;
-    pad.setPointerCapture(e.pointerId);
-    setFromEvent(e);
+    if (dragging) setFromEvent(e);
   });
-  const releasePad = () => { dragging = false; pendingStart = null; };
+  const releasePad = () => { dragging = false; };
   pad.addEventListener('pointerup', releasePad);
   pad.addEventListener('pointercancel', releasePad);
 
