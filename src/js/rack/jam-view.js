@@ -183,6 +183,11 @@ function xyStateFor(machine) {
     st = {
       x: [{ key: 'sendDelay', from: 0, to: 1 }],
       y: [{ key: 'sendReverb', from: 0, to: 1 }],
+      // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
+      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Aus per
+      // Default, damit sich am bisherigen "haftenden" Verhalten nichts
+      // ändert, bis jemand es aktiv einschaltet.
+      spring: false,
     };
     xyState.set(machine, st);
   }
@@ -322,14 +327,17 @@ function renderXYList(machine, axis, anchorEl, onChange) {
         // Mappt man einen Insert-Effekt-Parameter (z. B. Reverb Decay), bleibt
         // der Effekt bei Mix=0 unhörbar, obwohl sich der Regler über die
         // Achse bewegt -- deshalb den Mix-Regler DESSELBEN Inserts
-        // automatisch mit auf dieselbe Achse stacken (von seinem aktuellen
-        // Wert bis 80%), sofern er nicht schon irgendwo (dieser oder der
-        // anderen Achse) gemappt ist. Bleibt wie jeder andere Stack-Eintrag
-        // über Range/✕ manuell anpassbar oder entfernbar.
+        // automatisch mit auf dieselbe Achse stacken, sofern er nicht schon
+        // irgendwo (dieser oder der anderen Achse) gemappt ist. `centered:
+        // true` markiert den Eintrag als RADIAL statt Kante-zu-Kante (s.
+        // applyAxis/axisNorm): in der Pad-MITTE (Cross) steht Mix auf 0
+        // (ganz trocken), in JEDE Richtung vom Zentrum weg steigt er auf 80%
+        // -- fühlt sich wie ein klassisches FX-Pad an (Mitte=aus, Rand=voll
+        // drauf), statt nur an einer Ecke trocken zu sein. Bleibt wie jeder
+        // andere Stack-Eintrag über Range/✕ manuell anpassbar/entfernbar.
         const mixKey = siblingMixKey(machine, key);
         if (mixKey && !newEntries.some((e) => e.key === mixKey) && !otherKeys.has(mixKey)) {
-          const mixMeta = readKnobMeta(machine, mixKey);
-          if (mixMeta) newEntries.push({ key: mixKey, from: parseFloat(mixMeta.value), to: 0.8 });
+          newEntries.push({ key: mixKey, from: 0, to: 0.8, centered: true });
         }
         st[axis] = newEntries;
         onChange();
@@ -727,11 +735,12 @@ function buildXYPad(machine) {
   wrap.innerHTML = `
     <div class="xy-axes">
       <button type="button" class="xy-axis-btn xy-axis-btn--x">
-        <span class="xy-axis-btn__tag">X</span><span class="xy-axis-btn__label"></span><span class="xy-axis-btn__chev">⌄</span>
+        <span class="xy-axis-btn__tag">X</span><span class="xy-axis-btn__label"></span>
       </button>
       <button type="button" class="xy-axis-btn xy-axis-btn--y">
-        <span class="xy-axis-btn__tag">Y</span><span class="xy-axis-btn__label"></span><span class="xy-axis-btn__chev">⌄</span>
+        <span class="xy-axis-btn__tag">Y</span><span class="xy-axis-btn__label"></span>
       </button>
+      <button type="button" class="xy-spring-btn" title="Auto-return to center" aria-label="Auto-return to center">⟲</button>
     </div>
     <div class="xypad">
       <div class="xypad__grid"></div>
@@ -742,7 +751,13 @@ function buildXYPad(machine) {
   const dot = pad.querySelector('.xypad__dot');
   const xBtn = wrap.querySelector('.xy-axis-btn--x');
   const yBtn = wrap.querySelector('.xy-axis-btn--y');
+  const springBtn = wrap.querySelector('.xy-spring-btn');
   const st = xyStateFor(machine);
+  springBtn.classList.toggle('is-active', st.spring);
+  springBtn.addEventListener('click', () => {
+    st.spring = !st.spring;
+    springBtn.classList.toggle('is-active', st.spring);
+  });
 
   const axisLabel = (axis) => {
     const entries = st[axis];
@@ -758,13 +773,19 @@ function buildXYPad(machine) {
   // Normalisierte Pad-Position einer Achse: der ERSTE gestackte Eintrag
   // ist der visuelle "Anker" -- bei mehreren gestackten Parametern mit
   // ggf. unterschiedlichem aktuellem Stand liesse sich sonst kein
-  // einzelner sinnvoller Punkt mehr zeigen.
+  // einzelner sinnvoller Punkt mehr zeigen. Ist der Anker ausnahmsweise
+  // selbst "centered" (radial, s. applyAxis) -- z. B. wenn man den
+  // ursprünglichen Trigger-Parameter entfernt und nur das automatisch
+  // gestackte Mix übrig bleibt --, ist die Rückrechnung mehrdeutig (ein
+  // Wert kann von BEIDEN Seiten der Mitte kommen); wir zeigen dann
+  // kanonisch die rechte/obere Seite (0.5 + Auslenkung/2).
   const axisNorm = (axis) => {
     const entry = st[axis][0];
     if (!entry) return 0.5;
     const meta = readKnobMeta(machine, entry.key);
     if (!meta) return 0.5;
-    return normFromValue(parseFloat(meta.value), { ...meta, min: String(entry.from), max: String(entry.to) });
+    const norm = normFromValue(parseFloat(meta.value), { ...meta, min: String(entry.from), max: String(entry.to) });
+    return entry.centered ? 0.5 + Math.min(1, Math.max(0, norm)) / 2 : norm;
   };
   const syncDot = () => {
     const x = Math.min(1, Math.max(0, axisNorm('x')));
@@ -778,12 +799,18 @@ function buildXYPad(machine) {
   // Wendet die normalisierte Pad-Position auf ALLE gestackten Einträge
   // einer Achse an -- jeder auf sein eigenes [from,to] bezogen, nicht auf
   // sein volles [min,max] (genau das ist die Bereichs-Einschränkung).
+  // "centered" (bislang nur das automatisch gestackte Insert-Mix, s.
+  // renderXYList) faltet den Norm um die Pad-Mitte (0.5): in der Mitte
+  // steht der Wert auf `from` (bei Mix: 0, ganz trocken), an JEDER Kante
+  // (nicht nur einer) auf `to` -- fühlt sich wie ein klassisches FX-Pad an
+  // (Mitte=aus, Rand=voll drauf) statt nur an einer Ecke trocken zu sein.
   const applyAxis = (axis, norm) => {
     for (const entry of st[axis]) {
       const meta = readKnobMeta(machine, entry.key);
       if (!meta) continue;
+      const effectiveNorm = entry.centered ? Math.abs(norm - 0.5) * 2 : norm;
       const rangeMeta = { ...meta, min: String(entry.from), max: String(entry.to) };
-      nudgeParam(meta.knob, valueFromNorm(norm, rangeMeta));
+      nudgeParam(meta.knob, valueFromNorm(effectiveNorm, rangeMeta));
     }
   };
 
@@ -809,7 +836,22 @@ function buildXYPad(machine) {
   pad.addEventListener('pointermove', (e) => {
     if (dragging) setFromEvent(e);
   });
-  const releasePad = () => { dragging = false; };
+  // Auto-Return (.xy-spring-btn, s. oben): springt der Punkt beim Loslassen
+  // sofort zurück auf die Pad-Mitte -- direkt auf 50%/50% gesetzt statt über
+  // syncDot()/axisNorm() zurückgerechnet, damit es exakt die Mitte trifft
+  // (keine Rundungs-Abweichung durch die Norm<->Wert-Rückrechnung). Für
+  // "centered"-Einträge (Insert-Mix) landet der reale Reglerwert dabei
+  // exakt bei `from` (0, ganz trocken) -- der eigentliche Zweck der ganzen
+  // Funktion: kurz antippen/ziehen = Effekt hörbar, loslassen = wieder weg.
+  const releasePad = () => {
+    dragging = false;
+    if (st.spring) {
+      applyAxis('x', 0.5);
+      applyAxis('y', 0.5);
+      dot.style.left = '50%';
+      dot.style.top = '50%';
+    }
+  };
   pad.addEventListener('pointerup', releasePad);
   pad.addEventListener('pointercancel', releasePad);
 

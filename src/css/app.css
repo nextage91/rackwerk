@@ -757,6 +757,13 @@ button {
    Clip-Launcher obendrauf. */
 .channel {
   flex: 0 0 156px;
+  /* Ohne min-width:0 überschreibt ein Flex-Kind NIE seine Inhalts-Mindest-
+     breite, selbst mit flex-shrink:0 -- ein längeres, eigentlich per
+     text-overflow:ellipsis gedachtes Label (z. B. ein Achsen-Chip mit
+     "TRANSPOSE" statt "DELAY", oder ein noch längeres Insert-Effekt-Label)
+     sprengte dadurch lautlos die feste 156px-Spaltenbreite (bis zu +46px
+     beobachtet), statt abgeschnitten zu werden. */
+  min-width: 0;
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
@@ -864,14 +871,14 @@ button {
    dem Pad (statt als Ecken-Labels IM Pad) -- das Pad selbst schrumpft
    entsprechend, die Spalte behält ihr Gesamt-Höhenbudget. */
 .xy-wrap { flex: none; height: 108px; display: flex; flex-direction: column; gap: 4px; }
-.xy-axes { flex: 0 0 auto; display: flex; gap: 4px; }
+.xy-axes { flex: 0 0 auto; display: flex; gap: 3px; }
 .xy-axis-btn {
   flex: 1 1 0;
   min-width: 0;
   display: flex; align-items: center; justify-content: center; gap: 3px;
   font-size: 9px;
   letter-spacing: .03em;
-  padding: 5px 4px;
+  padding: 5px 3px;
   border-radius: 999px;
   border: 1px solid rgba(255,236,190,.18);
   background: var(--bg-panel-deep);
@@ -885,7 +892,32 @@ button {
   opacity: .85;
 }
 .xy-axis-btn__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.xy-axis-btn__chev { font-size: 8px; opacity: .55; }
+/* Auto-Return-Umschalter -- eigenes, schmales Rund-Icon neben den beiden
+   Achsen-Chips (nicht flex:1 wie diese, sonst würde es unnötig breit).
+   Bewusst so schmal wie möglich (20px) -- jedes zusätzliche Pixel hier
+   geht direkt von der Breite der beiden Achsen-Chips ab, und "DELAY"/
+   "REVERB" müssen dort weiterhin ungekürzt hinpassen (deshalb bei den
+   Achsen-Chips auch der Pfeil-Chevron entfallen, s. Verlauf -- ein
+   drittes Element in der Reihe liess ihn sonst abschneiden). Aus per
+   Default (blass), aktiv farbig hervorgehoben wie ein eingerasteter
+   Taster -- soll auf einen Blick klar vom "immer verfügbar"-Look der
+   Achsen-Chips unterscheidbar sein. */
+.xy-spring-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,236,190,.18);
+  background: var(--bg-panel-deep);
+  color: var(--ink-faint);
+  touch-action: manipulation;
+}
+.xy-spring-btn.is-active {
+  color: var(--lcd-ink);
+  border-color: var(--ch-color, rgba(255,236,190,.6));
+  background: rgba(255,236,190,.12);
+}
 .xypad {
   position: relative;
   flex: 1 1 auto;
