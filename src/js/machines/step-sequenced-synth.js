@@ -122,7 +122,7 @@ export class StepSequencedSynth extends Machine {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
+        automation.setBars(this.id, bars, { resize: true }); // Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);

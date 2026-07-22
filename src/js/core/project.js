@@ -56,20 +56,44 @@ export function newProject(rack) {
 }
 
 export function loadProject(rack, data) {
+  if (!data || !Array.isArray(data.machines)) {
+    throw new Error('Not a RackWerk project file (missing "machines" array)');
+  }
   transport.stop();
   rack.clear();
   transport.setBpm(data.bpm ?? 120);
   masterFX.deserialize(data.fx); // fehlt bei alten Projekten → Defaults
 
-  for (const md of data.machines ?? []) {
+  let loaded = 0;
+  for (const md of data.machines) {
     const MachineClass = BY_TYPE[md.type];
     if (!MachineClass) continue; // unbekannter Typ (z. B. ältere/neuere Version)
-    const machine = rack.addMachine(MachineClass, md.state);
-    if (md.sends) machine.setSends(md.sends);
-    if (md.inserts) machine.deserializeInserts(md.inserts);
-    if (md.clips) machine.deserializeClips(md.clips);
-    automation.importLanes(machine.id, md.lanes);
-    machine.onLanesImported?.();
+    // Eine einzelne kaputte Maschine (unerwartete Datenform in einer
+    // beschädigten/handgebastelten Datei) darf den Rest des Ladens nicht
+    // abreißen -- sonst bricht loadProject() MITTEN im schon per clear()
+    // geleerten Rack ab, und der Autosave-Timer überschreibt kurz danach
+    // die letzte GUTE Session mit diesem halb geladenen Zustand.
+    try {
+      const machine = rack.addMachine(MachineClass, md.state);
+      if (md.sends) machine.setSends(md.sends);
+      if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.clips) machine.deserializeClips(md.clips);
+      automation.importLanes(machine.id, md.lanes);
+      machine.onLanesImported?.();
+      loaded++;
+    } catch (err) {
+      console.warn(`Machine "${md.type}" could not be loaded — skipped:`, err);
+    }
+  }
+  // Die Pro-Maschine-Abschottung oben verhindert einen Crash, aber nicht
+  // den Sonderfall "die Datei nannte Maschinen, aber JEDE einzelne ist
+  // gescheitert" -- ohne diese Prüfung würde loadProject() dann klaglos
+  // mit einem leeren Rack zurückkehren (kein Throw, also KEIN Rollback
+  // in main.js), obwohl die vorherige Session gerade durch rack.clear()
+  // oben schon verworfen wurde. Ein absichtlich leeres Projekt (data.
+  // machines = []) bleibt davon unberührt -- das ist ein legitimes Ergebnis.
+  if (loaded === 0 && data.machines.length > 0) {
+    throw new Error('None of the machines in this file could be loaded');
   }
   song.deserialize(data.song); // nach den Maschinen (Events zeigen auf deren Position)
 }
@@ -82,16 +106,22 @@ export function loadProject(rack, data) {
  */
 export function importMachines(rack, data) {
   const added = [];
-  for (const md of data.machines ?? []) {
+  for (const md of data?.machines ?? []) {
     const MachineClass = BY_TYPE[md.type];
     if (!MachineClass) continue;
-    const machine = rack.addMachine(MachineClass, md.state);
-    if (md.sends) machine.setSends(md.sends);
-    if (md.inserts) machine.deserializeInserts(md.inserts);
-    if (md.clips) machine.deserializeClips(md.clips);
-    automation.importLanes(machine.id, md.lanes);
-    machine.onLanesImported?.();
-    added.push(machine);
+    // Gleiche Abschottung wie loadProject() -- eine kaputte Maschine im
+    // fremden (Jam-)Projekt darf die übrigen nicht mitreißen.
+    try {
+      const machine = rack.addMachine(MachineClass, md.state);
+      if (md.sends) machine.setSends(md.sends);
+      if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.clips) machine.deserializeClips(md.clips);
+      automation.importLanes(machine.id, md.lanes);
+      machine.onLanesImported?.();
+      added.push(machine);
+    } catch (err) {
+      console.warn(`Machine "${md.type}" could not be imported — skipped:`, err);
+    }
   }
   return added;
 }

@@ -176,12 +176,20 @@ function wireProjectUI(rack) {
         <button class="project__delete" aria-label="Delete project">✕</button>
       `;
       item.querySelector('.project__load').addEventListener('click', () => {
+        // Snapshot der laufenden Session VOR dem Laden -- loadProject()
+        // leert das Rack sofort (rack.clear()); scheitert das Parsen/
+        // Deserialisieren mittendrin, bliebe ohne Rollback ein halb
+        // geleertes Rack stehen, das der Autosave 3s später über die
+        // letzte gute Session schreibt (stiller Datenverlust).
+        const backup = serializeProject(rack);
         try {
           loadProject(rack, JSON.parse(store.get(`project:${name}`)));
           nameInput.value = name;
           sheet.hidden = true;
         } catch (err) {
           console.error('Project could not be loaded:', err);
+          loadProject(rack, backup);
+          showHintToast('Project could not be loaded — the file seems to be damaged. Your previous session was restored.');
         }
       });
       item.querySelector('.project__delete').addEventListener('click', () => {
@@ -246,6 +254,13 @@ function wireProjectUI(rack) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
+      // Snapshot VOR dem Import -- bei "replace" leert loadProject() das
+      // Rack sofort; bricht das Parsen/Deserialisieren einer beschädigten
+      // Datei mittendrin ab, bliebe ohne Rollback ein halb geleertes/halb
+      // befülltes Rack stehen, das der Autosave 3s später über die letzte
+      // gute Session schreibt (stiller Datenverlust). Bei "merge" ist der
+      // Backup ein günstiges No-Op-Netz für denselben Fehlerfall.
+      const backup = serializeProject(rack);
       try {
         const data = JSON.parse(reader.result);
         if (importMode === 'replace') loadProject(rack, data);
@@ -253,6 +268,8 @@ function wireProjectUI(rack) {
         sheet.hidden = true;
       } catch (err) {
         console.error('Import failed:', err);
+        loadProject(rack, backup);
+        showHintToast('Import failed — the file seems to be damaged or isn\'t a RackWerk project. Your previous session was restored.');
       }
       fileInput.value = '';
     };

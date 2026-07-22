@@ -423,7 +423,7 @@ export class TrackedDrumMachine extends Machine {
       onLengthChange: (bars) => {
         for (const tr of this.tracks) resizePattern(tr.steps, bars);
         this.seq.setPattern(this.tracks[this.selected].steps);
-        automation.setBars(this.id, bars); // Spur-Lanes mitwachsen lassen
+        automation.setBars(this.id, bars, { resize: true }); // Spur-Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
