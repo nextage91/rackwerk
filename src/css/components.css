@@ -596,6 +596,24 @@ x-knob.has-auto .knob__dial::after {
   box-shadow: 0 0 6px var(--led-on);
 }
 
+/* Button-Gruppe (z. B. Chord-Typ, Resonator-Intervall) mit aufgezeichneter
+   Automation: dieselbe rote LED wie bei Knobs (s. oben), oben rechts an der
+   ganzen Gruppe statt an einem einzelnen Regler. Betrifft nur Gruppen, die
+   automation.registerSwitch() nutzen -- normale Seg-Umschalter (Filtertyp
+   etc.) bekommen die Klasse nie und sehen unverändert aus. */
+.seg.has-auto {
+  position: relative;
+}
+.seg.has-auto::after {
+  content: "";
+  position: absolute;
+  top: -4px; right: -4px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--led-on);
+  box-shadow: 0 0 6px var(--led-on);
+}
+
 /* Lösch-Chip für Automation (erscheint bei Long-Press auf einen Knob) */
 .auto-chip {
   position: fixed;

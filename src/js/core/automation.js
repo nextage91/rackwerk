@@ -227,6 +227,64 @@ class Automation {
     if (!this.targets.has(key)) this.targets.set(key, { knob, apply });
   }
 
+  /* ---------- Diskrete Ziele (Button-Gruppen: Chord-Typ, Intervall-Set, …) ----------
+   * Anders als ein Knob gibt es hier kein Ziehen -- nur Klicks, die den Wert
+   * SOFORT auf eine von mehreren festen Optionen setzen. Playback läuft
+   * trotzdem über exakt denselben #tick()-Code wie Knobs (Lane-Werte sind
+   * hier einfach Options-INDIZES statt Regler-Werte): apply(v) bekommt den
+   * ggf. leicht fraktionalen, linear interpolierten Wert und rundet ihn
+   * selbst auf den nächsten gültigen Index -- am Kern-Playback ist dadurch
+   * nichts Button-Spezifisches nötig. Nur die AUFZEICHNUNG braucht einen
+   * eigenen Weg (recordSwitch statt der Knob-Grab/Release-Logik), weil ein
+   * Klick kein "Ziehen über mehrere Ticks" ist, sondern ein einzelner,
+   * sofortiger Wertwechsel. */
+
+  /** Button-Gruppe als Automations-Ziel registrieren. groupEl dient nur als
+   *  Anzeigefläche (has-auto-Klasse, Label fürs Toast) — kein Ziehen. Statt
+   *  eines knob-longpress-Events (das nur <x-knob> feuert) ein eigener,
+   *  simpler Press-and-Hold-Timer auf der Gruppe selbst -- gleiche 550ms-
+   *  Schwelle wie bei Knobs (s. Kommentar oben), damit auch Button-
+   *  Automation über dieselbe Geste löschbar ist (sonst gäbe es für sie
+   *  KEINEN Weg, eine Fahrt wieder loszuwerden). #offerDelete() no-opt von
+   *  selbst, wenn (noch) keine Lane existiert -- kein Extra-Check nötig. */
+  registerSwitch(key, groupEl, apply) {
+    this.targets.set(key, { knob: groupEl, apply });
+    if (this.lanes.has(key)) groupEl.classList.add('has-auto');
+
+    let pressTimer = null;
+    groupEl.addEventListener('pointerdown', () => {
+      clearTimeout(pressTimer);
+      pressTimer = setTimeout(() => this.#offerDelete(key, groupEl), 550);
+    });
+    const cancelPress = () => clearTimeout(pressTimer);
+    groupEl.addEventListener('pointerup', cancelPress);
+    groupEl.addEventListener('pointercancel', cancelPress);
+    groupEl.addEventListener('pointerleave', cancelPress);
+  }
+
+  /**
+   * Einen diskreten Wertwechsel aufzeichnen (Button-Klick statt Knob-Zug).
+   * Schreibt ab der aktuellen Playhead-Position VORWÄRTS bis zum Ende der
+   * Lane den neuen Wert; Slots davor (frühere Segmente/Ausgangswert)
+   * bleiben unverändert. Beim Zurückspulen an den Taktanfang gilt der
+   * zuletzt geschriebene Wert wieder, bis ihn ein späterer Klick (in einem
+   * weiteren Durchlauf) überschreibt -- reines Halte-/Step-Verhalten statt
+   * einer sinnlosen Überblendung zwischen zwei Options-Indizes.
+   * oldValue/newValue sind Options-INDIZES (Zahl), nicht die eigentlichen
+   * (z. B. String-)Werte — die Umrechnung passiert beim Aufrufer.
+   */
+  recordSwitch(key, oldValue, newValue) {
+    if (!this.armed || !transport.isPlaying || oldValue === newValue) return;
+    const bars = this.#barsFor(key);
+    let lane = this.lanes.get(key);
+    if (!lane) {
+      lane = this.#ensureLane(key, oldValue, bars);
+      this.#announce(this.targets.get(key)?.knob);
+    }
+    const idx = this.#laneIndex(lane.length);
+    for (let i = idx; i < lane.length; i++) lane[i] = newValue;
+  }
+
   /**
    * Die Pattern-Länge einer Maschine setzen. Neu aufgenommene Lanes
    * werden dann so lang; bereits vorhandene Lanes der Maschine werden

@@ -739,9 +739,31 @@ export class Machine {
       }
       for (const btn of row.querySelectorAll('[data-resonator-interval]')) {
         btn.addEventListener('click', () => {
+          const oldIdx = RESONATOR_INTERVALS.findIndex((t) => t.value === insert.params.interval);
           this.setInsertParam(id, 'interval', btn.dataset.resonatorInterval);
+          const newIdx = RESONATOR_INTERVALS.findIndex((t) => t.value === btn.dataset.resonatorInterval);
+          automation.recordSwitch(`${this.id}:insert:${id}:interval`, oldIdx, newIdx);
           this.#renderInserts();
         });
+      }
+      if (insert.type === 'resonator') {
+        // Automatisierbar wie der Chord-Typ beim PolySynth (registerSwitch/
+        // recordSwitch, s. automation.js) -- die apply()-Rückgabe der
+        // Wiedergabe darf hier bewusst NICHT #renderInserts() aufrufen (das
+        // würde bei jedem der ~45 Ticks/Sekunde die komplette Insert-Liste
+        // neu bauen), deshalb ein leichtgewichtiger Direkt-Abgleich der
+        // is-active-Klassen statt eines vollen Rerenders.
+        const seg = row.querySelector('.seg');
+        const autoKey = `${this.id}:insert:${id}:interval`;
+        automation.registerSwitch(autoKey, seg, (v) => {
+          const idx = Math.max(0, Math.min(RESONATOR_INTERVALS.length - 1, Math.round(v)));
+          const value = RESONATOR_INTERVALS[idx].value;
+          this.setInsertParam(id, 'interval', value);
+          for (const b of seg.querySelectorAll('[data-resonator-interval]')) {
+            b.classList.toggle('is-active', b.dataset.resonatorInterval === value);
+          }
+        });
+        seg.classList.toggle('has-auto', automation.hasLane(autoKey));
       }
       for (const btn of row.querySelectorAll('[data-ratio-mode]')) {
         btn.addEventListener('click', () => {
