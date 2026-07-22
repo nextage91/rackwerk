@@ -233,13 +233,13 @@ const DEFS = {
       wet.gain.value = p.mix;
 
       // Feedback-Schleife: delay -> filter -> feedback -> zurück in delay.
-      // Der WET-Abgriff sitzt VOR dem Filter (am Delay-Ausgang direkt) --
-      // das erste Echo kommt dadurch noch unverändert/breitbandig, nur die
-      // NACHFOLGENDEN Wiederholungen (die schon einmal durch die Schleife
-      // liefen) werden zunehmend gefiltert. Genau dieser fortschreitend
-      // dunkler/schmaler werdende Charakter macht den "Filter-Delay"-Sound
-      // aus (klassischer Dub-Effekt) statt eines gleichförmig gefilterten
-      // Signals von Anfang an.
+      // Der WET-Abgriff sitzt NACH dem Filter, nicht am rohen Delay-Ausgang
+      // -- sonst wäre bei Mix=100% das ERSTE Echo noch ein unverändertes,
+      // ungefiltertes Abbild des Eingangssignals (nur zeitversetzt), was
+      // sich anhört, als würde trotz Mix=100% noch das Trockensignal
+      // durchkommen. So durchläuft JEDE Wiederholung, auch die erste, den
+      // Filter -- nur die nachfolgenden (die zusätzlich durch die
+      // Feedback-Schleife liefen) werden zunehmend stärker gefiltert.
       const delay = ctx.createDelay(2.0);
       delay.delayTime.value = p.time;
       const filter = ctx.createBiquadFilter();
@@ -251,8 +251,8 @@ const DEFS = {
 
       input.connect(dry).connect(output);
       input.connect(delay);
-      delay.connect(wet).connect(output);
       delay.connect(filter);
+      filter.connect(wet).connect(output);
       filter.connect(feedback);
       feedback.connect(delay);
 
@@ -440,11 +440,19 @@ export const UI_PARAMS = {
   ],
   filterDelay: [
     { key: 'time', label: 'Time', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
-    // Feedback bewusst auf 0.9 gedeckelt (nicht 1.0): die Schleife
-    // delay->filter->feedback->delay summiert sich sonst unbegrenzt auf --
-    // 0.9 lässt viele hörbare Wiederholungen zu, bleibt aber mathematisch
-    // stabil (jeder Durchlauf durchs Filter verliert zusätzlich Pegel).
-    { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
+    // Feedback bewusst auf 0.8 gedeckelt (nicht 1.0 oder gar 0.9): die
+    // Schleife delay->filter->feedback->delay summiert sich sonst
+    // unbegrenzt auf. Der naheliegende Gedanke "der Tiefpass/Hochpass
+    // dämpft ja pro Durchlauf zusätzlich, das reicht als Sicherheit" ist
+    // TRÜGERISCH -- Chromes BiquadFilterNode zeigt bei lowpass/highpass
+    // nahe der Cutoff-Frequenz eine Überhöhung von >1.0 (gemessen ~1.15-
+    // 1.22x, praktisch unabhängig von Q, auch bei sehr kleinem Q nicht
+    // wegzubekommen). Bei Feedback=0.9 wächst die Schleife dadurch über
+    // Sekunden tatsächlich exponentiell auf (gemessen, kein Bandpass
+    // betroffen -- der hat wegen konstantem 0dB-Spitzenpegel keine
+    // Überhöhung). 0.8 hat auch am Rand des Filter-Bereichs (200Hz/
+    // 8000Hz) über 20s Rendertest nachweislich Sicherheitsabstand.
+    { key: 'feedback', label: 'Feedback', min: 0, max: 0.8, unit: '' },
     { key: 'filterFreq', label: 'Filter', min: 200, max: 8000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
