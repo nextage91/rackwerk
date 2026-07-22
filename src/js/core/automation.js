@@ -325,9 +325,13 @@ class Automation {
   }
 
   /* ---------- Persistenz ---------- */
-  /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
-  exportLanes(machineId) {
-    const prefix = `${machineId}:`;
+  /** Alle Lanes mit einem beliebigen Schlüssel-Präfix, Schlüssel ohne den
+   *  Präfix -- Grundlage für exportLanes() (Maschinen-Präfix) UND fürs
+   *  Insert-Entfernen-Undo (Insert-Präfix, s. machine.js#removeInsert):
+   *  ein Insert wird beim Löschen genau wie eine Maschine per Undo mit
+   *  seinen aufgenommenen Fahrten zurückgeholt, nicht nur mit den nackten
+   *  Parametern. */
+  exportLanesWithPrefix(prefix) {
     const out = {};
     for (const [key, lane] of this.lanes) {
       if (key.startsWith(prefix)) out[key.slice(prefix.length)] = Array.from(lane);
@@ -335,15 +339,31 @@ class Automation {
     return out;
   }
 
-  importLanes(machineId, lanes) {
+  /** Alle Lanes einer Maschine, Schlüssel ohne Maschinen-ID-Prefix. */
+  exportLanes(machineId) {
+    return this.exportLanesWithPrefix(`${machineId}:`);
+  }
+
+  /** Gegenstück zu exportLanesWithPrefix() -- schreibt Lanes unter einem
+   *  beliebigen Präfix zurück, ohne die has-auto-Sonderbehandlung fürs
+   *  Insert-Undo (dessen Lane-Schlüssel enthalten immer ein weiteres ':',
+   *  #renderInserts() setzt has-auto beim Neu-Registrieren des Knobs
+   *  ohnehin selbst, s. dort). */
+  importLanesWithPrefix(prefix, lanes) {
     if (!lanes) return;
     for (const [suffix, values] of Object.entries(lanes)) {
-      const key = `${machineId}:${suffix}`;
-      this.lanes.set(key, Float32Array.from(values));
+      this.lanes.set(`${prefix}${suffix}`, Float32Array.from(values));
+    }
+  }
+
+  importLanes(machineId, lanes) {
+    if (!lanes) return;
+    this.importLanesWithPrefix(`${machineId}:`, lanes);
+    for (const suffix of Object.keys(lanes)) {
       // LED nur für statische (maschinenweite) Knobs direkt setzen —
       // Per-Spur-Knobs aktualisiert die Maschine über onLanesImported()
       if (!suffix.includes(':')) {
-        this.targets.get(key)?.knob.classList.add('has-auto');
+        this.targets.get(`${machineId}:${suffix}`)?.knob.classList.add('has-auto');
       }
     }
   }

@@ -76,9 +76,32 @@
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">🎬 Song Timeline</button>
-        <button class="m-btn m-btn--wide" id="btn-open-mixer">🎚️ Mixer</button>
-        <button class="m-btn m-btn--wide" id="btn-open-jam">🕹️ Jam</button>
+        <button class="m-btn m-btn--wide" id="btn-open-song">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">
+            <rect x="2" y="9" width="7" height="6" rx="1.5"/>
+            <rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>
+            <rect x="16" y="9" width="6" height="6" rx="1.5"/>
+          </svg> Song Timeline
+        </button>
+        <button class="m-btn m-btn--wide" id="btn-open-mixer">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
+            <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
+            <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
+            <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
+          </svg> Mixer
+        </button>
+        <button class="m-btn m-btn--wide" id="btn-open-jam">
+          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" fill="currentColor"/>
+            <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg> Jam
+        </button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 

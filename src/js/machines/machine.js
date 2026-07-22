@@ -16,6 +16,7 @@ import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
 import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
 import { masterFX } from '../core/fx.js';
+import { undo } from '../core/undo.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
  *  getrennt vom kurzen DSP-Namen (insertMeta().name), der bleibt für den
@@ -361,18 +362,42 @@ export class Machine {
     return insert;
   }
 
+  /**
+   * Insert entfernen -- war bisher der einzige sofortige UND nicht rück-
+   * holbare Lösch-Weg der App (jede andere Löschaktion: Maschine, Pattern,
+   * Clip, hat ein Undo-Angebot), direkt neben dem genauso erreichbaren
+   * BYP-Button. Bekommt hier denselben Undo-Toast wie alle anderen (s.
+   * UI-Review) -- Params/Bypass UND aufgenommene Automation-Fahrten
+   * werden vor dem Verwerfen gesichert und beim Undo unter demselben
+   * Insert (gleiche id, createInsert() übernimmt saved.id) wiederhergestellt.
+   */
   removeInsert(id) {
     const idx = this.inserts.findIndex((i) => i.id === id);
     if (idx === -1) return;
     const [insert] = this.inserts.splice(idx, 1);
     this.#rewireInsertChain();
+
+    const savedInsert = insert.serialize();
+    const lanePrefix = `${this.id}:insert:${id}:`;
+    const savedLanes = automation.exportLanesWithPrefix(lanePrefix);
+    const insertIndex = idx;
+
     insert.dispose();
     // Automation-Lanes des entfernten Inserts mit aufräumen -- ohne das
     // blieben sie als unerreichbare Leichen in automation.lanes stehen
     // (insert.id wird nie wiederverwendet, s. inserts.js#createInsert,
     // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
-    automation.clearLanesWithPrefix(`${this.id}:insert:${id}:`);
+    automation.clearLanesWithPrefix(lanePrefix);
     this.#renderInserts();
+
+    const label = INSERT_DISPLAY[insert.type]?.name ?? insert.name;
+    undo.offer(`${label} removed`, () => {
+      const restored = createInsert(savedInsert.type, savedInsert);
+      this.inserts.splice(insertIndex, 0, restored);
+      this.#rewireInsertChain();
+      automation.importLanesWithPrefix(lanePrefix, savedLanes);
+      this.#renderInserts();
+    });
   }
 
   moveInsert(id, dir) {
@@ -797,12 +822,20 @@ export class Machine {
    * zum hörbaren Klang blinkt (nicht zum Planungs-Zeitpunkt).
    */
   pulse(time = 0) {
-    if (!this.ledEl) return;
+    // Zwei LEDs möglich: das eigene Faceplate-LED (nur sichtbar im offenen
+    // Vollbild-Editor) UND das Pendant in der kompakten Rack-Zeile
+    // (rack.js#mount setzt rowLedEl) -- beide blitzen synchron, damit das
+    // Rack auch ohne geöffneten Editor eine Live-Aktivitätsanzeige hat.
+    if (!this.ledEl && !this.rowLedEl) return;
     const delay = Math.max(0, (time - engine.now) * 1000);
     setTimeout(() => {
-      this.ledEl.classList.add('is-on');
+      this.ledEl?.classList.add('is-on');
+      this.rowLedEl?.classList.add('is-on');
       clearTimeout(this.#ledTimer);
-      this.#ledTimer = setTimeout(() => this.ledEl.classList.remove('is-on'), 90);
+      this.#ledTimer = setTimeout(() => {
+        this.ledEl?.classList.remove('is-on');
+        this.rowLedEl?.classList.remove('is-on');
+      }, 90);
     }, delay);
   }
 
