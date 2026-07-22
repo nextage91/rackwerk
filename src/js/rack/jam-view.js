@@ -143,6 +143,22 @@ function siblingMixKey(machine, key) {
   return readKnobMeta(machine, mixKey) ? mixKey : null;
 }
 
+/** Ist `key` ein "wie hörbar ist der Effekt"-Regler -- die maschinen-
+ *  eigenen Send-Mengen (Delay/Reverb) oder der Mix-Regler EINES Inserts?
+ *  Bei ALLEN diesen soll die Pad-MITTE (Cross) 0/trocken bedeuten und
+ *  JEDE Richtung vom Zentrum weg den Effekt hörbar machen (radial, s.
+ *  applyAxis/axisNorm) -- nicht nur beim automatisch mitgestackten
+ *  Insert-Mix, sondern auch, wenn so ein Regler direkt aus der Liste
+ *  gewählt wird oder (Delay/Reverb) schon als Vorbelegung auf dem Pad
+ *  sitzt. Andere Regler (Decay, Cutoff, Damping, …) beeinflussen nur den
+ *  KLANG des Effekts, nicht OB man ihn hört -- die bleiben normal
+ *  Kante-zu-Kante gemappt. */
+function isMixLikeKey(key) {
+  if (key === 'sendDelay' || key === 'sendReverb') return true;
+  const m = INSERT_KEY_RE.exec(key);
+  return !!m && m[2] === 'mix';
+}
+
 /** Dieselbe Normalisierung wie <x-knob>#toNorm()/#fromNorm() (dort private,
  *  hier dupliziert statt exportiert -- kein Umbau der Komponente nötig).
  *  Sorgt dafür, dass eine Pad-Geste sich exakt so anfühlt wie dasselbe
@@ -175,14 +191,17 @@ function valueFromNorm(norm, meta) {
  * ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die Zuordnung
  * einfach um (Pad nach rechts -> Wert sinkt), ganz ohne Sonderfall in der
  * Mathematik. Default deckt sich mit dem alten, festen Verhalten (Delay/
- * Reverb, je 1 Eintrag über den vollen 0..1-Bereich). */
+ * Reverb, je 1 Eintrag über den vollen 0..1-Bereich) -- BEIDE jetzt
+ * `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das sind "wie
+ * hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb 0/trocken
+ * bedeuten, genau wie beim automatisch mitgestackten Insert-Mix. */
 const xyState = new WeakMap();
 function xyStateFor(machine) {
   let st = xyState.get(machine);
   if (!st) {
     st = {
-      x: [{ key: 'sendDelay', from: 0, to: 1 }],
-      y: [{ key: 'sendReverb', from: 0, to: 1 }],
+      x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
+      y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
       // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
       // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Aus per
       // Default, damit sich am bisherigen "haftenden" Verhalten nichts
@@ -323,21 +342,32 @@ function renderXYList(machine, axis, anchorEl, onChange) {
     } else {
       btn.addEventListener('click', () => {
         const meta = readKnobMeta(machine, key);
-        const newEntries = [...entries, { key, from: parseFloat(meta?.min ?? '0'), to: parseFloat(meta?.max ?? '1') }];
-        // Mappt man einen Insert-Effekt-Parameter (z. B. Reverb Decay), bleibt
-        // der Effekt bei Mix=0 unhörbar, obwohl sich der Regler über die
-        // Achse bewegt -- deshalb den Mix-Regler DESSELBEN Inserts
-        // automatisch mit auf dieselbe Achse stacken, sofern er nicht schon
-        // irgendwo (dieser oder der anderen Achse) gemappt ist. `centered:
-        // true` markiert den Eintrag als RADIAL statt Kante-zu-Kante (s.
-        // applyAxis/axisNorm): in der Pad-MITTE (Cross) steht Mix auf 0
-        // (ganz trocken), in JEDE Richtung vom Zentrum weg steigt er auf 80%
-        // -- fühlt sich wie ein klassisches FX-Pad an (Mitte=aus, Rand=voll
-        // drauf), statt nur an einer Ecke trocken zu sein. Bleibt wie jeder
-        // andere Stack-Eintrag über Range/✕ manuell anpassbar/entfernbar.
+        // "Wie hörbar ist der Effekt"-Regler (Sends, Insert-Mix, s.
+        // isMixLikeKey) werden IMMER als "centered"/radial gemappt, auch
+        // wenn direkt aus dieser Liste gewählt statt automatisch mit-
+        // gestackt: in der Pad-MITTE (Cross) steht der Wert auf 0 (ganz
+        // trocken), in JEDE Richtung vom Zentrum weg steigt er zum vollen
+        // Bereich hin an (s. applyAxis/axisNorm) -- fühlt sich wie ein
+        // klassisches FX-Pad an (Mitte=aus, Rand=voll drauf). Andere
+        // Parameter (Decay, Cutoff, …) bleiben normal Kante-zu-Kante.
+        const centered = isMixLikeKey(key);
+        const newEntries = [...entries, {
+          key,
+          from: centered ? 0 : parseFloat(meta?.min ?? '0'),
+          to: parseFloat(meta?.max ?? '1'),
+          ...(centered ? { centered: true } : {}),
+        }];
+        // Mappt man einen Insert-Effekt-Parameter, der NICHT selbst Mix ist
+        // (z. B. Reverb Decay), bleibt der Effekt bei Mix=0 unhörbar, obwohl
+        // sich der Regler über die Achse bewegt -- deshalb den Mix-Regler
+        // DESSELBEN Inserts automatisch mit auf dieselbe Achse stacken
+        // (ebenfalls centered), sofern er nicht schon irgendwo (dieser oder
+        // der anderen Achse) gemappt ist. Bleibt wie jeder andere Stack-
+        // Eintrag über Range/✕ manuell anpassbar/entfernbar.
         const mixKey = siblingMixKey(machine, key);
         if (mixKey && !newEntries.some((e) => e.key === mixKey) && !otherKeys.has(mixKey)) {
-          newEntries.push({ key: mixKey, from: 0, to: 0.8, centered: true });
+          const mixMeta = readKnobMeta(machine, mixKey);
+          newEntries.push({ key: mixKey, from: 0, to: parseFloat(mixMeta?.max ?? '1'), centered: true });
         }
         st[axis] = newEntries;
         onChange();
