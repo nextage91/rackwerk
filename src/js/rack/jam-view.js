@@ -71,12 +71,37 @@ function nudgeParam(knob, value) {
   knob.dispatchEvent(new CustomEvent('input', { detail: { value }, bubbles: true }));
 }
 
+/** Insert-Effekt-Regler haben KEIN data-p (mehrere Instanzen desselben Typs
+ *  wären sonst nicht unterscheidbar) -- sie tragen stattdessen data-insert-
+ *  id + data-insert-param (s. machine.js#renderInserts). Der X/Y-Pad-Key
+ *  für so einen Regler ist deshalb ein zusammengesetzter String
+ *  "insert:<id>:<param>", INSERT_KEY_RE trennt ihn wieder auf. */
+const INSERT_KEY_RE = /^insert:(\d+):(.+)$/;
+function resolveKnobEl(machine, key) {
+  const m = INSERT_KEY_RE.exec(key);
+  if (m) return machine.el?.querySelector(`x-knob[data-insert-id="${m[1]}"][data-insert-param="${m[2]}"]`) ?? null;
+  return machine.el?.querySelector(`x-knob[data-p="${key}"]`) ?? null;
+}
+/** Label für einen Pad-Key + seinen (bereits aufgelösten) Knob -- für einen
+ *  Insert-Parameter mit Effektname + Instanz-Nummer voran ("Algorithmic
+ *  Reverb #3: Decay"), weil sonst z. B. der Reverb-eigene "Decay"-Regler
+ *  nicht vom maschinen-eigenen Hüllkurven-"Decay" zu unterscheiden wäre,
+ *  und weil ein Panel mehrere Instanzen desselben Insert-Typs enthalten
+ *  kann. Einzige Stelle, die dieses Label baut -- Mapped-Liste, Add-Liste,
+ *  Achsen-Chip und Range-Editor lesen alle über readKnobMeta()/
+ *  availableXYParams() hiervon ab, sonst laufen sie auseinander. */
+function labelFor(key, knob) {
+  const m = INSERT_KEY_RE.exec(key);
+  if (!m) return knob.getAttribute('label') || key;
+  const insertName = knob.closest('.insert-module')?.querySelector('.machine__name')?.textContent ?? 'FX';
+  return `${insertName} #${m[1]}: ${knob.getAttribute('label') || m[2]}`;
+}
 function readKnobMeta(machine, key) {
-  const knob = machine.el?.querySelector(`x-knob[data-p="${key}"]`);
+  const knob = resolveKnobEl(machine, key);
   if (!knob) return null;
   return {
     knob,
-    label: knob.getAttribute('label') || key,
+    label: labelFor(key, knob),
     min: knob.getAttribute('min') ?? '0',
     max: knob.getAttribute('max') ?? '1',
     curve: knob.getAttribute('curve'),
@@ -89,10 +114,33 @@ function readKnobMeta(machine, key) {
  *  X/Y-Pad-Ziel -- bewusst NICHT auf die 4 kuratierten Makros beschränkt
  *  (anders als buildMacros()): das Pad soll "frei" bespielbar sein, wie
  *  gewünscht. Reihenfolge = DOM-Reihenfolge im Panel (Sends zuerst, dann
- *  die maschinen-eigenen Regler), macht die Picker-Liste vorhersehbar. */
+ *  die maschinen-eigenen Regler), macht die Picker-Liste vorhersehbar.
+ *  ZUSÄTZLICH alle Insert-Effekt-Regler (Reverb/Filter Delay/Resonator/…),
+ *  s. labelFor() für deren Effektname-Präfix. */
 function availableXYParams(machine) {
   const knobs = [...(machine.el?.querySelectorAll('x-knob[data-p]') ?? [])];
-  return knobs.map((knob) => ({ key: knob.dataset.p, label: knob.getAttribute('label') || knob.dataset.p }));
+  const list = knobs.map((knob) => ({ key: knob.dataset.p, label: knob.getAttribute('label') || knob.dataset.p }));
+  const insertKnobs = [...(machine.el?.querySelectorAll('x-knob[data-insert-id][data-insert-param]') ?? [])];
+  for (const knob of insertKnobs) {
+    const key = `insert:${knob.dataset.insertId}:${knob.dataset.insertParam}`;
+    list.push({ key, label: labelFor(key, knob) });
+  }
+  return list;
+}
+
+/** Liefert den Mix-Key DESSELBEN Inserts, wenn `key` ein Insert-Regler
+ *  ist, der NICHT selbst der Mix-Regler ist, und der Insert-Typ
+ *  überhaupt einen Mix-Regler hat (Comp/EQ/Drive haben keinen -- sie sind
+ *  immer voll "wet", ein Dry/Wet-Mix ergibt dort keinen Sinn). Grundlage
+ *  für's automatische Mitmappen des Mix-Reglers beim Zuordnen eines
+ *  anderen Insert-Parameters (s. Nutzer-Anfrage: sonst bewegt sich der
+ *  Effekt-Parameter über die Achse, aber der Effekt bleibt bei Mix=0
+ *  unhörbar). */
+function siblingMixKey(machine, key) {
+  const m = INSERT_KEY_RE.exec(key);
+  if (!m || m[2] === 'mix') return null;
+  const mixKey = `insert:${m[1]}:mix`;
+  return readKnobMeta(machine, mixKey) ? mixKey : null;
 }
 
 /** Dieselbe Normalisierung wie <x-knob>#toNorm()/#fromNorm() (dort private,
@@ -270,7 +318,20 @@ function renderXYList(machine, axis, anchorEl, onChange) {
     } else {
       btn.addEventListener('click', () => {
         const meta = readKnobMeta(machine, key);
-        st[axis] = [...entries, { key, from: parseFloat(meta?.min ?? '0'), to: parseFloat(meta?.max ?? '1') }];
+        const newEntries = [...entries, { key, from: parseFloat(meta?.min ?? '0'), to: parseFloat(meta?.max ?? '1') }];
+        // Mappt man einen Insert-Effekt-Parameter (z. B. Reverb Decay), bleibt
+        // der Effekt bei Mix=0 unhörbar, obwohl sich der Regler über die
+        // Achse bewegt -- deshalb den Mix-Regler DESSELBEN Inserts
+        // automatisch mit auf dieselbe Achse stacken (von seinem aktuellen
+        // Wert bis 80%), sofern er nicht schon irgendwo (dieser oder der
+        // anderen Achse) gemappt ist. Bleibt wie jeder andere Stack-Eintrag
+        // über Range/✕ manuell anpassbar oder entfernbar.
+        const mixKey = siblingMixKey(machine, key);
+        if (mixKey && !newEntries.some((e) => e.key === mixKey) && !otherKeys.has(mixKey)) {
+          const mixMeta = readKnobMeta(machine, mixKey);
+          if (mixMeta) newEntries.push({ key: mixKey, from: parseFloat(mixMeta.value), to: 0.8 });
+        }
+        st[axis] = newEntries;
         onChange();
         renderXYMenu(machine, axis, anchorEl, onChange);
       });

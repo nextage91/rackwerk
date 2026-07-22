@@ -995,9 +995,13 @@ button {
   font-size: 13px;
   font-weight: 600;
   color: var(--lcd-ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* KEIN white-space:nowrap/ellipsis mehr -- Insert-Effekt-Parameter tragen
+     einen Effektname-Präfix ("Algorithmic Reverb #1: Decay"), der sonst zu
+     unlesbarem "Algorithmi..." abgeschnitten würde. Zeilenumbruch statt
+     Kürzung, die Zeile wächst dafür einfach etwas (row hat kein fixes
+     height, nur min-height). */
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 .xy-picker__row-range {
   font-size: 10px;
