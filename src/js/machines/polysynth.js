@@ -18,6 +18,7 @@ import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
 import { midiToHz, applyFilterEnv } from '../core/dsp.js';
+import { automation } from '../core/automation.js';
 
 /** Chord-Voicings als Halbtonabstände zur Root-Note. */
 const CHORDS = {
@@ -29,6 +30,9 @@ const CHORDS = {
   min7:   { label: 'Min7',   offsets: [0, 3, 7, 10] },
   sus4:   { label: 'Sus4',   offsets: [0, 5, 7] },
 };
+/** Feste Reihenfolge für die Chord-Automation (Lane speichert einen
+ *  Options-INDEX, nicht den String-Key — s. automation.js#recordSwitch). */
+const CHORD_KEYS = Object.keys(CHORDS);
 
 /** Headroom pro Einzelstimme — durch Wurzel(Stimmenzahl) geteilt, damit ein
  *  4-stimmiger Maj7 nicht deutlich lauter ist als ein Single-Voicing (grobe
@@ -183,23 +187,37 @@ export class PolySynth extends StepSequencedSynth {
     // Chord-Typ: bestimmt die Voicing künftig getriggerter Noten (wirkt
     // NICHT rückwirkend auf schon klingende Stimmen — sonst tauchen/
     // verschwinden Töne scheinbar grundlos aus einem gehaltenen Akkord).
+    // Automatisierbar wie ein Knob (registerSwitch/recordSwitch, s.
+    // automation.js) -- die Lane speichert den Options-INDEX (Position in
+    // CHORD_KEYS), kein Ziehen nötig: jeder Klick schreibt sofort einen
+    // Wertwechsel ab der aktuellen Playhead-Position (Halte-/Step-
+    // Verhalten, keine Überblendung zwischen zwei Chord-Typen).
     const seg = document.createElement('div');
     seg.className = 'seg';
+    seg.setAttribute('label', 'Chord');
     seg.innerHTML = `
       <span class="seg__label">Chord</span>
       ${Object.entries(CHORDS).map(([key, c]) =>
         `<button class="seg__btn" data-chord="${key}">${c.label}</button>`).join('')}
     `;
-    seg.querySelectorAll('.seg__btn').forEach((b) =>
+    const syncChordButtons = () => seg.querySelectorAll('.seg__btn').forEach((b) =>
       b.classList.toggle('is-active', b.dataset.chord === this.chordType));
+    syncChordButtons();
     seg.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-chord]');
       if (!btn) return;
+      const oldIdx = CHORD_KEYS.indexOf(this.chordType);
       this.chordType = btn.dataset.chord;
-      seg.querySelectorAll('.seg__btn').forEach((b) =>
-        b.classList.toggle('is-active', b === btn));
+      syncChordButtons();
+      automation.recordSwitch(`${this.id}:chordType`, oldIdx, CHORD_KEYS.indexOf(this.chordType));
     });
     container.appendChild(seg);
+
+    automation.registerSwitch(`${this.id}:chordType`, seg, (v) => {
+      const idx = Math.max(0, Math.min(CHORD_KEYS.length - 1, Math.round(v)));
+      this.chordType = CHORD_KEYS[idx];
+      syncChordButtons();
+    });
 
     // Filtertyp — wie bei SubSynth, wirkt sofort auch auf klingende Stimmen
     const filterSeg = document.createElement('div');
