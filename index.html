@@ -16212,14 +16212,29 @@ class Automation {
 
   /**
    * Die Pattern-Länge einer Maschine setzen. Neu aufgenommene Lanes
-   * werden dann so lang; bereits vorhandene Lanes der Maschine werden
-   * mitgezogen (kacheln beim Verlängern, abschneiden beim Verkürzen) —
-   * genau wie die Steps. Von den Maschinen bei Aufbau und bei jeder
-   * Längenänderung aufgerufen.
+   * werden dann so lang. Mit `resize: true` werden zusätzlich bereits
+   * vorhandene Lanes der Maschine mitgezogen (kacheln beim Verlängern,
+   * abschneiden beim Verkürzen) — genau wie die Steps.
+   *
+   * `resize` bewusst standardmäßig AUS: setBars() wird nicht nur bei einer
+   * echten Längenänderung gerufen, sondern bei JEDEM Pattern-Wechsel
+   * (setPatternIndex/bindClipData in beiden Maschinen-Basisklassen), damit
+   * neu aufgenommene Lanes die Länge des GERADE aktiven Patterns erhalten.
+   * Ein Wechsel zwischen zwei unterschiedlich langen Patterns (z. B. 4-Takt-
+   * Pattern A → 1-Takt-Pattern B) würde mit unbedingtem Resize die Lanes
+   * jedes Mal kürzen/wieder verlängern — Wechsel zurück auf A kachelt dann
+   * nur noch den auf 1 Takt abgeschnittenen REST der Fahrt, der Rest ist
+   * verloren. Das träfe die Song-Timeline besonders hart: jeder aufge-
+   * zeichnete Pattern-Wechsel ruft setPatternIndex() bei jedem Loop-
+   * Durchlauf erneut auf. Die Wiedergabe (#laneIndex/#tick) braucht das
+   * Resize ohnehin nicht — jede Lane loopt über ihre EIGENE Länge. Nur der
+   * explizite "Pattern-Länge ändern"-Button (onLengthChange) ist eine
+   * echte Nutzerabsicht und ruft resize:true.
    */
-  setBars(machineId, bars) {
+  setBars(machineId, bars, { resize = false } = {}) {
     bars = Math.max(1, Math.round(bars));
     this.bars.set(machineId, bars);
+    if (!resize) return;
     const prefix = `${machineId}:`;
     const newLen = RESOLUTION * bars;
     for (const [key, lane] of this.lanes) {
@@ -17408,7 +17423,21 @@ class Machine {
       removeTimer = setTimeout(() => {
         removeTimer = null;
         removeBtn.classList.remove('is-holding');
-        const state = this.serialize(); // vor dispose() sichern — für Undo
+        // Vollständiges Bundle vor dispose() sichern — für Undo. Nicht nur
+        // this.serialize() (Unterklassen-State): Inserts/Sends/Clips/
+        // Automation-Lanes sind Sibling-Felder (wie im Projekt-Format, s.
+        // project.js) und dispose() löscht die Lanes unwiderruflich
+        // (automation.unregisterMachine). Ohne dieses Bundle käme "Undo"
+        // eine Maschine ohne Effektkette und ohne aufgenommene Fahrten
+        // zurück — stiller Datenverlust hinter dem Feature, das genau
+        // davor schützen soll.
+        const state = {
+          state: this.serialize(),
+          sends: { ...this.sends },
+          inserts: this.serializeInserts(),
+          clips: this.serializeClips(),
+          lanes: automation.exportLanes(this.id),
+        };
         // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
         // ein bubbling Event auf einem bereits entfernten Knoten erreicht
         // keine Vorfahren mehr (also auch nicht Racks Listener).
@@ -18184,7 +18213,7 @@ class TrackedDrumMachine extends Machine {
       onLengthChange: (bars) => {
         for (const tr of this.tracks) resizePattern(tr.steps, bars);
         this.seq.setPattern(this.tracks[this.selected].steps);
-        automation.setBars(this.id, bars); // Spur-Lanes mitwachsen lassen
+        automation.setBars(this.id, bars, { resize: true }); // Spur-Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
@@ -18368,7 +18397,7 @@ class StepSequencedSynth extends Machine {
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);
-        automation.setBars(this.id, bars); // Lanes mitwachsen lassen
+        automation.setBars(this.id, bars, { resize: true }); // Lanes mitwachsen lassen
       },
     });
     container.appendChild(this.seq.el);
@@ -19934,9 +19963,21 @@ class Rack {
       const MachineClass = machine.constructor;
       undo.offer(`${MachineClass.meta.name} removed`, () => {
         const restored = new MachineClass();
-        if (state) restored.deserialize(state);
+        // Vollständiges Bundle wiederherstellen (state/sends/inserts/clips/
+        // lanes) -- derselbe Pfad wie project.js#loadProject, damit "Undo"
+        // wirklich den kompletten Zustand zurückbringt, nicht nur den
+        // Unterklassen-eigenen state (s. machine.js, wo dieses Bundle beim
+        // Entfernen geschnürt wird).
+        if (state?.state) restored.deserialize(state.state);
+        if (state?.sends) restored.setSends(state.sends);
+        if (state?.inserts) restored.deserializeInserts(state.inserts);
+        if (state?.clips) restored.deserializeClips(state.clips);
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
+        if (state?.lanes) {
+          automation.importLanes(restored.id, state.lanes);
+          restored.onLanesImported?.();
+        }
         this.#openFocus(restored);
       });
     });
@@ -19958,7 +19999,26 @@ class Rack {
    */
   addMachine(MachineClass, state = null, { focus = false } = {}) {
     const machine = new MachineClass();
-    if (state) machine.deserialize(state);
+    if (state) {
+      try {
+        machine.deserialize(state);
+      } catch (err) {
+        // deserialize() ist bei manchen Maschinen erst auf halbem Weg
+        // gescheitert (z. B. ungültige Track-Daten aus einer beschädigten
+        // Projektdatei) -- der Konstruktor lief aber schon vollständig
+        // (buildAudio() hat Nodes an masterBus/delayBus/reverbBus gehängt,
+        // als Transport-Listener und in der modulweiten Solo-Koordination
+        // von machine.js registriert). OHNE dispose() bliebe dieses Objekt
+        // als unsichtbare, aber weiterlaufende Leiche im Audiographen und
+        // in den Listener-Listen hängen -- rack.machines enthält es nie
+        // (der Push unten wird ja gar nicht erreicht), rack.clear() findet
+        // es also auch nie. dispose() räumt genau das auf, dann den
+        // Fehler weiterreichen (project.js#loadProject/importMachines
+        // fangen ihn pro Maschine ab und protokollieren ihn).
+        machine.dispose();
+        throw err;
+      }
+    }
     this.machines.push(machine);
     this.#mount(machine, null); // null = ans Ende der Liste
     if (focus) this.#openFocus(machine);
@@ -21134,20 +21194,44 @@ function newProject(rack) {
 }
 
 function loadProject(rack, data) {
+  if (!data || !Array.isArray(data.machines)) {
+    throw new Error('Not a RackWerk project file (missing "machines" array)');
+  }
   transport.stop();
   rack.clear();
   transport.setBpm(data.bpm ?? 120);
   masterFX.deserialize(data.fx); // fehlt bei alten Projekten → Defaults
 
-  for (const md of data.machines ?? []) {
+  let loaded = 0;
+  for (const md of data.machines) {
     const MachineClass = BY_TYPE[md.type];
     if (!MachineClass) continue; // unbekannter Typ (z. B. ältere/neuere Version)
-    const machine = rack.addMachine(MachineClass, md.state);
-    if (md.sends) machine.setSends(md.sends);
-    if (md.inserts) machine.deserializeInserts(md.inserts);
-    if (md.clips) machine.deserializeClips(md.clips);
-    automation.importLanes(machine.id, md.lanes);
-    machine.onLanesImported?.();
+    // Eine einzelne kaputte Maschine (unerwartete Datenform in einer
+    // beschädigten/handgebastelten Datei) darf den Rest des Ladens nicht
+    // abreißen -- sonst bricht loadProject() MITTEN im schon per clear()
+    // geleerten Rack ab, und der Autosave-Timer überschreibt kurz danach
+    // die letzte GUTE Session mit diesem halb geladenen Zustand.
+    try {
+      const machine = rack.addMachine(MachineClass, md.state);
+      if (md.sends) machine.setSends(md.sends);
+      if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.clips) machine.deserializeClips(md.clips);
+      automation.importLanes(machine.id, md.lanes);
+      machine.onLanesImported?.();
+      loaded++;
+    } catch (err) {
+      console.warn(`Machine "${md.type}" could not be loaded — skipped:`, err);
+    }
+  }
+  // Die Pro-Maschine-Abschottung oben verhindert einen Crash, aber nicht
+  // den Sonderfall "die Datei nannte Maschinen, aber JEDE einzelne ist
+  // gescheitert" -- ohne diese Prüfung würde loadProject() dann klaglos
+  // mit einem leeren Rack zurückkehren (kein Throw, also KEIN Rollback
+  // in main.js), obwohl die vorherige Session gerade durch rack.clear()
+  // oben schon verworfen wurde. Ein absichtlich leeres Projekt (data.
+  // machines = []) bleibt davon unberührt -- das ist ein legitimes Ergebnis.
+  if (loaded === 0 && data.machines.length > 0) {
+    throw new Error('None of the machines in this file could be loaded');
   }
   song.deserialize(data.song); // nach den Maschinen (Events zeigen auf deren Position)
 }
@@ -21160,16 +21244,22 @@ function loadProject(rack, data) {
  */
 function importMachines(rack, data) {
   const added = [];
-  for (const md of data.machines ?? []) {
+  for (const md of data?.machines ?? []) {
     const MachineClass = BY_TYPE[md.type];
     if (!MachineClass) continue;
-    const machine = rack.addMachine(MachineClass, md.state);
-    if (md.sends) machine.setSends(md.sends);
-    if (md.inserts) machine.deserializeInserts(md.inserts);
-    if (md.clips) machine.deserializeClips(md.clips);
-    automation.importLanes(machine.id, md.lanes);
-    machine.onLanesImported?.();
-    added.push(machine);
+    // Gleiche Abschottung wie loadProject() -- eine kaputte Maschine im
+    // fremden (Jam-)Projekt darf die übrigen nicht mitreißen.
+    try {
+      const machine = rack.addMachine(MachineClass, md.state);
+      if (md.sends) machine.setSends(md.sends);
+      if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.clips) machine.deserializeClips(md.clips);
+      automation.importLanes(machine.id, md.lanes);
+      machine.onLanesImported?.();
+      added.push(machine);
+    } catch (err) {
+      console.warn(`Machine "${md.type}" could not be imported — skipped:`, err);
+    }
   }
   return added;
 }
@@ -21340,12 +21430,20 @@ function wireProjectUI(rack) {
         <button class="project__delete" aria-label="Delete project">✕</button>
       `;
       item.querySelector('.project__load').addEventListener('click', () => {
+        // Snapshot der laufenden Session VOR dem Laden -- loadProject()
+        // leert das Rack sofort (rack.clear()); scheitert das Parsen/
+        // Deserialisieren mittendrin, bliebe ohne Rollback ein halb
+        // geleertes Rack stehen, das der Autosave 3s später über die
+        // letzte gute Session schreibt (stiller Datenverlust).
+        const backup = serializeProject(rack);
         try {
           loadProject(rack, JSON.parse(store.get(`project:${name}`)));
           nameInput.value = name;
           sheet.hidden = true;
         } catch (err) {
           console.error('Project could not be loaded:', err);
+          loadProject(rack, backup);
+          showHintToast('Project could not be loaded — the file seems to be damaged. Your previous session was restored.');
         }
       });
       item.querySelector('.project__delete').addEventListener('click', () => {
@@ -21410,6 +21508,13 @@ function wireProjectUI(rack) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
+      // Snapshot VOR dem Import -- bei "replace" leert loadProject() das
+      // Rack sofort; bricht das Parsen/Deserialisieren einer beschädigten
+      // Datei mittendrin ab, bliebe ohne Rollback ein halb geleertes/halb
+      // befülltes Rack stehen, das der Autosave 3s später über die letzte
+      // gute Session schreibt (stiller Datenverlust). Bei "merge" ist der
+      // Backup ein günstiges No-Op-Netz für denselben Fehlerfall.
+      const backup = serializeProject(rack);
       try {
         const data = JSON.parse(reader.result);
         if (importMode === 'replace') loadProject(rack, data);
@@ -21417,6 +21522,8 @@ function wireProjectUI(rack) {
         sheet.hidden = true;
       } catch (err) {
         console.error('Import failed:', err);
+        loadProject(rack, backup);
+        showHintToast('Import failed — the file seems to be damaged or isn\'t a RackWerk project. Your previous session was restored.');
       }
       fileInput.value = '';
     };

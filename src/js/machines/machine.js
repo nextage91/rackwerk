@@ -506,7 +506,21 @@ export class Machine {
       removeTimer = setTimeout(() => {
         removeTimer = null;
         removeBtn.classList.remove('is-holding');
-        const state = this.serialize(); // vor dispose() sichern — für Undo
+        // Vollständiges Bundle vor dispose() sichern — für Undo. Nicht nur
+        // this.serialize() (Unterklassen-State): Inserts/Sends/Clips/
+        // Automation-Lanes sind Sibling-Felder (wie im Projekt-Format, s.
+        // project.js) und dispose() löscht die Lanes unwiderruflich
+        // (automation.unregisterMachine). Ohne dieses Bundle käme "Undo"
+        // eine Maschine ohne Effektkette und ohne aufgenommene Fahrten
+        // zurück — stiller Datenverlust hinter dem Feature, das genau
+        // davor schützen soll.
+        const state = {
+          state: this.serialize(),
+          sends: { ...this.sends },
+          inserts: this.serializeInserts(),
+          clips: this.serializeClips(),
+          lanes: automation.exportLanes(this.id),
+        };
         // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
         // ein bubbling Event auf einem bereits entfernten Knoten erreicht
         // keine Vorfahren mehr (also auch nicht Racks Listener).

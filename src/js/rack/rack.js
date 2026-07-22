@@ -19,6 +19,7 @@ import { PercSynth } from '../machines/percsynth.js';
 import { PolySynth } from '../machines/polysynth.js';
 import { AnalogKit } from '../machines/analogkit.js';
 import { undo } from '../core/undo.js';
+import { automation } from '../core/automation.js';
 
 /** Neue Maschinentypen einfach hier registrieren. */
 export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit];
@@ -58,9 +59,21 @@ export class Rack {
       const MachineClass = machine.constructor;
       undo.offer(`${MachineClass.meta.name} removed`, () => {
         const restored = new MachineClass();
-        if (state) restored.deserialize(state);
+        // Vollständiges Bundle wiederherstellen (state/sends/inserts/clips/
+        // lanes) -- derselbe Pfad wie project.js#loadProject, damit "Undo"
+        // wirklich den kompletten Zustand zurückbringt, nicht nur den
+        // Unterklassen-eigenen state (s. machine.js, wo dieses Bundle beim
+        // Entfernen geschnürt wird).
+        if (state?.state) restored.deserialize(state.state);
+        if (state?.sends) restored.setSends(state.sends);
+        if (state?.inserts) restored.deserializeInserts(state.inserts);
+        if (state?.clips) restored.deserializeClips(state.clips);
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
+        if (state?.lanes) {
+          automation.importLanes(restored.id, state.lanes);
+          restored.onLanesImported?.();
+        }
         this.#openFocus(restored);
       });
     });
@@ -82,7 +95,26 @@ export class Rack {
    */
   addMachine(MachineClass, state = null, { focus = false } = {}) {
     const machine = new MachineClass();
-    if (state) machine.deserialize(state);
+    if (state) {
+      try {
+        machine.deserialize(state);
+      } catch (err) {
+        // deserialize() ist bei manchen Maschinen erst auf halbem Weg
+        // gescheitert (z. B. ungültige Track-Daten aus einer beschädigten
+        // Projektdatei) -- der Konstruktor lief aber schon vollständig
+        // (buildAudio() hat Nodes an masterBus/delayBus/reverbBus gehängt,
+        // als Transport-Listener und in der modulweiten Solo-Koordination
+        // von machine.js registriert). OHNE dispose() bliebe dieses Objekt
+        // als unsichtbare, aber weiterlaufende Leiche im Audiographen und
+        // in den Listener-Listen hängen -- rack.machines enthält es nie
+        // (der Push unten wird ja gar nicht erreicht), rack.clear() findet
+        // es also auch nie. dispose() räumt genau das auf, dann den
+        // Fehler weiterreichen (project.js#loadProject/importMachines
+        // fangen ihn pro Maschine ab und protokollieren ihn).
+        machine.dispose();
+        throw err;
+      }
+    }
     this.machines.push(machine);
     this.#mount(machine, null); // null = ans Ende der Liste
     if (focus) this.#openFocus(machine);

@@ -287,14 +287,29 @@ class Automation {
 
   /**
    * Die Pattern-Länge einer Maschine setzen. Neu aufgenommene Lanes
-   * werden dann so lang; bereits vorhandene Lanes der Maschine werden
-   * mitgezogen (kacheln beim Verlängern, abschneiden beim Verkürzen) —
-   * genau wie die Steps. Von den Maschinen bei Aufbau und bei jeder
-   * Längenänderung aufgerufen.
+   * werden dann so lang. Mit `resize: true` werden zusätzlich bereits
+   * vorhandene Lanes der Maschine mitgezogen (kacheln beim Verlängern,
+   * abschneiden beim Verkürzen) — genau wie die Steps.
+   *
+   * `resize` bewusst standardmäßig AUS: setBars() wird nicht nur bei einer
+   * echten Längenänderung gerufen, sondern bei JEDEM Pattern-Wechsel
+   * (setPatternIndex/bindClipData in beiden Maschinen-Basisklassen), damit
+   * neu aufgenommene Lanes die Länge des GERADE aktiven Patterns erhalten.
+   * Ein Wechsel zwischen zwei unterschiedlich langen Patterns (z. B. 4-Takt-
+   * Pattern A → 1-Takt-Pattern B) würde mit unbedingtem Resize die Lanes
+   * jedes Mal kürzen/wieder verlängern — Wechsel zurück auf A kachelt dann
+   * nur noch den auf 1 Takt abgeschnittenen REST der Fahrt, der Rest ist
+   * verloren. Das träfe die Song-Timeline besonders hart: jeder aufge-
+   * zeichnete Pattern-Wechsel ruft setPatternIndex() bei jedem Loop-
+   * Durchlauf erneut auf. Die Wiedergabe (#laneIndex/#tick) braucht das
+   * Resize ohnehin nicht — jede Lane loopt über ihre EIGENE Länge. Nur der
+   * explizite "Pattern-Länge ändern"-Button (onLengthChange) ist eine
+   * echte Nutzerabsicht und ruft resize:true.
    */
-  setBars(machineId, bars) {
+  setBars(machineId, bars, { resize = false } = {}) {
     bars = Math.max(1, Math.round(bars));
     this.bars.set(machineId, bars);
+    if (!resize) return;
     const prefix = `${machineId}:`;
     const newLen = RESOLUTION * bars;
     for (const [key, lane] of this.lanes) {
