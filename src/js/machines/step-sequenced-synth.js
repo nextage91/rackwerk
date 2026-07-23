@@ -60,6 +60,19 @@ export class StepSequencedSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Ob Pattern-Slot i überhaupt einen Ton enthält — für die Jam-Proto-
+   *  Clip-Kacheln (jam-view.js), die leere Slots blass darstellen. */
+  hasPatternContent(i) {
+    return this.patterns[i].some((s) => s.on);
+  }
+
+  /** Pattern-Slot i direkt als neuen Jam-Clip anlegen — dieselbe Kopie wie
+   *  über den Halten-Chip im Rack (s. buildPatternControls#onAddClip),
+   *  nur ohne den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
+  addClipFromPattern(i) {
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+  }
+
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
@@ -115,9 +128,7 @@ export class StepSequencedSynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
+      onAddClip: (i) => this.addClipFromPattern(i),
     });
     container.appendChild(this.patternBank.el);
 

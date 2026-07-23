@@ -641,9 +641,37 @@ function openClipDeleteMenu(machine, clipId, anchorEl) {
 
 /* ---------- Rendering ---------- */
 
+/** Solange eine Spur noch keine echten Clips hat: die vier A/B/C/D-
+ *  Pattern-Slots direkt als antippbare "Proto-Clips" zeigen, statt nur
+ *  auf den Halten-Chip im Rack zu verweisen -- der schnellste Weg vom
+ *  "ich habe ein Pattern" zum "es läuft als Clip im Jam", ganz ohne
+ *  Rack-Umweg. Ein Tap legt den Clip an (addClipFromPattern, dieselbe
+ *  Kopie wie "+ Add Clip" im Rack) UND startet/reiht ihn direkt ein, wie
+ *  ein echter Clip-Launcher-Slot. Leere Pattern-Slots bleiben antippbar,
+ *  wirken aber blass (kein Grund, sie zu sperren -- vielleicht will man
+ *  bewusst einen stillen Clip). Sobald mind. ein echter Clip existiert,
+ *  übernimmt die normale Clip-Liste unten wieder (keine Dopplung). */
+function renderProtoClips(machine, clipsEl) {
+  clipsEl.innerHTML = `
+    <p class="proto-clips__hint">Tap a pattern to launch it as a clip:</p>
+    <div class="proto-clips">
+      ${'ABCD'.split('').map((letter, i) => `
+        <button type="button" class="proto-clip${machine.hasPatternContent(i) ? '' : ' is-empty'}" data-slot="${i}">${letter}</button>
+      `).join('')}
+    </div>
+  `;
+  clipsEl.querySelectorAll('.proto-clip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const clip = machine.addClipFromPattern(Number(btn.dataset.slot));
+      renderClips(machine, clipsEl);
+      toggleClip(machine, clip.id);
+    });
+  });
+}
+
 function renderClips(machine, clipsEl) {
   if (!machine.clips.length) {
-    clipsEl.innerHTML = '<div class="clips-empty">No clips yet.<br>Hold a pattern slot in the Rack.</div>';
+    renderProtoClips(machine, clipsEl);
     return;
   }
   const st = stateFor(machine);

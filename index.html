@@ -1024,16 +1024,37 @@ button {
   gap: 5px;
   overflow-y: auto;
 }
-.clips-empty {
-  flex: 1 1 auto;
-  display: grid;
-  place-items: center;
-  text-align: center;
+/* Proto-Clips: solange eine Spur noch keine echten Clips hat, die vier
+   A/B/C/D-Pattern-Slots direkt antippbar zeigen (s. jam-view.js
+   #renderProtoClips) statt nur auf den Halten-Chip im Rack zu verweisen. */
+.proto-clips__hint {
+  flex: 0 0 auto;
+  margin: 0 0 6px;
   font-size: 11px;
   line-height: 1.4;
   color: var(--ink-faint);
-  padding: 8px;
+  text-align: center;
 }
+.proto-clips {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  align-content: start;
+}
+.proto-clip {
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  color: var(--ink-dim);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  touch-action: manipulation;
+}
+.proto-clip:active { transform: translateY(1px); }
+.proto-clip.is-empty { color: var(--ink-faint); opacity: .55; }
 /* Clip-Chip: gleiche Grundoptik wie .patbank__btn/.m-btn, aber als Liste
    statt fixem A/B/C/D-Raster -- Anzahl ist dynamisch (0..n). */
 .clip {
@@ -18171,6 +18192,20 @@ class TrackedDrumMachine extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Ob Pattern-Slot i überhaupt einen Treffer enthält (irgendeine Spur) —
+   *  für die Jam-Proto-Clip-Kacheln (jam-view.js), die leere Slots blass
+   *  darstellen. */
+  hasPatternContent(i) {
+    return this.patterns[i].some((steps) => steps.some((s) => s.on));
+  }
+
+  /** Pattern-Slot i direkt als neuen Jam-Clip anlegen — dieselbe Kopie wie
+   *  über den Halten-Chip im Rack (s. buildControls#onAddClip), nur ohne
+   *  den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
+  addClipFromPattern(i) {
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i) });
+  }
+
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.tracks[0].steps.length; // alle Spuren gleich lang
@@ -18464,9 +18499,7 @@ class TrackedDrumMachine extends Machine {
         this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
         this.setPatternIndex(i);
       },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
-      },
+      onAddClip: (i) => this.addClipFromPattern(i),
     });
     container.appendChild(this.patternBank.el);
 
@@ -18598,6 +18631,19 @@ class StepSequencedSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Ob Pattern-Slot i überhaupt einen Ton enthält — für die Jam-Proto-
+   *  Clip-Kacheln (jam-view.js), die leere Slots blass darstellen. */
+  hasPatternContent(i) {
+    return this.patterns[i].some((s) => s.on);
+  }
+
+  /** Pattern-Slot i direkt als neuen Jam-Clip anlegen — dieselbe Kopie wie
+   *  über den Halten-Chip im Rack (s. buildPatternControls#onAddClip),
+   *  nur ohne den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
+  addClipFromPattern(i) {
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+  }
+
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
@@ -18653,9 +18699,7 @@ class StepSequencedSynth extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.patterns[i].map((s) => ({ ...s })),
       putSlot: (i, data) => { this.patterns[i] = data.map((s) => ({ ...s })); this.setPatternIndex(i); },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
-      },
+      onAddClip: (i) => this.addClipFromPattern(i),
     });
     container.appendChild(this.patternBank.el);
 
@@ -21071,9 +21115,37 @@ function openClipDeleteMenu(machine, clipId, anchorEl) {
 
 /* ---------- Rendering ---------- */
 
+/** Solange eine Spur noch keine echten Clips hat: die vier A/B/C/D-
+ *  Pattern-Slots direkt als antippbare "Proto-Clips" zeigen, statt nur
+ *  auf den Halten-Chip im Rack zu verweisen -- der schnellste Weg vom
+ *  "ich habe ein Pattern" zum "es läuft als Clip im Jam", ganz ohne
+ *  Rack-Umweg. Ein Tap legt den Clip an (addClipFromPattern, dieselbe
+ *  Kopie wie "+ Add Clip" im Rack) UND startet/reiht ihn direkt ein, wie
+ *  ein echter Clip-Launcher-Slot. Leere Pattern-Slots bleiben antippbar,
+ *  wirken aber blass (kein Grund, sie zu sperren -- vielleicht will man
+ *  bewusst einen stillen Clip). Sobald mind. ein echter Clip existiert,
+ *  übernimmt die normale Clip-Liste unten wieder (keine Dopplung). */
+function renderProtoClips(machine, clipsEl) {
+  clipsEl.innerHTML = `
+    <p class="proto-clips__hint">Tap a pattern to launch it as a clip:</p>
+    <div class="proto-clips">
+      ${'ABCD'.split('').map((letter, i) => `
+        <button type="button" class="proto-clip${machine.hasPatternContent(i) ? '' : ' is-empty'}" data-slot="${i}">${letter}</button>
+      `).join('')}
+    </div>
+  `;
+  clipsEl.querySelectorAll('.proto-clip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const clip = machine.addClipFromPattern(Number(btn.dataset.slot));
+      renderClips(machine, clipsEl);
+      toggleClip(machine, clip.id);
+    });
+  });
+}
+
 function renderClips(machine, clipsEl) {
   if (!machine.clips.length) {
-    clipsEl.innerHTML = '<div class="clips-empty">No clips yet.<br>Hold a pattern slot in the Rack.</div>';
+    renderProtoClips(machine, clipsEl);
     return;
   }
   const st = stateFor(machine);

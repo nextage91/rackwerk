@@ -934,16 +934,37 @@ button {
   gap: 5px;
   overflow-y: auto;
 }
-.clips-empty {
-  flex: 1 1 auto;
-  display: grid;
-  place-items: center;
-  text-align: center;
+/* Proto-Clips: solange eine Spur noch keine echten Clips hat, die vier
+   A/B/C/D-Pattern-Slots direkt antippbar zeigen (s. jam-view.js
+   #renderProtoClips) statt nur auf den Halten-Chip im Rack zu verweisen. */
+.proto-clips__hint {
+  flex: 0 0 auto;
+  margin: 0 0 6px;
   font-size: 11px;
   line-height: 1.4;
   color: var(--ink-faint);
-  padding: 8px;
+  text-align: center;
 }
+.proto-clips {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  align-content: start;
+}
+.proto-clip {
+  min-height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  color: var(--ink-dim);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  touch-action: manipulation;
+}
+.proto-clip:active { transform: translateY(1px); }
+.proto-clip.is-empty { color: var(--ink-faint); opacity: .55; }
 /* Clip-Chip: gleiche Grundoptik wie .patbank__btn/.m-btn, aber als Liste
    statt fixem A/B/C/D-Raster -- Anzahl ist dynamisch (0..n). */
 .clip {
