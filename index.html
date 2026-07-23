@@ -21755,56 +21755,26 @@ const syncBottomBarHeight = () => {
   const h = $('#bottombar')?.getBoundingClientRect().height;
   if (h) document.documentElement.style.setProperty('--bottombar-h', `${h}px`);
 };
-/* html/body selbst brauchen dieselbe Behandlung: als Homescreen-App
-   gestartet (apple-mobile-web-app-capable) gibt es keine Safari-Leiste
-   mehr, die eine falsch berechnete Seitenhöhe kaschiert -- 100dvh reicht
-   dafür auf iOS nicht zuverlässig (bekannter WebKit-Bug gerade im
-   Standalone-Modus, s. UI-Feedback). window.innerHeight ist die einzige
-   Quelle, die den wirklich sichtbaren Bereich in JEDEM Kontext (Browser-
-   Tab, Standalone, Rotation) korrekt widerspiegelt. */
+/* html/body selbst brauchen dieselbe Behandlung, damit sie in JEDEM
+   Kontext (Browser-Tab, Homescreen-Standalone, Rotation) exakt den von
+   window.innerHeight gemeldeten Bereich ausfüllen -- 100dvh reicht dafür
+   auf iOS nicht überall zuverlässig. Per Diagnose bestätigt: html/body/
+   Bottom-Bar füllen damit bereits exakt den Bereich, den iOS der Seite
+   zur Verfügung stellt (html.rect.bottom === innerHeight, keine Lücke
+   IM Layout). Ein evtl. verbleibender toter Streifen unten im Homescreen-
+   Standalone-Modus (App per "Zum Home-Bildschirm" statt echter App-Store-
+   Installation) liegt AUSSERHALB dieses Bereichs -- eine von iOS reservierte
+   Zone, die über kein CSS/JS von der Seite aus erreichbar ist (kein Safe-
+   Area-Wert, keine Viewport-API zeigt sie an). Das ist eine Plattform-
+   Grenze, kein Layout-Bug. */
 const syncViewportHeight = () => {
   document.documentElement.style.setProperty('--app-vh', `${window.innerHeight}px`);
 };
-/* TEMPORÄR: Diagnose-Anzeige für den toten Streifen unten im Homescreen-
-   Standalone-Modus (window.innerHeight-Fix allein hat ihn nicht behoben,
-   s. UI-Feedback) -- zeigt die tatsächlichen Werte direkt auf dem Gerät,
-   statt hier weiter blind zu raten. Wird entfernt, sobald der Bug klar
-   ist -- daher bewusst ohne Feature-Flag/Query-Param, einfach sichtbar. */
-const debugEl = document.createElement('div');
-debugEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;background:#000;'
-  + 'color:#6f6;font:9px/1.4 monospace;padding:6px;white-space:pre;pointer-events:none;'
-  + 'border:1px solid #6f6;';
-document.body.appendChild(debugEl);
-const updateDebug = () => {
-  const cs = getComputedStyle(document.documentElement);
-  const htmlRect = document.documentElement.getBoundingClientRect();
-  const bbEl = document.querySelector('#bottombar');
-  const bbRect = bbEl?.getBoundingClientRect();
-  debugEl.textContent = [
-    `innerHeight: ${window.innerHeight}`,
-    `screen.height: ${screen.height}`,
-    `screen.availHeight: ${screen.availHeight}`,
-    `visualViewport.h: ${window.visualViewport?.height}`,
-    `visualViewport.offsetTop: ${window.visualViewport?.offsetTop}`,
-    `html.rect.h: ${htmlRect.height}`,
-    `html.rect.bottom: ${htmlRect.bottom}`,
-    `html.scrollHeight: ${document.documentElement.scrollHeight}`,
-    `bottombar.rect.bottom: ${bbRect?.bottom}`,
-    `bottombar.paddingBottom: ${bbEl ? getComputedStyle(bbEl).paddingBottom : 'n/a'}`,
-    `--app-vh: ${cs.getPropertyValue('--app-vh')}`,
-    `--safe-bottom: ${cs.getPropertyValue('--safe-bottom')}`,
-    `standalone: ${window.navigator.standalone}`,
-    `dpr: ${window.devicePixelRatio}`,
-  ].join('\n');
-};
-window.addEventListener('resize', updateDebug);
-
 window.addEventListener('resize', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
 window.addEventListener('orientationchange', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
 syncViewportHeight();
 syncTransportHeight();
 syncBottomBarHeight();
-updateDebug(); // NACH den obigen sync-Aufrufen, sonst zeigt --app-vh den Wert von vor dem allerersten Messen
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
