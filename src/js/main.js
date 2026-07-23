@@ -71,8 +71,19 @@ const syncBottomBarHeight = () => {
   const h = $('#bottombar')?.getBoundingClientRect().height;
   if (h) document.documentElement.style.setProperty('--bottombar-h', `${h}px`);
 };
-window.addEventListener('resize', () => { syncTransportHeight(); syncBottomBarHeight(); });
-window.addEventListener('orientationchange', () => { syncTransportHeight(); syncBottomBarHeight(); });
+/* html/body selbst brauchen dieselbe Behandlung: als Homescreen-App
+   gestartet (apple-mobile-web-app-capable) gibt es keine Safari-Leiste
+   mehr, die eine falsch berechnete Seitenhöhe kaschiert -- 100dvh reicht
+   dafür auf iOS nicht zuverlässig (bekannter WebKit-Bug gerade im
+   Standalone-Modus, s. UI-Feedback). window.innerHeight ist die einzige
+   Quelle, die den wirklich sichtbaren Bereich in JEDEM Kontext (Browser-
+   Tab, Standalone, Rotation) korrekt widerspiegelt. */
+const syncViewportHeight = () => {
+  document.documentElement.style.setProperty('--app-vh', `${window.innerHeight}px`);
+};
+window.addEventListener('resize', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
+window.addEventListener('orientationchange', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
+syncViewportHeight();
 syncTransportHeight();
 syncBottomBarHeight();
 
