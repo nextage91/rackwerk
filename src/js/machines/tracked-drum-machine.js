@@ -121,6 +121,20 @@ export class TrackedDrumMachine extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Ob Pattern-Slot i überhaupt einen Treffer enthält (irgendeine Spur) —
+   *  für die Jam-Proto-Clip-Kacheln (jam-view.js), die leere Slots blass
+   *  darstellen. */
+  hasPatternContent(i) {
+    return this.patterns[i].some((steps) => steps.some((s) => s.on));
+  }
+
+  /** Pattern-Slot i direkt als neuen Jam-Clip anlegen — dieselbe Kopie wie
+   *  über den Halten-Chip im Rack (s. buildControls#onAddClip), nur ohne
+   *  den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
+  addClipFromPattern(i) {
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i) });
+  }
+
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.tracks[0].steps.length; // alle Spuren gleich lang
@@ -414,9 +428,7 @@ export class TrackedDrumMachine extends Machine {
         this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
         this.setPatternIndex(i);
       },
-      onAddClip: (i, letter) => {
-        this.addClip({ name: `Pattern ${letter}`, shape: 'drums', data: this.#cloneSlot(i) });
-      },
+      onAddClip: (i) => this.addClipFromPattern(i),
     });
     container.appendChild(this.patternBank.el);
 

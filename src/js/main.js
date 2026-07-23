@@ -21,30 +21,10 @@ import { initJamView, renderJamView } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 
-/** Kleine, im Play/Stop-Icon-Stil gehaltene SVG-Glyphen (currentColor,
- *  24x24 viewBox) für Mixer/Song/Jam -- ersetzen die drei OS-Emoji (🎚️🎬🕹️),
- *  die je nach Plattform unterschiedlich aussehen und der einzige Bruch mit
- *  der sonst konsequent gezeichneten Hardware-Optik waren (s. UI-Review). */
-const ICON_MIXER = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
-  + '<line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '<rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '<rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '</svg>';
-const ICON_SONG = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">'
-  + '<rect x="2" y="9" width="7" height="6" rx="1.5"/>'
-  + '<rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>'
-  + '<rect x="16" y="9" width="6" height="6" rx="1.5"/>'
-  + '</svg>';
-const ICON_JAM = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
-  + '<circle cx="12" cy="12" r="3" fill="currentColor"/>'
-  + '<line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '</svg>';
+/** Öffnen-Funktionen für Mix/Song/Jam, von wireMixerUI/wireSongUI/
+ *  wireJamViewUI befüllt -- die Bottom-Bar (wireBottomBar) ruft sie auf,
+ *  ohne die jeweilige Sheet-Logik zu duplizieren. */
+const modeOpen = {};
 
 /* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
 $('#btn-unlock').addEventListener('click', async () => {
@@ -83,9 +63,18 @@ const syncTransportHeight = () => {
   const h = $('#transport')?.getBoundingClientRect().height;
   if (h) document.documentElement.style.setProperty('--transport-h', `${h}px`);
 };
-window.addEventListener('resize', syncTransportHeight);
-window.addEventListener('orientationchange', syncTransportHeight);
+/* Gleiche Idee für die Bottom-Bar (--bottombar-h): die Konsolen-Sheets
+   (.sheet__panel--console) und der Vollbild-Machine-Editor lassen unten
+   genau so viel Platz frei, wie die Bar gerade braucht (Safe-Area-abhängig,
+   deshalb messen statt raten). */
+const syncBottomBarHeight = () => {
+  const h = $('#bottombar')?.getBoundingClientRect().height;
+  if (h) document.documentElement.style.setProperty('--bottombar-h', `${h}px`);
+};
+window.addEventListener('resize', () => { syncTransportHeight(); syncBottomBarHeight(); });
+window.addEventListener('orientationchange', () => { syncTransportHeight(); syncBottomBarHeight(); });
 syncTransportHeight();
+syncBottomBarHeight();
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
@@ -95,21 +84,6 @@ function boot() {
   // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
   masterFX.init();
   $('#rack').appendChild(masterFX.render());
-
-  // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
-  // ohne den Umweg über das Projekte-Sheet.
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_MIXER, label: 'Mixer', color: '#7fd6a0',
-    onOpen: () => $('#btn-open-mixer').click(),
-  }));
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_SONG, label: 'Song Timeline', color: '#ff4d3d',
-    onOpen: () => $('#btn-open-song').click(),
-  }));
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_JAM, label: 'Jam', color: '#ffb84d',
-    onOpen: () => $('#btn-open-jam').click(),
-  }));
 
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
@@ -133,6 +107,7 @@ function boot() {
   wireMixerUI(rack);
   initJamView(rack);
   wireJamViewUI();
+  wireBottomBar(); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
   wireUndoUI();
   wireOnboardingUI();
 
@@ -153,26 +128,6 @@ function boot() {
       console.warn('Autosave failed:', err);
     }
   }, 3000);
-}
-
-/** Kompaktes Rack-Modul, das nur einen bestehenden Öffnen-Mechanismus
- *  antriggert (Mixer-/Song-Sheet) — dupliziert keine Logik, ruft nur
- *  den Klick auf den jeweils schon verdrahteten Sheet-Öffner-Button. */
-function buildRackShortcut({ icon, label, color, onOpen }) {
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
-  const el = document.createElement('button');
-  el.type = 'button';
-  el.className = 'machine rack-shortcut';
-  el.style.setProperty('--m-color', color);
-  el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
-  el.innerHTML = `
-    <span class="machine__stripe"></span>
-    <span class="rack-shortcut__icon">${icon}</span>
-    <span class="rack-shortcut__label">${label}</span>
-    <span class="rack-shortcut__chev">›</span>
-  `;
-  el.addEventListener('click', onOpen);
-  return el;
 }
 
 /* ---------- Projekte-Sheet ---------- */
@@ -783,11 +738,7 @@ function wireSongUI(rack) {
     }
   };
 
-  $('#btn-open-song').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    render();
-    sheet.hidden = false;
-  });
+  modeOpen.song = () => { render(); sheet.hidden = false; };
   sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
 
   armBtn.addEventListener('click', () => {
@@ -953,12 +904,7 @@ function wireMixerUI(rack) {
     }
   };
 
-  $('#btn-open-mixer').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    render();
-    sheet.hidden = false;
-    startMeters();
-  });
+  modeOpen.mix = () => { render(); sheet.hidden = false; startMeters(); };
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
     stopMeters();
@@ -968,14 +914,42 @@ function wireMixerUI(rack) {
 /* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
 function wireJamViewUI() {
   const sheet = $('#jam-sheet');
-  $('#btn-open-jam').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    renderJamView($('#jam-list'));
-    sheet.hidden = false;
-  });
+  modeOpen.jam = () => { renderJamView($('#jam-list')); sheet.hidden = false; };
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
   });
+}
+
+/* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------
+ * Öffnet/schließt dieselben Sheets, die vorher übers PRJ-Sheet erreichbar
+ * waren (modeOpen.mix/song/jam, s. wireMixerUI/wireSongUI/wireJamViewUI) —
+ * dupliziert also keine Render-/Meter-Logik. Zusätzlich: Mutual Exclusion
+ * (nur eine Konsole gleichzeitig offen) und Active-Tab-Sync per
+ * MutationObserver, weil jede Konsole auch über ihren eigenen ✕-Button
+ * schließen kann, nicht nur über die Bottom-Bar selbst. */
+function wireBottomBar() {
+  const sheets = { mix: $('#mixer-sheet'), song: $('#song-sheet'), jam: $('#jam-sheet') };
+  const modeBtns = document.querySelectorAll('.bb-mode');
+
+  const syncActive = () => {
+    const openMode = Object.entries(sheets).find(([, s]) => !s.hidden)?.[0] ?? 'rack';
+    modeBtns.forEach((btn) => btn.classList.toggle('is-active', btn.dataset.mode === openMode));
+  };
+
+  modeBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      $('#project-sheet').hidden = true;
+      for (const [m, s] of Object.entries(sheets)) if (m !== mode) s.hidden = true;
+      if (mode !== 'rack') modeOpen[mode]();
+      syncActive();
+    });
+  });
+
+  for (const s of Object.values(sheets)) {
+    new MutationObserver(syncActive).observe(s, { attributes: true, attributeFilter: ['hidden'] });
+  }
+  syncActive();
 }
 
 /* ---------- 3) Transport-Leiste ---------- */
@@ -990,14 +964,14 @@ function wireTransportUI() {
 
   // REC schärfen/entschärfen — aufgenommen wird nur bei laufendem Transport
   const btnRec = $('#btn-rec');
-  const transportEl = $('#transport');
+  const bottomBarEl = $('#bottombar');
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
     // Periphere Leiste am Bildschirmrand (s. app.css) -- aus dem Augenwinkel
     // lesbar, im Gegensatz zum kleinen Button selbst (wichtig bei Live-
     // Nutzung/Bühnenlicht, s. UI-Review).
-    transportEl.classList.toggle('is-rec-armed', automation.armed);
+    bottomBarEl.classList.toggle('is-rec-armed', automation.armed);
     if (automation.armed) {
       hintOnce('rec-armed', () => showHintToast(
         'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'
