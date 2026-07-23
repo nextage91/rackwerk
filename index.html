@@ -197,6 +197,54 @@ button {
 .t-btn--play svg[hidden] { display: none; }
 .t-btn--play.is-playing { box-shadow: 0 0 12px rgba(102,224,122,.35), var(--shadow-panel); }
 
+/* ===================== Bottom-Bar: persistente Navigation ===================== */
+/* Rack/Mix/Song/Jam-Umschalter + Play/Stop/REC sitzen fixiert am unteren
+   Rand -- Play/Stop/REC sind so aus jedem Modus heraus in Reichweite
+   (vorher nur oben in der Transport-Leiste, verschwand hinter Mixer/Song/
+   Jam), und Mixer/Song/Jam sind ohne Umweg über das PRJ-Sheet erreichbar
+   (s. UI-Review K2/K3). Höhe wird analog zu --transport-h per JS gemessen
+   (--bottombar-h), damit die Konsolen-Sheets (.sheet__panel--console)
+   wissen, wie viel Platz sie unten freilassen müssen. */
+.bottombar {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px 10px calc(8px + var(--safe-bottom));
+  background: linear-gradient(#241f17, #17130d);
+  border-top: 1px solid var(--edge-dark);
+  box-shadow: 0 -2px 10px rgba(0,0,0,.4);
+}
+.bb-modes { flex: 1 1 auto; display: flex; gap: 4px; min-width: 0; }
+.bb-mode {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: var(--tap-min);
+  border-radius: var(--r-ctl);
+  color: var(--ink-faint);
+  touch-action: manipulation;
+}
+.bb-mode svg { width: 18px; height: 18px; }
+.bb-mode span {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.bb-mode:active { transform: translateY(1px); }
+.bb-mode.is-active { color: var(--lcd-ink); background: rgba(255,184,77,.1); }
+.bb-mode.is-active svg { filter: drop-shadow(0 0 4px var(--lcd-glow)); }
+
+.bb-divider { flex: 0 0 auto; width: 1px; margin: 2px 2px; background: var(--edge-light); }
+
+.bb-transport { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+
 /* ===================== Rack ===================== */
 .rack {
   --rail-w: 18px;
@@ -303,10 +351,11 @@ button {
    Sheet, nur pro Maschine statt einmalig. Enthält die UNVERÄNDERTE
    .machine-Faceplate aus machine.js (Header + Body).
    .machine-focus selbst deckt (fixed, inset:0) auch den Bereich ÜBER dem
-   Panel ab (die Transport-Leiste bleibt dort bewusst sichtbar) — ohne
-   pointer-events:none würde der leere obere Streifen trotzdem Klicks auf
-   Play/Stop/REC/BPM schlucken, obwohl dort nichts vom Overlay zu sehen
-   ist (identischer Bug + Fix wie bei #mixer-sheet, s. .sheet--console). */
+   Panel (Transport-Leiste) UND darunter (Bottom-Bar) ab — ohne
+   pointer-events:none würden die leeren Streifen dort trotzdem Klicks auf
+   BPM oben bzw. Play/Stop/REC/Moduswechsel unten schlucken, obwohl dort
+   nichts vom Overlay zu sehen ist (identischer Bug + Fix wie bei
+   #mixer-sheet, s. .sheet--console). */
 .machine-focus {
   position: fixed;
   inset: 0;
@@ -318,10 +367,10 @@ button {
   pointer-events: auto;
   position: absolute;
   top: var(--transport-h, 64px);
-  left: 0; right: 0; bottom: 0;
+  left: 0; right: 0; bottom: var(--bottombar-h, 0px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 10px 14px calc(20px + var(--safe-bottom));
+  padding: 10px 14px 20px;
   background: var(--bg-case);
 }
 .machine-focus__back {
@@ -460,23 +509,23 @@ button {
 }
 @keyframes rec-pulse { 50% { box-shadow: 0 0 4px rgba(255,77,77,.25), var(--shadow-panel); } }
 
-/* Peripheres REC-Signal: eine volle-Breite-Linie unter der Transport-
-   Leiste, die im Augenwinkel auffällt, ohne dass man den kleinen Button
-   fixieren muss (wichtig bei Live-Nutzung/Bühnenlicht). Sitzt auf dem
-   Transport-Header selbst (nicht auf dem Button), damit sie über die
-   gesamte Bildschirmbreite läuft. */
-.transport { position: relative; }
-.transport::after {
+/* Peripheres REC-Signal: eine volle-Breite-Linie an der Oberkante der
+   Bottom-Bar, die im Augenwinkel auffällt, ohne dass man den kleinen
+   Button fixieren muss (wichtig bei Live-Nutzung/Bühnenlicht). Sitzt auf
+   der Bottom-Bar selbst (nicht auf dem Button), damit sie über die
+   gesamte Bildschirmbreite läuft -- REC lebt dort zusammen mit Play/Stop
+   (s. .bottombar unten). */
+.bottombar::after {
   content: "";
   position: absolute;
-  left: 0; right: 0; bottom: -2px;
+  left: 0; right: 0; top: -2px;
   height: 2px;
   background: var(--led-on);
   opacity: 0;
   transition: opacity .15s ease;
   pointer-events: none;
 }
-.transport.is-rec-armed::after {
+.bottombar.is-rec-armed::after {
   opacity: 1;
   animation: rec-strip-pulse 1.2s ease-in-out infinite;
 }
@@ -619,7 +668,19 @@ button {
 }
 
 /* ===================== Song-Timeline ===================== */
-.song-timeline { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+/* flex/min-height/overflow: wächst innerhalb der Konsole (#song-sheet ist
+   jetzt .sheet--console) und scrollt für sich, statt den ganzen Panel-Kopf
+   (Titel/✕/Hinweistext/Record-Reihe) mit aus dem Bild zu schieben. */
+.song-timeline {
+  margin-top: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .song-lane { display: flex; align-items: center; gap: 8px; }
 .song-lane__name {
   flex: 0 0 62px;
@@ -658,27 +719,37 @@ button {
 /* ===================== Mixer: Breitbild-Konsole ===================== */
 /* Volles Sheet statt Bottom-Drawer — die Fader brauchen Höhe, und seitlich
    scrollende Kanalzüge brauchen Breite. Bleibt aber UNTER der Transport-
-   Leiste (--transport-h, per JS gemessen), damit Play/Stop/BPM auch bei
-   offenem Mixer bedienbar bleiben — genau dafür will man beim Mischen ja
-   live zugreifen können. Eigener Close-Button statt Backdrop-Tap, weil
-   der Backdrop hier gar nicht mehr sichtbar wäre (Panel deckt den Rest
-   des Screens ab) — das Markup hat für #mixer-sheet daher gar keinen
-   .sheet__backdrop mehr, nur den expliziten ✕-Button. */
+   Leiste (--transport-h, per JS gemessen) und ÜBER der Bottom-Bar
+   (--bottombar-h), damit BPM oben und Play/Stop/REC/Moduswechsel unten auch
+   bei offener Konsole bedienbar bleiben — genau dafür will man beim
+   Mischen ja live zugreifen können. Eigener Close-Button statt Backdrop-Tap,
+   weil der Backdrop hier gar nicht mehr sichtbar wäre (Panel deckt den Rest
+   des Screens ab) — das Markup hat für #mixer-sheet/#song-sheet/#jam-sheet
+   daher gar keinen .sheet__backdrop mehr, nur den expliziten ✕-Button. */
 /* .sheet selbst deckt (fixed, inset:0) auch den Bereich ÜBER dem Panel ab
    (die Transport-Leiste bleibt dort ja bewusst sichtbar) — ohne diese Zeile
-   würde der leere obere Streifen trotzdem Klicks auf Play/Stop/BPM
-   schlucken, obwohl dort nichts vom Sheet zu sehen ist. */
+   würde der leere obere Streifen trotzdem Klicks auf BPM schlucken, obwohl
+   dort nichts vom Sheet zu sehen ist. */
 .sheet--console { pointer-events: none; }
-#mixer-sheet .sheet__panel {
+/* Gemeinsam von #mixer-sheet/#song-sheet/#jam-sheet genutzt (Klasse liegt
+   im Markup schon an allen dreien). Selektor bewusst über den .sheet--console-
+   Elternteil (statt nur .sheet__panel--console) -- Spezifität muss über der
+   generischen .sheet__panel{max-height:85vh}-Regel weiter unten liegen,
+   sonst gewinnt die (gleiche Klassen-Spezifität, aber später im Stylesheet).
+   bottom respektiert --bottombar-h (per JS gemessen, analog zu
+   --transport-h), damit die Konsole nicht unter der fixierten Bottom-Bar
+   verschwindet -- die kümmert sich selbst um --safe-bottom, darum kein
+   zusätzliches Bottom-Padding hier nötig. */
+.sheet--console .sheet__panel--console {
   pointer-events: auto;
   position: absolute;
   top: var(--transport-h, 64px);
-  left: 0; right: 0; bottom: 0;
+  left: 0; right: 0; bottom: var(--bottombar-h, 0px);
   border-radius: 0;
   max-height: none;
   display: flex;
   flex-direction: column;
-  padding: 10px 10px calc(10px + var(--safe-bottom));
+  padding: 10px;
 }
 .console__head {
   flex: 0 0 auto;
@@ -876,21 +947,10 @@ button {
 .sheet__panel { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 /* ===================== Jam: Live-Performance-Konsole ===================== */
-/* Gleiches Grundgerüst wie #mixer-sheet (volles Sheet unter der Transport-
-   Leiste, seitlich scrollende Spalten) -- hier trägt jede Spalte zusätzlich
+/* Gleiches Grundgerüst wie #mixer-sheet (.sheet__panel--console, volles
+   Sheet unter der Transport-Leiste, seitlich scrollende Spalten) -- hier
+   trägt jede Spalte zusätzlich
    Clip-Liste, X/Y-Pad und die kuratierten Makro-Regler. */
-#jam-sheet .sheet__panel {
-  pointer-events: auto;
-  position: absolute;
-  top: var(--transport-h, 64px);
-  left: 0; right: 0; bottom: 0;
-  border-radius: 0;
-  max-height: none;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 10px calc(10px + var(--safe-bottom));
-}
-
 .jam-console {
   flex: 1 1 auto;
   min-height: 0;
@@ -1500,9 +1560,6 @@ button {
 .m-btn:disabled { opacity: .35; }
 .m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
-/* Inline-SVG-Glyphen in Buttons (ersetzen OS-Emoji, s. UI-Review) --
-   currentColor übernimmt automatisch die jeweilige Textfarbe des Buttons. */
-.m-icon { width: 15px; height: 15px; vertical-align: -3px; margin-right: 2px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
    liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
@@ -2276,30 +2333,6 @@ x-knob.has-auto .knob__dial::after {
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
 .machine--master .seg__btn { min-width: 44px; }
 
-/* ===================== Rack-Kurzwahl (Mixer/Song direkt öffnen) =====================
-   Wiederverwendet die .machine-Faceplate (Blech, obere Schrauben) als
-   kompakter Button — keine .machine__body, darum nur 2 statt 4 Schrauben. */
-.rack-shortcut {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 56px;
-  padding: 8px 24px;
-  touch-action: manipulation;
-}
-.rack-shortcut:active { transform: translateY(1px); filter: brightness(1.08); }
-.rack-shortcut__icon { color: var(--m-color, var(--ink)); display: flex; }
-.rack-shortcut__icon .m-icon { width: 20px; height: 20px; margin-right: 0; vertical-align: 0; }
-.rack-shortcut__label {
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--m-color, var(--ink));
-  text-shadow: 0 0 6px var(--m-color-glow, transparent);
-}
-.rack-shortcut__chev { margin-left: auto; color: var(--ink-faint); font-size: 16px; }
 .fx__revlabel { margin-right: 6px; }
 
 </style>
@@ -2321,13 +2354,8 @@ x-knob.has-auto .knob__dial::after {
     </div>
 
     <div class="transport__controls">
-      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
       <button class="t-btn" id="btn-bpm-down" aria-label="Decrease tempo">−</button>
       <button class="t-btn" id="btn-bpm-up" aria-label="Increase tempo">+</button>
-      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
-        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
-        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-      </button>
     </div>
   </header>
 
@@ -2335,6 +2363,57 @@ x-knob.has-auto .knob__dial::after {
   <main class="rack" id="rack">
     <!-- Maschinen-Slots werden hier von js/rack/rack.js gerendert -->
   </main>
+
+  <!-- ===== Bottom-Bar: Rack/Mix/Song/Jam-Umschalter + Play/Stop/REC =====
+       Ersetzt die Rack-Kurzwahl-Kacheln + PRJ-Sheet-Buttons für Mixer/Song/
+       Jam (immer erreichbar statt scroll-abhängig, s. UI-Review K2/K3) und
+       zieht Play/Stop/REC aus der Transport-Leiste hierher, damit sie auch
+       bei offenem Mixer/Song/Jam bedienbar bleiben. -->
+  <footer class="bottombar" id="bottombar">
+    <nav class="bb-modes">
+      <button class="bb-mode is-active" data-mode="rack" aria-label="Rack">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="5" rx="1"/><rect x="3" y="18" width="10" height="2.5" rx="1"/>
+        </svg>
+        <span>Rack</span>
+      </button>
+      <button class="bb-mode" data-mode="mix" aria-label="Mixer">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
+          <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
+          <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
+        </svg>
+        <span>Mix</span>
+      </button>
+      <button class="bb-mode" data-mode="song" aria-label="Song Timeline">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="9" width="7" height="6" rx="1.5"/><rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/><rect x="16" y="9" width="6" height="6" rx="1.5"/>
+        </svg>
+        <span>Song</span>
+      </button>
+      <button class="bb-mode" data-mode="jam" aria-label="Jam">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" fill="currentColor"/>
+          <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Jam</span>
+      </button>
+    </nav>
+    <div class="bb-divider"></div>
+    <div class="bb-transport">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
+        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
+        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+    </div>
+  </footer>
 
   <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
   <div class="sheet" id="machine-sheet" hidden>
@@ -2360,32 +2439,6 @@ x-knob.has-auto .knob__dial::after {
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">
-            <rect x="2" y="9" width="7" height="6" rx="1.5"/>
-            <rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>
-            <rect x="16" y="9" width="6" height="6" rx="1.5"/>
-          </svg> Song Timeline
-        </button>
-        <button class="m-btn m-btn--wide" id="btn-open-mixer">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
-            <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
-            <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
-            <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
-          </svg> Mixer
-        </button>
-        <button class="m-btn m-btn--wide" id="btn-open-jam">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" fill="currentColor"/>
-            <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg> Jam
-        </button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -2453,11 +2506,12 @@ x-knob.has-auto .knob__dial::after {
   </div>
 
   <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
-  <div class="sheet" id="song-sheet" hidden>
-    <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Song Timeline">
-      <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Song Timeline</h2>
+  <div class="sheet sheet--console" id="song-sheet" hidden>
+    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Song Timeline">
+      <div class="console__head">
+        <h2 class="sheet__title">Song Timeline</h2>
+        <button class="m-btn console__close" id="btn-song-close" aria-label="Close song timeline" data-close>✕</button>
+      </div>
       <p class="sheet__hint">
         <b>Record</b> arms recording, closes this sheet, and starts the transport —
         then switch the machines' patterns (A/B/C/D) live, and the switches get
@@ -21561,30 +21615,10 @@ return { serializeProject, loadProject, importMachines, newProject };
 
 const $ = (sel) => document.querySelector(sel);
 
-/** Kleine, im Play/Stop-Icon-Stil gehaltene SVG-Glyphen (currentColor,
- *  24x24 viewBox) für Mixer/Song/Jam -- ersetzen die drei OS-Emoji (🎚️🎬🕹️),
- *  die je nach Plattform unterschiedlich aussehen und der einzige Bruch mit
- *  der sonst konsequent gezeichneten Hardware-Optik waren (s. UI-Review). */
-const ICON_MIXER = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
-  + '<line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '<rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '<rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>'
-  + '</svg>';
-const ICON_SONG = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">'
-  + '<rect x="2" y="9" width="7" height="6" rx="1.5"/>'
-  + '<rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>'
-  + '<rect x="16" y="9" width="6" height="6" rx="1.5"/>'
-  + '</svg>';
-const ICON_JAM = '<svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">'
-  + '<circle cx="12" cy="12" r="3" fill="currentColor"/>'
-  + '<line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '<line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-  + '</svg>';
+/** Öffnen-Funktionen für Mix/Song/Jam, von wireMixerUI/wireSongUI/
+ *  wireJamViewUI befüllt -- die Bottom-Bar (wireBottomBar) ruft sie auf,
+ *  ohne die jeweilige Sheet-Logik zu duplizieren. */
+const modeOpen = {};
 
 /* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
 $('#btn-unlock').addEventListener('click', async () => {
@@ -21623,9 +21657,18 @@ const syncTransportHeight = () => {
   const h = $('#transport')?.getBoundingClientRect().height;
   if (h) document.documentElement.style.setProperty('--transport-h', `${h}px`);
 };
-window.addEventListener('resize', syncTransportHeight);
-window.addEventListener('orientationchange', syncTransportHeight);
+/* Gleiche Idee für die Bottom-Bar (--bottombar-h): die Konsolen-Sheets
+   (.sheet__panel--console) und der Vollbild-Machine-Editor lassen unten
+   genau so viel Platz frei, wie die Bar gerade braucht (Safe-Area-abhängig,
+   deshalb messen statt raten). */
+const syncBottomBarHeight = () => {
+  const h = $('#bottombar')?.getBoundingClientRect().height;
+  if (h) document.documentElement.style.setProperty('--bottombar-h', `${h}px`);
+};
+window.addEventListener('resize', () => { syncTransportHeight(); syncBottomBarHeight(); });
+window.addEventListener('orientationchange', () => { syncTransportHeight(); syncBottomBarHeight(); });
 syncTransportHeight();
+syncBottomBarHeight();
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
@@ -21635,21 +21678,6 @@ function boot() {
   // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
   masterFX.init();
   $('#rack').appendChild(masterFX.render());
-
-  // Kurzwahl-Module: Mixer/Song-Timeline direkt aus dem Rack öffnen,
-  // ohne den Umweg über das Projekte-Sheet.
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_MIXER, label: 'Mixer', color: '#7fd6a0',
-    onOpen: () => $('#btn-open-mixer').click(),
-  }));
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_SONG, label: 'Song Timeline', color: '#ff4d3d',
-    onOpen: () => $('#btn-open-song').click(),
-  }));
-  $('#rack').appendChild(buildRackShortcut({
-    icon: ICON_JAM, label: 'Jam', color: '#ffb84d',
-    onOpen: () => $('#btn-open-jam').click(),
-  }));
 
   // Letzte Session wiederherstellen; sonst Startbesetzung mit Demo-Groove
   let restored = false;
@@ -21673,6 +21701,7 @@ function boot() {
   wireMixerUI(rack);
   initJamView(rack);
   wireJamViewUI();
+  wireBottomBar(); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
   wireUndoUI();
   wireOnboardingUI();
 
@@ -21693,26 +21722,6 @@ function boot() {
       console.warn('Autosave failed:', err);
     }
   }, 3000);
-}
-
-/** Kompaktes Rack-Modul, das nur einen bestehenden Öffnen-Mechanismus
- *  antriggert (Mixer-/Song-Sheet) — dupliziert keine Logik, ruft nur
- *  den Klick auf den jeweils schon verdrahteten Sheet-Öffner-Button. */
-function buildRackShortcut({ icon, label, color, onOpen }) {
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
-  const el = document.createElement('button');
-  el.type = 'button';
-  el.className = 'machine rack-shortcut';
-  el.style.setProperty('--m-color', color);
-  el.style.setProperty('--m-color-glow', `rgba(${r},${g},${b},.45)`);
-  el.innerHTML = `
-    <span class="machine__stripe"></span>
-    <span class="rack-shortcut__icon">${icon}</span>
-    <span class="rack-shortcut__label">${label}</span>
-    <span class="rack-shortcut__chev">›</span>
-  `;
-  el.addEventListener('click', onOpen);
-  return el;
 }
 
 /* ---------- Projekte-Sheet ---------- */
@@ -22323,11 +22332,7 @@ function wireSongUI(rack) {
     }
   };
 
-  $('#btn-open-song').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    render();
-    sheet.hidden = false;
-  });
+  modeOpen.song = () => { render(); sheet.hidden = false; };
   sheet.querySelector('[data-close]').addEventListener('click', () => { sheet.hidden = true; });
 
   armBtn.addEventListener('click', () => {
@@ -22493,12 +22498,7 @@ function wireMixerUI(rack) {
     }
   };
 
-  $('#btn-open-mixer').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    render();
-    sheet.hidden = false;
-    startMeters();
-  });
+  modeOpen.mix = () => { render(); sheet.hidden = false; startMeters(); };
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
     stopMeters();
@@ -22508,14 +22508,42 @@ function wireMixerUI(rack) {
 /* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
 function wireJamViewUI() {
   const sheet = $('#jam-sheet');
-  $('#btn-open-jam').addEventListener('click', () => {
-    $('#project-sheet').hidden = true; // vom Projekte-Sheet aus geöffnet
-    renderJamView($('#jam-list'));
-    sheet.hidden = false;
-  });
+  modeOpen.jam = () => { renderJamView($('#jam-list')); sheet.hidden = false; };
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
   });
+}
+
+/* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------
+ * Öffnet/schließt dieselben Sheets, die vorher übers PRJ-Sheet erreichbar
+ * waren (modeOpen.mix/song/jam, s. wireMixerUI/wireSongUI/wireJamViewUI) —
+ * dupliziert also keine Render-/Meter-Logik. Zusätzlich: Mutual Exclusion
+ * (nur eine Konsole gleichzeitig offen) und Active-Tab-Sync per
+ * MutationObserver, weil jede Konsole auch über ihren eigenen ✕-Button
+ * schließen kann, nicht nur über die Bottom-Bar selbst. */
+function wireBottomBar() {
+  const sheets = { mix: $('#mixer-sheet'), song: $('#song-sheet'), jam: $('#jam-sheet') };
+  const modeBtns = document.querySelectorAll('.bb-mode');
+
+  const syncActive = () => {
+    const openMode = Object.entries(sheets).find(([, s]) => !s.hidden)?.[0] ?? 'rack';
+    modeBtns.forEach((btn) => btn.classList.toggle('is-active', btn.dataset.mode === openMode));
+  };
+
+  modeBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      $('#project-sheet').hidden = true;
+      for (const [m, s] of Object.entries(sheets)) if (m !== mode) s.hidden = true;
+      if (mode !== 'rack') modeOpen[mode]();
+      syncActive();
+    });
+  });
+
+  for (const s of Object.values(sheets)) {
+    new MutationObserver(syncActive).observe(s, { attributes: true, attributeFilter: ['hidden'] });
+  }
+  syncActive();
 }
 
 /* ---------- 3) Transport-Leiste ---------- */
@@ -22530,14 +22558,14 @@ function wireTransportUI() {
 
   // REC schärfen/entschärfen — aufgenommen wird nur bei laufendem Transport
   const btnRec = $('#btn-rec');
-  const transportEl = $('#transport');
+  const bottomBarEl = $('#bottombar');
   btnRec.addEventListener('click', () => {
     automation.setArmed(!automation.armed);
     btnRec.classList.toggle('is-armed', automation.armed);
     // Periphere Leiste am Bildschirmrand (s. app.css) -- aus dem Augenwinkel
     // lesbar, im Gegensatz zum kleinen Button selbst (wichtig bei Live-
     // Nutzung/Bühnenlicht, s. UI-Review).
-    transportEl.classList.toggle('is-rec-armed', automation.armed);
+    bottomBarEl.classList.toggle('is-rec-armed', automation.armed);
     if (automation.armed) {
       hintOnce('rec-armed', () => showHintToast(
         'REC is armed: turn a knob to record automation, or play a note/pad to write it into the pattern.'

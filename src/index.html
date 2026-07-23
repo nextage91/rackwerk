@@ -37,13 +37,8 @@
     </div>
 
     <div class="transport__controls">
-      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
       <button class="t-btn" id="btn-bpm-down" aria-label="Decrease tempo">−</button>
       <button class="t-btn" id="btn-bpm-up" aria-label="Increase tempo">+</button>
-      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
-        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
-        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-      </button>
     </div>
   </header>
 
@@ -51,6 +46,57 @@
   <main class="rack" id="rack">
     <!-- Maschinen-Slots werden hier von js/rack/rack.js gerendert -->
   </main>
+
+  <!-- ===== Bottom-Bar: Rack/Mix/Song/Jam-Umschalter + Play/Stop/REC =====
+       Ersetzt die Rack-Kurzwahl-Kacheln + PRJ-Sheet-Buttons für Mixer/Song/
+       Jam (immer erreichbar statt scroll-abhängig, s. UI-Review K2/K3) und
+       zieht Play/Stop/REC aus der Transport-Leiste hierher, damit sie auch
+       bei offenem Mixer/Song/Jam bedienbar bleiben. -->
+  <footer class="bottombar" id="bottombar">
+    <nav class="bb-modes">
+      <button class="bb-mode is-active" data-mode="rack" aria-label="Rack">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="5" rx="1"/><rect x="3" y="18" width="10" height="2.5" rx="1"/>
+        </svg>
+        <span>Rack</span>
+      </button>
+      <button class="bb-mode" data-mode="mix" aria-label="Mixer">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
+          <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
+          <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
+        </svg>
+        <span>Mix</span>
+      </button>
+      <button class="bb-mode" data-mode="song" aria-label="Song Timeline">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="9" width="7" height="6" rx="1.5"/><rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/><rect x="16" y="9" width="6" height="6" rx="1.5"/>
+        </svg>
+        <span>Song</span>
+      </button>
+      <button class="bb-mode" data-mode="jam" aria-label="Jam">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" fill="currentColor"/>
+          <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Jam</span>
+      </button>
+    </nav>
+    <div class="bb-divider"></div>
+    <div class="bb-transport">
+      <button class="t-btn t-btn--rec" id="btn-rec" aria-label="Record: automation & live playing">●</button>
+      <button class="t-btn t-btn--play" id="btn-play" aria-label="Start playback">
+        <svg viewBox="0 0 24 24" class="icon-play"><path d="M7 4.5v15l13-7.5z"/></svg>
+        <svg viewBox="0 0 24 24" class="icon-stop" hidden><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+    </div>
+  </footer>
 
   <!-- ===== Maschine hinzufügen (Bottom Sheet) ===== -->
   <div class="sheet" id="machine-sheet" hidden>
@@ -76,32 +122,6 @@
       </div>
       <div class="filerow">
         <button class="m-btn m-btn--wide" id="btn-new-session">＋ New Session</button>
-        <button class="m-btn m-btn--wide" id="btn-open-song">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true" fill="currentColor">
-            <rect x="2" y="9" width="7" height="6" rx="1.5"/>
-            <rect x="10.5" y="9" width="4.5" height="6" rx="1.5"/>
-            <rect x="16" y="9" width="6" height="6" rx="1.5"/>
-          </svg> Song Timeline
-        </button>
-        <button class="m-btn m-btn--wide" id="btn-open-mixer">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
-            <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
-            <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
-            <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
-          </svg> Mixer
-        </button>
-        <button class="m-btn m-btn--wide" id="btn-open-jam">
-          <svg viewBox="0 0 24 24" class="m-icon" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" fill="currentColor"/>
-            <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg> Jam
-        </button>
       </div>
       <div class="sheet__list" id="project-list"></div>
 
@@ -169,11 +189,12 @@
   </div>
 
   <!-- ===== Song-Timeline (Bottom Sheet) ===== -->
-  <div class="sheet" id="song-sheet" hidden>
-    <div class="sheet__backdrop" data-close></div>
-    <div class="sheet__panel" role="dialog" aria-label="Song Timeline">
-      <div class="sheet__grip"></div>
-      <h2 class="sheet__title">Song Timeline</h2>
+  <div class="sheet sheet--console" id="song-sheet" hidden>
+    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Song Timeline">
+      <div class="console__head">
+        <h2 class="sheet__title">Song Timeline</h2>
+        <button class="m-btn console__close" id="btn-song-close" aria-label="Close song timeline" data-close>✕</button>
+      </div>
       <p class="sheet__hint">
         <b>Record</b> arms recording, closes this sheet, and starts the transport —
         then switch the machines' patterns (A/B/C/D) live, and the switches get

@@ -121,9 +121,6 @@
 .m-btn:disabled { opacity: .35; }
 .m-btn:disabled:active { transform: none; }
 .m-btn--wide { flex: 1 1 auto; min-height: 44px; }
-/* Inline-SVG-Glyphen in Buttons (ersetzen OS-Emoji, s. UI-Review) --
-   currentColor übernimmt automatisch die jeweilige Textfarbe des Buttons. */
-.m-icon { width: 15px; height: 15px; vertical-align: -3px; margin-right: 2px; }
 .m-btn--mute.is-active { color: #fff; background: linear-gradient(#b33a3a, #7e2727); }
 /* Löschen braucht bewusst einen Hold statt eines einzelnen Tap (versehent-
    liches Löschen war ein wiederkehrendes Problem) — die Füllung zeigt den
@@ -897,28 +894,4 @@ x-knob.has-auto .knob__dial::after {
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
 .machine--master .seg__btn { min-width: 44px; }
 
-/* ===================== Rack-Kurzwahl (Mixer/Song direkt öffnen) =====================
-   Wiederverwendet die .machine-Faceplate (Blech, obere Schrauben) als
-   kompakter Button — keine .machine__body, darum nur 2 statt 4 Schrauben. */
-.rack-shortcut {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 56px;
-  padding: 8px 24px;
-  touch-action: manipulation;
-}
-.rack-shortcut:active { transform: translateY(1px); filter: brightness(1.08); }
-.rack-shortcut__icon { color: var(--m-color, var(--ink)); display: flex; }
-.rack-shortcut__icon .m-icon { width: 20px; height: 20px; margin-right: 0; vertical-align: 0; }
-.rack-shortcut__label {
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--m-color, var(--ink));
-  text-shadow: 0 0 6px var(--m-color-glow, transparent);
-}
-.rack-shortcut__chev { margin-left: auto; color: var(--ink-faint); font-size: 16px; }
 .fx__revlabel { margin-right: 6px; }
