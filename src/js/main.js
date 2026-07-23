@@ -93,19 +93,26 @@ debugEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;backgr
 document.body.appendChild(debugEl);
 const updateDebug = () => {
   const cs = getComputedStyle(document.documentElement);
+  const htmlRect = document.documentElement.getBoundingClientRect();
+  const bbEl = document.querySelector('#bottombar');
+  const bbRect = bbEl?.getBoundingClientRect();
   debugEl.textContent = [
     `innerHeight: ${window.innerHeight}`,
     `screen.height: ${screen.height}`,
+    `screen.availHeight: ${screen.availHeight}`,
     `visualViewport.h: ${window.visualViewport?.height}`,
-    `html.rect.h: ${document.documentElement.getBoundingClientRect().height}`,
-    `body.rect.h: ${document.body.getBoundingClientRect().height}`,
+    `visualViewport.offsetTop: ${window.visualViewport?.offsetTop}`,
+    `html.rect.h: ${htmlRect.height}`,
+    `html.rect.bottom: ${htmlRect.bottom}`,
+    `html.scrollHeight: ${document.documentElement.scrollHeight}`,
+    `bottombar.rect.bottom: ${bbRect?.bottom}`,
+    `bottombar.paddingBottom: ${bbEl ? getComputedStyle(bbEl).paddingBottom : 'n/a'}`,
     `--app-vh: ${cs.getPropertyValue('--app-vh')}`,
     `--safe-bottom: ${cs.getPropertyValue('--safe-bottom')}`,
     `standalone: ${window.navigator.standalone}`,
     `dpr: ${window.devicePixelRatio}`,
   ].join('\n');
 };
-updateDebug();
 window.addEventListener('resize', updateDebug);
 
 window.addEventListener('resize', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
@@ -113,6 +120,7 @@ window.addEventListener('orientationchange', () => { syncViewportHeight(); syncT
 syncViewportHeight();
 syncTransportHeight();
 syncBottomBarHeight();
+updateDebug(); // NACH den obigen sync-Aufrufen, sonst zeigt --app-vh den Wert von vor dem allerersten Messen
 
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
