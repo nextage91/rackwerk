@@ -6,14 +6,17 @@
 html, body {
   margin: 0;
   height: 100%;
-  /* iOS Safari (nicht im Homescreen-Standalone-Modus): 100%/100vh bemisst
-     sich am Layout-Viewport, NICHT am gerade sichtbaren Bereich -- fährt
-     die Adressleiste beim Laden ein/aus, bleibt darunter ein toter
-     Streifen stehen, in den die Bottom-Bar nicht mehr hineinreicht (s.
-     UI-Feedback). 100dvh verfolgt den tatsächlich sichtbaren Viewport live;
-     Browser ohne dvh-Unterstützung ignorieren die Zeile und bleiben bei
-     100% (Progressive Enhancement, keine Sonderbehandlung nötig). */
+  /* 100dvh als Verbesserung für Browser, die es unterstützen (Fallback:
+     100% bleibt für alle anderen stehen) -- deckt aber NICHT den als
+     Homescreen-App gestarteten Fall ab (apple-mobile-web-app-capable):
+     dort bleibt auf iOS teils trotzdem ein toter Streifen unten stehen
+     (WebKit-Bug, 100dvh entspricht dort nicht zuverlässig dem wirklich
+     sichtbaren Bereich -- reproduziert, s. UI-Feedback). --app-vh wird
+     deshalb zusätzlich per JS aus window.innerHeight gesetzt (s. main.js
+     #syncViewportHeight) und hat als letzte Deklaration das letzte Wort,
+     sobald verfügbar; ohne JS (noch) bleibt 100dvh der Fallback-Wert. */
   height: 100dvh;
+  height: var(--app-vh, 100dvh);
   overflow: hidden;               /* App-Feeling: kein Body-Scroll */
   background: var(--bg-case);
   color: var(--ink);

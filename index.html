@@ -96,14 +96,17 @@
 html, body {
   margin: 0;
   height: 100%;
-  /* iOS Safari (nicht im Homescreen-Standalone-Modus): 100%/100vh bemisst
-     sich am Layout-Viewport, NICHT am gerade sichtbaren Bereich -- fährt
-     die Adressleiste beim Laden ein/aus, bleibt darunter ein toter
-     Streifen stehen, in den die Bottom-Bar nicht mehr hineinreicht (s.
-     UI-Feedback). 100dvh verfolgt den tatsächlich sichtbaren Viewport live;
-     Browser ohne dvh-Unterstützung ignorieren die Zeile und bleiben bei
-     100% (Progressive Enhancement, keine Sonderbehandlung nötig). */
+  /* 100dvh als Verbesserung für Browser, die es unterstützen (Fallback:
+     100% bleibt für alle anderen stehen) -- deckt aber NICHT den als
+     Homescreen-App gestarteten Fall ab (apple-mobile-web-app-capable):
+     dort bleibt auf iOS teils trotzdem ein toter Streifen unten stehen
+     (WebKit-Bug, 100dvh entspricht dort nicht zuverlässig dem wirklich
+     sichtbaren Bereich -- reproduziert, s. UI-Feedback). --app-vh wird
+     deshalb zusätzlich per JS aus window.innerHeight gesetzt (s. main.js
+     #syncViewportHeight) und hat als letzte Deklaration das letzte Wort,
+     sobald verfügbar; ohne JS (noch) bleibt 100dvh der Fallback-Wert. */
   height: 100dvh;
+  height: var(--app-vh, 100dvh);
   overflow: hidden;               /* App-Feeling: kein Body-Scroll */
   background: var(--bg-case);
   color: var(--ink);
@@ -21745,8 +21748,19 @@ const syncBottomBarHeight = () => {
   const h = $('#bottombar')?.getBoundingClientRect().height;
   if (h) document.documentElement.style.setProperty('--bottombar-h', `${h}px`);
 };
-window.addEventListener('resize', () => { syncTransportHeight(); syncBottomBarHeight(); });
-window.addEventListener('orientationchange', () => { syncTransportHeight(); syncBottomBarHeight(); });
+/* html/body selbst brauchen dieselbe Behandlung: als Homescreen-App
+   gestartet (apple-mobile-web-app-capable) gibt es keine Safari-Leiste
+   mehr, die eine falsch berechnete Seitenhöhe kaschiert -- 100dvh reicht
+   dafür auf iOS nicht zuverlässig (bekannter WebKit-Bug gerade im
+   Standalone-Modus, s. UI-Feedback). window.innerHeight ist die einzige
+   Quelle, die den wirklich sichtbaren Bereich in JEDEM Kontext (Browser-
+   Tab, Standalone, Rotation) korrekt widerspiegelt. */
+const syncViewportHeight = () => {
+  document.documentElement.style.setProperty('--app-vh', `${window.innerHeight}px`);
+};
+window.addEventListener('resize', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
+window.addEventListener('orientationchange', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
+syncViewportHeight();
 syncTransportHeight();
 syncBottomBarHeight();
 
