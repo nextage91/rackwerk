@@ -44,8 +44,9 @@ const MACRO_PARAMS = {
   subsynth: ['cutoff', 'resonance', 'envAmt', 'fDecay'],
   polysynth: ['cutoff', 'resonance', 'envAmt', 'fDecay'],
   percsynth: ['ratio', 'fmAmt', 'sweep', 'decay'],
+  sampler: ['tune', 'level', 'trackSendDelay', 'trackSendReverb'],
 };
-const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit']);
+const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit', 'sampler']);
 
 /** Bewegungsschwelle Tippen-vs-Ziehen (px) -- dieselbe wie step-seq.js'
  *  TAP_THRESHOLD für Pitch-Drag: ein echter Finger-Tap hat auf dem Handy

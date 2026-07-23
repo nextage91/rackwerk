@@ -1378,3 +1378,71 @@ button {
    alle vier Knobs einer Reihe gleich hoch. */
 .macros x-knob .knob__label { font-size: 9px; letter-spacing: .02em; white-space: nowrap; }
 .macros x-knob .knob__value { font-size: 9px; white-space: nowrap; }
+
+/* ===================== Sampler: Aufnahme-Popup ===================== *
+ * Gleiche Grundoptik wie .macro-pop, aber eigenständig statt eines
+ * kleinen Chips (.pat-chip) -- Aufnehmen braucht anhaltenden UI-Zustand
+ * (Start/Stop, laufende Zeit), s. sampler.js#openRecordPopup. Mittig statt
+ * am Pad verankert (anders als macro-pop/pat-chip), weil während der
+ * Aufnahme nicht am ursprünglichen Pad "geklebt" werden muss. */
+.rec-pop {
+  position: fixed;
+  z-index: 65;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 220px;
+  padding: 14px;
+  border-radius: 12px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 8px 30px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+  text-align: center;
+}
+.rec-pop__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.rec-pop__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lcd-ink);
+  text-align: left;
+}
+.rec-pop__close {
+  flex: none;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(255,236,190,.1);
+  color: var(--lcd-ink);
+  font-size: 12px;
+  line-height: 1;
+}
+.rec-pop__close:active { background: rgba(255,236,190,.2); }
+.rec-pop__time {
+  font-family: var(--font-lcd);
+  font-size: 22px;
+  color: var(--lcd-ink);
+  text-shadow: 0 0 8px var(--lcd-glow);
+  margin-bottom: 12px;
+}
+.rec-pop__btn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 8px;
+  background: linear-gradient(#423b2e, #2a251c);
+  box-shadow: var(--shadow-panel);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+.rec-pop__btn:active { transform: translateY(1px); }
+.rec-pop__btn.is-armed {
+  color: var(--led-on);
+  background: linear-gradient(#6a2828, #3a1a1a);
+  box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}

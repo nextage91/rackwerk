@@ -11,6 +11,7 @@ import { automation } from './core/automation.js';
 import { store } from './core/store.js';
 import { serializeProject, loadProject, importMachines, newProject } from './core/project.js';
 import { recorder } from './core/recorder.js';
+import { sampleStore, arrayBufferToBase64 } from './core/sample-store.js';
 import { jamlink } from './core/jamlink.js';
 import { masterFX } from './core/fx.js';
 import { song } from './core/song.js';
@@ -235,9 +236,31 @@ function wireProjectUI(rack) {
     }
   };
 
-  $('#btn-export').addEventListener('click', () => {
+  // Sampler-Maschinen speichern in serializeProject() nur die IndexedDB-
+  // Referenz-ID (state.tracks[].sampleId, s. sampler.js) -- die ist auf
+  // einem ANDEREN Gerät/Browser-Profil bedeutungslos. Für den Datei-Export
+  // holt diese Funktion die Rohdaten einmalig nach und bettet sie als
+  // Base64 ein (state.tracks[].sampleData), damit die Datei überall
+  // eigenständig lauffähig ist. Autosave/"Save Project" (beide über
+  // store.js/localStorage) durchlaufen das bewusst NICHT — dort bleibt
+  // die IndexedDB-Referenz genügend (gleiches Gerät, "voll persistent"
+  // war genau dafür die Anforderung).
+  const embedSamplerSamples = async (data) => {
+    for (const md of data.machines) {
+      if (md.type !== 'sampler') continue;
+      for (const tr of md.state.tracks ?? []) {
+        if (!tr.sampleId) continue;
+        const arrBuf = await sampleStore.get(tr.sampleId);
+        if (arrBuf) tr.sampleData = arrayBufferToBase64(arrBuf);
+      }
+    }
+  };
+
+  $('#btn-export').addEventListener('click', async () => {
     const name = (nameInput.value.trim() || 'session').replace(/[^\wäöüÄÖÜß-]+/g, '_');
-    const json = JSON.stringify(serializeProject(rack), null, 2);
+    const data = serializeProject(rack);
+    await embedSamplerSamples(data);
+    const json = JSON.stringify(data, null, 2);
     download(`rackwerk-${name}.json`, new Blob([json], { type: 'application/json' }));
   });
 

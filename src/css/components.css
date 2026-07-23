@@ -582,6 +582,19 @@ x-fader {
               var(--shadow-panel);
 }
 
+/* Sampler-Pads ohne (noch) geladenes Sample -- s. sampler.js#refreshPadUI.
+   Bleiben antippbar (Hold öffnet Laden/Aufnehmen), wirken aber dezent
+   zurückgenommen, damit auf einen Blick klar ist, welche Pads schon
+   belegt sind. */
+.pad--empty {
+  color: var(--ink-faint);
+  opacity: .55;
+}
+.pad--loading {
+  color: var(--lcd-ink);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
 /* Knob mit aufgezeichneter Automation: rote LED am Reglerrand */
 x-knob.has-auto .knob__dial::after {
   content: "";
