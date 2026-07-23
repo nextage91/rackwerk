@@ -21758,6 +21758,33 @@ const syncBottomBarHeight = () => {
 const syncViewportHeight = () => {
   document.documentElement.style.setProperty('--app-vh', `${window.innerHeight}px`);
 };
+/* TEMPORÄR: Diagnose-Anzeige für den toten Streifen unten im Homescreen-
+   Standalone-Modus (window.innerHeight-Fix allein hat ihn nicht behoben,
+   s. UI-Feedback) -- zeigt die tatsächlichen Werte direkt auf dem Gerät,
+   statt hier weiter blind zu raten. Wird entfernt, sobald der Bug klar
+   ist -- daher bewusst ohne Feature-Flag/Query-Param, einfach sichtbar. */
+const debugEl = document.createElement('div');
+debugEl.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:99999;background:#000;'
+  + 'color:#6f6;font:9px/1.4 monospace;padding:6px;white-space:pre;pointer-events:none;'
+  + 'border:1px solid #6f6;';
+document.body.appendChild(debugEl);
+const updateDebug = () => {
+  const cs = getComputedStyle(document.documentElement);
+  debugEl.textContent = [
+    `innerHeight: ${window.innerHeight}`,
+    `screen.height: ${screen.height}`,
+    `visualViewport.h: ${window.visualViewport?.height}`,
+    `html.rect.h: ${document.documentElement.getBoundingClientRect().height}`,
+    `body.rect.h: ${document.body.getBoundingClientRect().height}`,
+    `--app-vh: ${cs.getPropertyValue('--app-vh')}`,
+    `--safe-bottom: ${cs.getPropertyValue('--safe-bottom')}`,
+    `standalone: ${window.navigator.standalone}`,
+    `dpr: ${window.devicePixelRatio}`,
+  ].join('\n');
+};
+updateDebug();
+window.addEventListener('resize', updateDebug);
+
 window.addEventListener('resize', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
 window.addEventListener('orientationchange', () => { syncViewportHeight(); syncTransportHeight(); syncBottomBarHeight(); });
 syncViewportHeight();
