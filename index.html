@@ -21447,17 +21447,20 @@ function openSampleEditor(sampler, i) {
   );
 }
 
-/** Peak-pro-Pixel-Wellenform (min/max je Spalte) -- Standardansatz fürs
- *  Zeichnen langer Audiodaten in eine schmale, feste Breite, ohne jeden
- *  einzelnen Sample-Frame zu rendern. */
-function computePeaks(data, width) {
-  const step = Math.max(1, Math.floor(data.length / width));
+/** Peak-pro-Pixel-Wellenform (min/max je Spalte) über einen Ausschnitt
+ *  [startIdx, endIdx) der Kanaldaten -- Standardansatz fürs Zeichnen
+ *  langer Audiodaten in eine schmale, feste Breite, ohne jeden einzelnen
+ *  Sample-Frame zu rendern. Der Ausschnitt ist das aktuelle Zoom-
+ *  Sichtfenster (s. setupWaveformEditor); ohne Zoom deckt er die ganze
+ *  Kanal-Länge ab. */
+function computePeaks(data, width, startIdx = 0, endIdx = data.length) {
+  const step = Math.max(1, Math.floor((endIdx - startIdx) / width));
   const peaks = [];
   for (let x = 0; x < width; x++) {
     let min = 0, max = 0;
-    const startIdx = x * step;
-    const endIdx = Math.min(data.length, startIdx + step);
-    for (let j = startIdx; j < endIdx; j++) {
+    const s = startIdx + x * step;
+    const e = Math.min(endIdx, s + step);
+    for (let j = s; j < e; j++) {
       const v = data[j];
       if (v < min) min = v;
       if (v > max) max = v;
@@ -21467,13 +21470,22 @@ function computePeaks(data, width) {
   return peaks;
 }
 
-/** Wellenform zeichnen + zwei ziehbare Trim-Marken -- gleiches Pointer-
- *  Idiom wie der X/Y-Pad (jam-view.js#buildXYPad): pointerdown/
- *  setPointerCapture/getBoundingClientRect-Clamping, hier für zwei statt
- *  einen Handle, die sich gegenseitig nicht überholen können. */
+const MIN_ZOOM_DUR = 0.02; // 20ms -- sinnvolle Grenze fürs Reinzoomen
+
+/** Wellenform zeichnen + zwei ziehbare Trim-Marken, plus Zwei-Finger-Zoom
+ *  (Pinch) und Ein-Finger-Pan im gezoomten Zustand, Doppel-Tap setzt den
+ *  Zoom zurück. Trim-Handle-Drag folgt demselben Pointer-Idiom wie der
+ *  X/Y-Pad (jam-view.js#buildXYPad): pointerdown/setPointerCapture/
+ *  getBoundingClientRect-Clamping, hier für zwei statt einen Handle, die
+ *  sich gegenseitig nicht überholen können. Zoom/Pan verschieben nur das
+ *  Sichtfenster (viewStart/viewEnd) -- trimStart/trimEnd (echte
+ *  Wiedergabegrenzen) sind davon unabhängig, nur ihre Bildschirmposition
+ *  hängt vom aktuellen Sichtfenster ab (s. timeToX). */
 function setupWaveformEditor(canvas, readout, tr) {
   const buffer = tr.buffer;
   const dur = buffer.duration;
+  const sampleRate = buffer.sampleRate;
+  const channelData = buffer.getChannelData(0);
   // trimEnd kann noch Infinity sein (Pad, das seit dem Laden nie
   // getriggert/editiert wurde) -- hier auf die echte Dauer klemmen.
   if (!Number.isFinite(tr.trimEnd) || tr.trimEnd > dur) tr.trimEnd = dur;
@@ -21489,9 +21501,17 @@ function setupWaveformEditor(canvas, readout, tr) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  const peaks = computePeaks(buffer.getChannelData(0), cssWidth);
-  const timeToX = (s) => (s / dur) * cssWidth;
-  const xToTime = (x) => Math.max(0, Math.min(dur, (x / cssWidth) * dur));
+  hintOnce('sampler-editor-zoom', () => showHintToast(
+    'Pinch the waveform to zoom in, double-tap to reset.'
+  ));
+
+  // Zoom-/Pan-Sichtfenster -- startet komplett rausgezoomt (volle Dauer).
+  let viewStart = 0;
+  let viewEnd = dur;
+  let peaks = computePeaks(channelData, cssWidth, 0, channelData.length);
+
+  const timeToX = (s) => ((s - viewStart) / (viewEnd - viewStart)) * cssWidth;
+  const xToTime = (x) => viewStart + (x / cssWidth) * (viewEnd - viewStart);
 
   const draw = () => {
     ctx.clearRect(0, 0, cssWidth, cssHeight);
@@ -21508,41 +21528,135 @@ function setupWaveformEditor(canvas, readout, tr) {
     const xs = timeToX(tr.trimStart);
     const xe = timeToX(tr.trimEnd);
     ctx.fillStyle = 'rgba(0,0,0,.55)';
-    ctx.fillRect(0, 0, xs, cssHeight);
-    ctx.fillRect(xe, 0, cssWidth - xe, cssHeight);
+    ctx.fillRect(0, 0, Math.max(0, Math.min(cssWidth, xs)), cssHeight);
+    const xeClamped = Math.max(0, Math.min(cssWidth, xe));
+    ctx.fillRect(xeClamped, 0, cssWidth - xeClamped, cssHeight);
     ctx.fillStyle = '#ffb84d';
-    ctx.fillRect(xs - 1.5, 0, 3, cssHeight);
-    ctx.fillRect(xe - 1.5, 0, 3, cssHeight);
+    if (xs >= -4 && xs <= cssWidth + 4) ctx.fillRect(xs - 1.5, 0, 3, cssHeight);
+    if (xe >= -4 && xe <= cssWidth + 4) ctx.fillRect(xe - 1.5, 0, 3, cssHeight);
 
     readout.textContent = `${tr.trimStart.toFixed(2)}s – ${tr.trimEnd.toFixed(2)}s`;
   };
   draw();
 
+  /** Sichtfenster nach Zoom/Pan neu einklemmen (nicht unter MIN_ZOOM_DUR,
+   *  nicht über die Buffer-Grenzen hinaus), dann Peaks + Zeichnung
+   *  auffrischen. */
+  const applyView = () => {
+    if (viewEnd - viewStart < MIN_ZOOM_DUR) {
+      const c = (viewStart + viewEnd) / 2;
+      viewStart = c - MIN_ZOOM_DUR / 2;
+      viewEnd = c + MIN_ZOOM_DUR / 2;
+    }
+    if (viewStart < 0) { viewEnd -= viewStart; viewStart = 0; }
+    if (viewEnd > dur) { viewStart -= (viewEnd - dur); viewEnd = dur; }
+    viewStart = Math.max(0, viewStart);
+    viewEnd = Math.min(dur, viewEnd);
+    const startIdx = Math.floor(viewStart * sampleRate);
+    const endIdx = Math.ceil(viewEnd * sampleRate);
+    peaks = computePeaks(channelData, cssWidth, startIdx, endIdx);
+    draw();
+  };
+
   const HANDLE_HIT = 14; // px Trefferbereich um jeden Handle
-  let dragging = null; // 'start' | 'end' | null
+  let dragging = null; // 'start' | 'end' | 'pan' | null
+  let panStartX = 0;
+  let panStartView = null;
+  let lastTapAt = 0;
+
+  const activePointers = new Map(); // pointerId -> {x, y}
+  let pinch = null;
+
+  const pointerDist = () => {
+    const [a, b] = [...activePointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const pointerMidX = (rect) => {
+    const [a, b] = [...activePointers.values()];
+    return (a.x + b.x) / 2 - rect.left;
+  };
 
   canvas.addEventListener('pointerdown', (e) => {
     const rect = canvas.getBoundingClientRect();
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size === 2) {
+      dragging = null; // eine evtl. laufende Handle-/Pan-Geste des ersten Fingers abbrechen
+      pinch = {
+        startDist: pointerDist(),
+        midTime: xToTime(pointerMidX(rect)),
+        startSpan: viewEnd - viewStart,
+      };
+      e.preventDefault();
+      return;
+    }
+    if (activePointers.size > 2) return; // dritter Finger: ignorieren
+
+    const now = performance.now();
+    if (now - lastTapAt < 300) {
+      lastTapAt = 0;
+      viewStart = 0; viewEnd = dur;
+      applyView();
+      return;
+    }
+    lastTapAt = now;
+
     const x = e.clientX - rect.left;
     const xs = timeToX(tr.trimStart);
     const xe = timeToX(tr.trimEnd);
-    if (Math.abs(x - xs) <= HANDLE_HIT && Math.abs(x - xs) <= Math.abs(x - xe)) dragging = 'start';
-    else if (Math.abs(x - xe) <= HANDLE_HIT) dragging = 'end';
-    else return;
+    if (Math.abs(x - xs) <= HANDLE_HIT && Math.abs(x - xs) <= Math.abs(x - xe)) {
+      dragging = 'start';
+    } else if (Math.abs(x - xe) <= HANDLE_HIT) {
+      dragging = 'end';
+    } else if (viewEnd - viewStart < dur - 0.001) {
+      // reingezoomt und nicht auf einem Handle: Sichtfenster verschieben
+      dragging = 'pan';
+      panStartX = x;
+      panStartView = { start: viewStart, end: viewEnd };
+    } else {
+      return;
+    }
     canvas.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
+
   canvas.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const rect = canvas.getBoundingClientRect();
+
+    if (pinch && activePointers.size === 2) {
+      const ratio = pointerDist() / Math.max(1, pinch.startDist);
+      const newSpan = Math.min(dur, Math.max(MIN_ZOOM_DUR, pinch.startSpan / ratio));
+      const midRatio = pointerMidX(rect) / cssWidth;
+      // Zeit unterm Pinch-Mittelpunkt bleibt fix, egal wie stark gezoomt wird.
+      viewStart = pinch.midTime - newSpan * midRatio;
+      viewEnd = viewStart + newSpan;
+      applyView();
+      return;
+    }
+    if (!dragging) return;
+    if (dragging === 'pan') {
+      const x = e.clientX - rect.left;
+      const dt = ((x - panStartX) / cssWidth) * (panStartView.end - panStartView.start);
+      viewStart = panStartView.start - dt;
+      viewEnd = panStartView.end - dt;
+      applyView();
+      return;
+    }
     const t = xToTime(e.clientX - rect.left);
     if (dragging === 'start') tr.trimStart = Math.min(t, tr.trimEnd - 0.01);
     else tr.trimEnd = Math.max(t, tr.trimStart + 0.01);
     draw();
   });
-  const endDrag = () => { dragging = null; };
-  canvas.addEventListener('pointerup', endDrag);
-  canvas.addEventListener('pointercancel', endDrag);
+
+  const releasePointer = (e) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinch = null;
+    if (activePointers.size === 0) dragging = null;
+  };
+  canvas.addEventListener('pointerup', releasePointer);
+  canvas.addEventListener('pointercancel', releasePointer);
 }
 
 return { Sampler };
