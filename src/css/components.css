@@ -951,6 +951,15 @@ x-knob.has-auto .knob__dial::after {
   stroke: rgba(255,255,255,.85);
   filter: drop-shadow(0 0 4px var(--m-color-glow, transparent));
 }
+/* Selektiertes Band -- Tippen wählt es aus, danach stellt eine Zwei-
+   Finger-Geste IRGENDWO auf dem Graphen sein Q ein (s. machine.js#
+   setupEq8Graph). Deutlich hellerer Ring + Glow, damit auf einen Blick
+   klar ist, welches Band gerade "im Fokus" ist. */
+.eq8__node.is-active.is-selected {
+  stroke: #fff;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 7px rgba(255,255,255,.9));
+}
 /* Frequenz-/dB-Skala -- als HTML statt SVG-<text> beschriftet: die SVG
    selbst wird per preserveAspectRatio="none" nicht-uniform gestreckt (breiter
    als hoch), <text> würde also seitlich verzerrt. Die Prozent-Positionen
