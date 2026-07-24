@@ -891,7 +891,8 @@ x-knob.has-auto .knob__dial::after {
   touch-action: none;
 }
 .eq8__svg { width: 100%; height: 150px; display: block; overflow: visible; }
-.eq8__zero { stroke: rgba(255,255,255,.12); stroke-width: 1; }
+.eq8__grid { stroke: rgba(255,255,255,.06); stroke-width: 1; }
+.eq8__grid--zero { stroke: rgba(255,255,255,.16); }
 .eq8__curve {
   fill: none;
   stroke: var(--m-color, var(--m-subsynth));
@@ -909,6 +910,28 @@ x-knob.has-auto .knob__dial::after {
   stroke: rgba(255,255,255,.85);
   filter: drop-shadow(0 0 4px var(--m-color-glow, transparent));
 }
+/* Frequenz-/dB-Skala -- als HTML statt SVG-<text> beschriftet: die SVG
+   selbst wird per preserveAspectRatio="none" nicht-uniform gestreckt (breiter
+   als hoch), <text> würde also seitlich verzerrt. Die Prozent-Positionen
+   sind dieselbe Achsen-Umrechnung wie fürs SVG (eq8FreqToX/eq8GainToY je
+   durch EQ8_W/EQ8_H), decken sich also exakt mit Gitterlinien/Kurve. */
+.eq8__labels {
+  position: absolute;
+  left: 8px; top: 6px;
+  width: calc(100% - 16px);
+  height: 150px;
+  pointer-events: none;
+}
+.eq8__label {
+  position: absolute;
+  font-size: 9px;
+  letter-spacing: .02em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(0,0,0,.6);
+}
+.eq8__label--x { bottom: 1px; transform: translateX(-50%); }
+.eq8__label--y { left: 2px; transform: translateY(-50%); }
 .eq8__hint {
   margin: 0;
   font-size: 10px;
