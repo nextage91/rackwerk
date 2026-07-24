@@ -11,12 +11,6 @@
  * Event: "input" (detail.value) on every change.
  */
 const FLOOR_DB = -60;
-// Maximaler Betrag, um den der Finger über die tatsächliche Track-Kante
-// hinauswandern darf, bevor die Umkehr-Kompensation (s. #dragTo) greift.
-// Verhindert, dass ein einzelner schneller Drag mit grossem Overshoot die
-// effektive Reglerstrecke unbegrenzt aufbläht (-> Fader "klebt" beim
-// Zurückziehen).
-const OVERSHOOT_PX = 40;
 
 export class XFader extends HTMLElement {
   static observedAttributes = ['value'];
@@ -111,21 +105,19 @@ export class XFader extends HTMLElement {
   #onMove = (e) => this.#dragTo(e.clientY);
 
   /**
-   * clientY wird auf die reale Track-Kante plus eine kleine, FESTE Toleranz
-   * (OVERSHOOT_PX) geklemmt, aber norm wird immer gegen die reale,
-   * unveränderliche Trackhöhe berechnet -- nicht (wie zuvor) gegen eine
-   * Grenze, die mit jedem Overshoot unbegrenzt mitwandert. Vorher blähte ein
-   * einzelner schneller Drag, der den (kurzen) Track deutlich überschiesst,
-   * die effektive Reglerstrecke dauerhaft für den Rest der Geste auf --
-   * kehrte der Finger danach um, bewegte sich der Wert nur noch kaum
-   * merklich, selbst weit innerhalb des sichtbaren Tracks ("kleben").
-   * Mit dem Clamp auf clientY bleibt die 1:1-Zuordnung innerhalb des echten
-   * Tracks immer exakt erhalten -- ein Overshoot über die Toleranz hinaus
-   * sättigt einfach bei 0/1, ohne die Empfindlichkeit für den Rest der Geste
-   * zu verwässern.
+   * clientY wird direkt auf die reale, unveränderliche Track-Kante geklemmt
+   * -- keine Toleranz, kein "mitwanderndes" Grenzpaar. Eine frühere Version
+   * liess die Grenze bei jedem Overshoot unbegrenzt mitwachsen (Fader klebte
+   * dauerhaft nach einem schnellen Drag über den kurzen Track hinaus); eine
+   * Zwischenversion begrenzte das auf eine feste Toleranz, liess aber noch
+   * eine Totzone übrig, sobald der Overshoot grösser als die Toleranz war
+   * (weiterhin spürbares "Kleben" bei jedem realistisch schnellen Drag).
+   * Mit dem harten Clamp reagiert der Wert exakt in dem Moment wieder, in
+   * dem der Finger zurück über die reale Kante wandert -- keine Totzone,
+   * keine verwässerte Empfindlichkeit, für jede Overshoot-Distanz gleich.
    */
   #dragTo(clientY) {
-    const y = Math.min(this.#trackBottom + OVERSHOOT_PX, Math.max(this.#trackTop - OVERSHOOT_PX, clientY));
+    const y = Math.min(this.#trackBottom, Math.max(this.#trackTop, clientY));
     const height = this.#trackBottom - this.#trackTop;
     const norm = height > 0 ? Math.min(1, Math.max(0, (this.#trackBottom - y) / height)) : 1;
     const next = this.#fromNorm(norm);
