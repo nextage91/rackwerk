@@ -3311,6 +3311,7 @@ class XFader extends HTMLElement {
   #track; #cap; #fill; #readout;
   #trackTop = 0; #trackBottom = 0;
   #lastTap = 0;
+  #downAt = 0; #downY = 0;
 
   get value() {
     // Before mount (element not yet in the DOM) return the attribute value.
@@ -3355,7 +3356,9 @@ class XFader extends HTMLElement {
       this.#emit();
       return; // reset stands — don't also jump to the tap position
     }
-    this.#lastTap = now;
+
+    this.#downAt = now;
+    this.#downY = e.clientY;
 
     const r = this.#track.getBoundingClientRect();
     this.#trackTop = r.top;
@@ -3398,6 +3401,16 @@ class XFader extends HTMLElement {
     this.#track.removeEventListener('pointermove', this.#onMove);
     this.#track.removeEventListener('pointerup', this.#onUp);
     this.#track.removeEventListener('pointercancel', this.#onUp);
+
+    // Nur eine Geste ohne nennenswerte Bewegung zählt als "Tap" für den
+    // Doppel-Tap-Reset -- sonst würde ein schneller Korrektur-Griff direkt
+    // nach einem Flick-Drag (beides zusammen leicht unter 300ms) fälschlich
+    // als zweiter Tap gewertet: Wert springt auf defaultValue, UND die
+    // gerade laufende Geste bekommt (weil #onDown dafür früh zurückkehrt)
+    // nie ihre pointermove/pointerup-Listener -- der Fader "klebt" dann am
+    // Reset-Wert (meist 1, also ganz oben), egal wie weit man weiterzieht.
+    const moved = Math.abs(e.clientY - this.#downY) > 6;
+    this.#lastTap = moved ? 0 : this.#downAt;
   };
 
   #emit() {
