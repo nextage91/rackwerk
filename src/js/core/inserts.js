@@ -133,6 +133,22 @@ const HADAMARD_4 = [
   [0.5, -0.5, -0.5, 0.5],
 ];
 
+/** 8x8-Hadamard-Matrix für den Reverb (s. DEFS.reverb) -- per Sylvester-
+ *  Konstruktion aus HADAMARD_4 verdoppelt (H8 = [[H4,H4],[H4,-H4]]), bleibt
+ *  dadurch garantiert orthogonal/energieerhaltend wie das 4x4-Original.
+ *  HADAMARD_4s Einträge sind bereits mit 1/sqrt(4) normiert -- die simple
+ *  Verdopplung ([row,row]/[row,-row]) ergibt Zeilen der Länge 8 mit doppelt
+ *  so vielen, aber gleich grossen Einträgen (Zeilennorm² = 8*0.25 = 2 statt
+ *  1) -- die zusätzliche Division durch sqrt(2) bringt sie zurück auf
+ *  Zeilennorm 1 (= korrekt für 1/sqrt(8)-Normierung bei 8 Leitungen).
+ *  Mehr Leitungen als beim ursprünglichen 4er-Netzwerk -- glattere, dichtere
+ *  Diffusion (weniger hörbares periodisches "Flattern", s. Kommentar bei
+ *  BASE_MS in DEFS.reverb). */
+const HADAMARD_8 = [
+  ...HADAMARD_4.map((row) => [...row, ...row].map((v) => v / Math.SQRT2)),
+  ...HADAMARD_4.map((row) => [...row, ...row.map((v) => -v)].map((v) => v / Math.SQRT2)),
+];
+
 /** Frequenzverhältnisse relativ zur Grundtonhöhe je Resonator-"Akkord" --
  *  bewusst 5 Werte je Set (feste Bank-Grösse N=5 im Resonator-DEFS).
  *  'harmonic' ist die natürliche Obertonreihe (glockig/saitig), die
@@ -144,6 +160,38 @@ const RESONATOR_INTERVAL_RATIOS = {
   minor: [1, Math.pow(2, 3 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
   major: [1, Math.pow(2, 4 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
 };
+
+/** Winzige, FESTE (nicht zufällige -- reproduzierbar) Verstimmung je Band,
+ *  in Cent, als Multiplikationsfaktor auf die exakten Verhältnisse oben.
+ *  Perfekt ganzzahlige Verhältnisse klingen sauber, aber synthetisch/
+ *  "geometrisch" -- ein echtes mitschwingendes Objekt (Glocke, Saite,
+ *  Platte) ist NIE exakt harmonisch gestimmt. Bewusst klein (unter 10 Cent,
+ *  deutlich unter einem hörbaren "Verstimmt"-Effekt) und ohne erkennbares
+ *  Muster (kein simples Alternieren +/-), nur genug, damit die Bänder beim
+ *  Ausklingen leicht gegeneinander schweben statt exakt phasenstarr zu
+ *  bleiben. Erstes Band (Grundton) bleibt unverstimmt -- der Referenzpunkt,
+ *  auf den pitch/Tuner-Erwartung sich bezieht. */
+const RESONATOR_DETUNE = [0, -7, 5, -4, 9].map((cents) => Math.pow(2, cents / 1200));
+
+/** Dieselben Intervall-"Akkorde" wie RESONATOR_INTERVAL_RATIOS, nur in
+ *  Halbtönen statt als Frequenzverhältnis -- Grundlage für die 5 frei
+ *  bespielbaren "Tune"-Regler je Band (s. DEFS.resonator): ein Preset-
+ *  Knopf befüllt damit einmalig alle 5 Regler, die man danach EINZELN
+ *  weiterverstellen kann (wie bei Abletons Resonators-Effekt: Tune+Fine
+ *  pro Resonator statt nur fixer Akkord-Auswahl). Rein rechnerisch aus den
+ *  Verhältnissen abgeleitet (12*log2(ratio)), damit beide Tabellen
+ *  garantiert dieselben Intervalle meinen. */
+const RESONATOR_PRESET_SEMITONES = Object.fromEntries(
+  Object.entries(RESONATOR_INTERVAL_RATIOS).map(([name, ratios]) => [name, ratios.map((r) => 12 * Math.log2(r))]),
+);
+
+/** Stereo-Panorama-Positionen je Band (-1=links .. 1=rechts), mit dem
+ *  "width"-Regler skaliert -- Grundton bleibt immer mittig (Referenzpunkt),
+ *  die Obertöne verteilen sich alternierend übers Stereobild. Gleiche Idee
+ *  wie Abletons Resonators-Width (dort machen die geraden/ungeraden
+ *  Resonatoren je einen Kanal), macht den mono-tristen Bandpass-Sound
+ *  spürbar "grösser"/lebendiger. */
+const RESONATOR_PAN = [0, -0.8, 0.8, -1, 1];
 
 /** Resonance-Regler (0..1) auf eine Bandpass-Güte (Q) abbilden. Anders als
  *  bei Lowpass/Highpass ist ein hoher Q hier UNBEDENKLICH -- Web Audios
@@ -433,10 +481,12 @@ const DEFS = {
     name: 'Reverb',
     // Anders als der Master-Reverb in fx.js (Faltung mit einem einmalig
     // erzeugten, statischen Impuls) läuft hier ein ECHTES Feedback-Delay-
-    // Netzwerk (FDN) -- vier modulierte Delay-Leitungen, über eine
-    // Hadamard-Matrix rückgekoppelt. Klingt dadurch weniger "eingefroren",
-    // mit einer leicht lebendigen, schwebenden Qualität -- die algorithmische
-    // Bauart (statt Faltung), auf die "Valhalla-Style" hier zielt.
+    // Netzwerk (FDN) -- acht Delay-Leitungen, über eine Hadamard-Matrix
+    // rückgekoppelt (ursprünglich vier, s. Kommentare bei N/BASE_MS unten:
+    // zu wenig Leitungen liessen sich als leicht metallisches Klingeln
+    // messen). Klingt dadurch weniger "eingefroren", mit einer leicht
+    // lebendigen Qualität -- die algorithmische Bauart (statt Faltung), auf
+    // die "Valhalla-Style" hier zielt.
     defaults: { size: 1.0, decay: 0.75, damping: 6000, mix: 0.35 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -446,36 +496,46 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
-      // Eingangsdiffusion: zwei serielle Allpass-Diffusoren VOR dem
-      // eigentlichen Netzwerk -- verwandeln den scharfen Eingangsimpuls in
-      // ein dichtes Bündel aus Mikro-Echos, damit das FDN nicht mit einem
-      // einzelnen "Klick" angeregt wird (der sonst als kurzes Klicken vor
-      // dem eigentlichen Hall-Schwanz hörbar wäre).
+      // Eingangsdiffusion: drei serielle Allpass-Diffusoren VOR dem
+      // eigentlichen Netzwerk (ein dritter gegenüber der ersten Fassung
+      // dazugekommen, abnehmende Delay-Zeit/Gain pro Stufe, klassisches
+      // Schroeder-Diffusor-Muster) -- verwandeln den scharfen Eingangsimpuls
+      // in ein NOCH dichteres Bündel aus Mikro-Echos, damit das FDN nicht
+      // mit einem einzelnen "Klick" angeregt wird (der sonst als kurzes
+      // Klicken vor dem eigentlichen Hall-Schwanz hörbar wäre).
       const diff1 = makeAllpass(ctx, 0.0047, 0.6);
       const diff2 = makeAllpass(ctx, 0.0033, 0.5);
+      const diff3 = makeAllpass(ctx, 0.0022, 0.4);
       input.connect(diff1.input);
       diff1.output.connect(diff2.input);
+      diff2.output.connect(diff3.input);
 
-      const N = 4;
-      // Bewusst NICHT auf einfache Verhältnisse zueinander (vermeidet
-      // periodische Deckungen zwischen den Leitungen -- die klingen als
-      // "Flatterecho"/metallisches Klingeln statt als glatter Hall).
-      const BASE_MS = [19.7, 27.1, 33.3, 41.9];
-      // KEINE Delay-Zeit-Modulation (früher: ein leises LFO-Chorus pro
-      // Leitung für einen "schwebenden" Valhalla-Charakter) -- so verlockend
-      // das klanglich war, macht es das Netzwerk zeitvariant, wodurch die
-      // übliche Stabilitätsgarantie (Loop-Gain < 1 bei fixer Delay-Zeit)
-      // nicht mehr exakt gilt: unter dichter, rhythmischer Retriggerung
-      // (echter Musikbetrieb, nicht nur ein einzelner Impuls) lief die
-      // Schleife bei bestimmten Damping/Size-Kombinationen tatsächlich
-      // unbegrenzt auf (gemessen: RMS im 6-stelligen Bereich nach 30s).
+      // N=8 (vorher 4) mit der entsprechend vergrösserten HADAMARD_8 --
+      // mehr Leitungen verteilen die zurückkommende Energie feiner, das
+      // hörbare periodische "Flattern" der 4er-Fassung (gemessene, deutliche
+      // Selbstähnlichkeit der Abkling-Hüllkurve alle ~30ms) wird spürbar
+      // schwächer, ohne an der Stabilitäts-Mathematik unten etwas zu ändern
+      // (eine orthogonale Matrix fügt dem Netzwerk nie Energie hinzu, ganz
+      // gleich ob 4x4 oder 8x8 -- der Beweis bleibt N-unabhängig gültig).
+      const N = 8;
+      // Basis-Delay-Zeiten (ms) ungefähr verdoppelt gegenüber der ersten
+      // Fassung (19.7-41.9 -> ~37-92) -- bei GLEICHEM decay-Regler (Obergrenze
+      // weiterhin bewusst bei 0.9, s. Kommentar dort) verdoppelt eine doppelt
+      // so lange Rundlaufzeit pro Iteration direkt die erreichbare Abkling-
+      // dauer (gemessen: alte Fassung klang bei decay=0.9 nach spätestens
+      // ~2s komplett aus -- viel zu kurz für einen überzeugenden "Hall",
+      // eher ein langes Echo). Weiterhin bewusst NICHT auf einfache
+      // Verhältnisse zueinander (vermeidet periodische Deckungen zwischen
+      // den Leitungen -- die klingen als Flatterecho/metallisches Klingeln
+      // statt als glatter Hall).
+      const BASE_MS = [37.3, 43.1, 51.7, 58.9, 67.3, 74.1, 83.7, 91.9];
       // Damper ist ein einpoliger Tiefpass (makeOnePoleLowpass), NICHT
       // ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
       // >1.0 nahe der Grenzfrequenz, egal welches Q (s. Kommentar dort).
-      // Mit beidem zusammen (kein Modulation-Zeitvarianz-Loch, Filter
-      // beweisbar <= 1) gilt decay*|Filter| <= decay < 1 GARANTIERT, für
-      // jede Parameter-Kombination -- verifiziert per Sweep über Decay x
-      // Damping x Size unter dichter Retriggerung, nicht nur Einzelimpuls.
+      // Mit beidem zusammen (Filter beweisbar <= 1, decayGain < 1) gilt
+      // decay*|Filter| <= decay < 1 GARANTIERT, für jede Parameter-
+      // Kombination -- verifiziert per Sweep über Decay x Damping x Size
+      // unter dichter Retriggerung, nicht nur Einzelimpuls.
       const delays = [], dampers = [], decayGains = [], inGains = [];
       for (let i = 0; i < N; i++) {
         const d = ctx.createDelay(1.0);
@@ -489,18 +549,49 @@ const DEFS = {
         delays.push(d); dampers.push(damp); decayGains.push(dg);
       }
 
-      // Eingang mit alternierendem Vorzeichen auf alle 4 Leitungen verteilen
+      // Sichere, bewusst KLEINE Modulation der Delay-Zeiten (wie Abletons
+      // "Spin"/"Chorus" im Reverb-Gerät) -- macht die Resonanzen weniger
+      // statisch/metallisch. Frühere Fassung hatte das ausdrücklich
+      // WEGGELASSEN (eine grobere LFO-Umsetzung liess die Schleife unter
+      // dichter Retriggerung unbegrenzt aufschaukeln, gemessen RMS im
+      // 6-stelligen Bereich nach 30s) -- diese Fassung ist aber aus einem
+      // anderen Grund sicher: eine Delay-ZEIT zu modulieren fügt dem
+      // Netzwerk selbst KEINE Energie hinzu (eine Verzögerung, ob konstant
+      // oder wackelnd, verändert nie die Amplitude) -- der Loop-Gain bleibt
+      // weiterhin ausschliesslich durch decayGains/Damper bestimmt (s.
+      // Beweis oben), unverändert von dieser Änderung. Echte OscillatorNodes
+      // (sample-genau, kein JS-Timer-Jitter wie eine mögliche frühere
+      // Implementierung) mit kleiner Tiefe (0.4ms, weit unter einer hörbaren
+      // Tonhöhen-Schwankung) und bewusst NICHT einfach-verhältnisgleichen,
+      // langsamen Raten je Leitung -- zusätzlich per selbem Stresstest wie
+      // beim N=4->8-Umbau verifiziert (dichte Retriggerung über Decay x
+      // Damping x Size, keine Instabilität gemessen).
+      const LFO_HZ = [0.11, 0.13, 0.17, 0.19, 0.23, 0.29, 0.31, 0.37];
+      const LFO_DEPTH_S = 0.0004;
+      const lfos = [], lfoGains = [];
+      for (let i = 0; i < N; i++) {
+        const lfo = ctx.createOscillator();
+        lfo.type = 'sine';
+        lfo.frequency.value = LFO_HZ[i];
+        const depthGain = ctx.createGain();
+        depthGain.gain.value = LFO_DEPTH_S;
+        lfo.connect(depthGain).connect(delays[i].delayTime);
+        lfo.start();
+        lfos.push(lfo); lfoGains.push(depthGain);
+      }
+
+      // Eingang mit alternierendem Vorzeichen auf alle N Leitungen verteilen
       // -- mehr Dekorrelation zwischen den Leitungen als ein gleiches
       // Vorzeichen für alle.
       for (let i = 0; i < N; i++) {
         const g = ctx.createGain();
         g.gain.value = 0.5 * (i % 2 === 0 ? 1 : -1);
-        diff2.output.connect(g).connect(delays[i]);
+        diff3.output.connect(g).connect(delays[i]);
         inGains.push(g);
       }
 
       // Hadamard-Rückkopplungsmatrix (orthogonal/energieerhaltend, s.
-      // HADAMARD_4 oben): decayGains[j] -> matrixGain[i][j] -> delays[i].
+      // HADAMARD_8 oben): decayGains[j] -> matrixGain[i][j] -> delays[i].
       // Die eigentliche Abkling-Kontrolle sitzt in decayGains, NICHT in der
       // Matrix selbst -- die darf dem Netzwerk keine Energie hinzufügen,
       // sonst wird die Schleife instabil.
@@ -509,13 +600,13 @@ const DEFS = {
         matrixGains[i] = [];
         for (let j = 0; j < N; j++) {
           const g = ctx.createGain();
-          g.gain.value = HADAMARD_4[i][j];
+          g.gain.value = HADAMARD_8[i][j];
           decayGains[j].connect(g).connect(delays[i]);
           matrixGains[i][j] = g;
         }
       }
 
-      // Ausgang: Summe aller 4 Leitungen (nach Damping/Decay, derselbe
+      // Ausgang: Summe aller N Leitungen (nach Damping/Decay, derselbe
       // Abgriff, den auch die Matrix liest) -- durch N geteilt, sonst
       // deutlich lauter als der Dry-Pfad.
       const outSum = ctx.createGain();
@@ -542,12 +633,14 @@ const DEFS = {
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          diff1.dispose(); diff2.dispose();
+          diff1.dispose(); diff2.dispose(); diff3.dispose();
           for (const d of delays) d.disconnect();
           for (const damp of dampers) damp.dispose();
           for (const dg of decayGains) dg.disconnect();
           for (const row of matrixGains) for (const g of row) g.disconnect();
           for (const g of inGains) g.disconnect();
+          for (const lfo of lfos) { lfo.stop(); lfo.disconnect(); }
+          for (const g of lfoGains) g.disconnect();
         },
       };
     },
@@ -566,7 +659,7 @@ const DEFS = {
     // FDN-Reverb). Klingt wie ein angeschlagenes Glas/eine Saite, die auf
     // die eingehende Frequenz mitschwingt -- klassischer "Resonator"-
     // Pedal-Sound.
-    defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic' },
+    defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic', width: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
       const output = ctx.createGain();
@@ -576,18 +669,34 @@ const DEFS = {
       wet.gain.value = p.mix;
 
       const N = 5;
-      let ratios = RESONATOR_INTERVAL_RATIOS[p.interval] ?? RESONATOR_INTERVAL_RATIOS.harmonic;
+      // Altprojekte kennen nur "interval" (Preset-Name), noch kein "tune"
+      // (5er-Halbton-Array, s. RESONATOR_PRESET_SEMITONES oben) -- fehlt es
+      // (frisch angelegtes Insert ODER ein vor diesem Update gespeichertes
+      // Projekt), einmalig aus dem gespeicherten interval ableiten, statt
+      // stumm auf "harmonic" zurückzufallen. Ist p.tune schon vorhanden
+      // (Projekt NACH diesem Update gespeichert, ggf. einzeln verstellt),
+      // bleibt es unangetastet -- p ist dieselbe Referenz wie insert.params,
+      // die Mutation hier landet also direkt im echten, serialisierten
+      // Zustand (gleiches Muster wie eq8s p.bands).
+      if (!Array.isArray(p.tune) || p.tune.length !== N) {
+        p.tune = [...(RESONATOR_PRESET_SEMITONES[p.interval] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
+      }
       let pitch = p.pitch;
       const q = resonanceToQ(p.resonance);
+      const freqFor = (i) => pitch * Math.pow(2, p.tune[i] / 12) * RESONATOR_DETUNE[i];
 
-      const bands = [];
+      const bands = [], panners = [];
       for (let i = 0; i < N; i++) {
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
-        bp.frequency.value = pitch * ratios[i];
+        bp.frequency.value = freqFor(i);
         bp.Q.value = q;
+        const panner = ctx.createStereoPanner();
+        panner.pan.value = RESONATOR_PAN[i] * p.width;
         input.connect(bp);
+        bp.connect(panner);
         bands.push(bp);
+        panners.push(panner);
       }
 
       // Pegel-Kompensation: zwei Effekte gegenläufig ausgleichen. (1) N
@@ -600,10 +709,12 @@ const DEFS = {
       // sich anfühlen wie "leiser" statt "länger/dramatischer nachklingend"
       // -- makeupFor(q) gleicht das mit sqrt(Q) grob aus (voller 1/Q-
       // Ausgleich würde die tiefen Resonance-Werte dagegen unnötig laut
-      // machen).
+      // machen). sum ist jetzt (durch die Panner) potenziell STEREO -- eine
+      // GainNode summiert Mehrkanal-Eingänge transparent, keine Änderung
+      // an der Kompensationsrechnung selbst nötig.
       const sum = ctx.createGain();
       sum.gain.value = makeupFor(q) / N;
-      for (const bp of bands) bp.connect(sum);
+      for (const panner of panners) panner.connect(sum);
 
       // limiter: makeupFor() ist auf eine KURZE/breitbandige Anregung
       // kalibriert (Drum-Transiente) -- bei einer GEHALTENEN Note exakt auf
@@ -634,7 +745,7 @@ const DEFS = {
           const t = engine.now;
           if (key === 'pitch') {
             pitch = v;
-            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i], t, 0.02);
+            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(freqFor(i), t, 0.02);
           } else if (key === 'resonance') {
             const newQ = resonanceToQ(v);
             for (const bp of bands) bp.Q.setTargetAtTime(newQ, t, 0.02);
@@ -642,18 +753,32 @@ const DEFS = {
           } else if (key === 'damping') {
             damp.setFreq(v, t, 0.02);
           } else if (key === 'interval') {
-            ratios = RESONATOR_INTERVAL_RATIOS[v] ?? RESONATOR_INTERVAL_RATIOS.harmonic;
-            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i], t, 0.03);
+            // Preset-Knopf: befüllt alle 5 Tune-Werte auf einen Schlag (s.
+            // Kommentar bei RESONATOR_PRESET_SEMITONES) -- einzelne Bänder
+            // lassen sich danach über setBandTune() wieder frei verstellen.
+            p.tune = [...(RESONATOR_PRESET_SEMITONES[v] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
+            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(freqFor(i), t, 0.03);
+          } else if (key === 'width') {
+            for (let i = 0; i < N; i++) panners[i].pan.setTargetAtTime(RESONATOR_PAN[i] * v, t, 0.02);
           } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
+        },
+        // Einzelnes Band frei umstimmen (Halbtöne relativ zu pitch) --
+        // eigene, zusätzliche Methode wie setBand() beim 8-Band-EQ (s.
+        // dortigen Kommentar): der generische setParam(key,value) kennt nur
+        // "ein Feld", nicht "ein Feld eines von 5 Bändern".
+        setBandTune(i, semitones) {
+          p.tune[i] = semitones;
+          bands[i].frequency.setTargetAtTime(freqFor(i), engine.now, 0.02);
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
           limiter.disconnect();
           damp.dispose();
           for (const bp of bands) bp.disconnect();
+          for (const panner of panners) panner.disconnect();
         },
       };
     },
@@ -739,6 +864,7 @@ export const UI_PARAMS = {
     { key: 'pitch', label: 'Pitch', min: 55, max: 880, curve: 'log', unit: 'Hz' },
     { key: 'resonance', label: 'Resonance', min: 0, max: 1, unit: '' },
     { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
+    { key: 'width', label: 'Width', min: 0, max: 1, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
 };
@@ -829,6 +955,8 @@ export function createInsert(type, saved = null) {
     // Nur beim 8-Band-EQ vorhanden (s. dortigen Kommentar in DEFS.eq8).
     setBand: effect.setBand ? (i, field) => effect.setBand(i, field) : undefined,
     getEq8Response: effect.getEq8Response ? (freqArray) => effect.getEq8Response(freqArray) : undefined,
+    // Nur beim Resonator vorhanden (s. dortigen Kommentar in DEFS.resonator).
+    setBandTune: effect.setBandTune ? (i, semitones) => effect.setBandTune(i, semitones) : undefined,
     setBypass(b) {
       insert.bypassed = b;
       const t = engine.now;

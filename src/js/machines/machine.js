@@ -1108,10 +1108,22 @@ export class Machine {
           <div class="insert-row__params">${knobsHtml}</div>
         `;
       } else if (insert.type === 'resonator') {
+        // Preset-Knöpfe befüllen alle 5 Tune-Regler auf einen Schlag (s.
+        // inserts.js#RESONATOR_PRESET_SEMITONES) -- danach lässt sich jedes
+        // Band EINZELN weiterverstellen (wie Abletons Resonators: Tune pro
+        // Resonator statt nur fixer Akkord-Auswahl), kein knobsHtml/
+        // UI_PARAMS-Eintrag dafür (Array statt Einzelwert, gleiches Muster
+        // wie eq8s bands).
         bodyHtml = `
           <div class="seg">
             ${RESONATOR_INTERVALS.map((t) => `
               <button type="button" class="seg__btn${insert.params.interval === t.value ? ' is-active' : ''}" data-resonator-interval="${t.value}">${t.label}</button>
+            `).join('')}
+          </div>
+          <div class="resonator-tune">
+            ${insert.params.tune.map((v, i) => `
+              <x-knob label="${i + 1}" min="-36" max="48" value="${v}" unit="st"
+                data-resonator-tune="${i}"></x-knob>
             `).join('')}
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
@@ -1232,7 +1244,8 @@ export class Machine {
         // Wiedergabe darf hier bewusst NICHT #renderInserts() aufrufen (das
         // würde bei jedem der ~45 Ticks/Sekunde die komplette Insert-Liste
         // neu bauen), deshalb ein leichtgewichtiger Direkt-Abgleich der
-        // is-active-Klassen statt eines vollen Rerenders.
+        // is-active-Klassen (und der 5 Tune-Regler, die ein Preset-Wechsel
+        // ebenfalls überschreibt) statt eines vollen Rerenders.
         const seg = row.querySelector('.seg');
         const autoKey = `${this.id}:insert:${id}:interval`;
         automation.registerSwitch(autoKey, seg, (v) => {
@@ -1242,8 +1255,27 @@ export class Machine {
           for (const b of seg.querySelectorAll('[data-resonator-interval]')) {
             b.classList.toggle('is-active', b.dataset.resonatorInterval === value);
           }
+          for (const knob of row.querySelectorAll('[data-resonator-tune]')) {
+            knob.value = insert.params.tune[parseInt(knob.dataset.resonatorTune, 10)];
+          }
         });
         seg.classList.toggle('has-auto', automation.hasLane(autoKey));
+
+        // Einzelne Tune-Regler -- eigener Weg statt data-insert-param/
+        // setInsertParam (der kennt nur "ein Feld", nicht "ein Feld eines
+        // von 5 Bändern", s. inserts.js#setBandTune). Bewusst NICHT
+        // automatisierbar (wie die Sample-Editor-Regler in sampler.js) --
+        // das Automationssystem erwartet einen einzelnen Lane-Schlüssel pro
+        // Regler, 5 zusätzliche Lanes je Resonator-Insert wären ein
+        // unverhältnismässiger Ausbau für einen Regler, den man in der
+        // Praxis selten laufend automatisiert statt einmalig einzustellen.
+        for (const knob of row.querySelectorAll('[data-resonator-tune]')) {
+          knob.addEventListener('input', (e) => {
+            const i = parseInt(knob.dataset.resonatorTune, 10);
+            insert.params.tune[i] = e.detail.value;
+            insert.setBandTune?.(i, e.detail.value);
+          });
+        }
       }
       for (const btn of row.querySelectorAll('[data-ratio-mode]')) {
         btn.addEventListener('click', () => {
