@@ -294,6 +294,17 @@ x-fader {
   background: linear-gradient(90deg, #1c1811, #100d09 45%, #1c1811);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
 }
+/* Unsichtbares, vergrössertes Tippraster rund um den (nur 30px schmalen)
+   Track -- Finger treffen selten pixelgenau. Asymmetrisch, weil die Lücken
+   im Mixer-Kanalzug es sind: senkrecht nur 4px (der knappste Nachbar ist
+   die Regler-Reihe darüber, 6px Abstand -- 4px lässt 2px Puffer), seitlich
+   grosszügigere 10px (>20px Luft zur VU-Anzeige). */
+.fader__hitzone {
+  position: absolute;
+  inset: -4px -10px;
+  pointer-events: auto;
+  touch-action: none;
+}
 /* Fader-Nut in der Mitte, wie ein echter Kanalzug-Schlitz */
 .fader__track::before {
   content: "";
