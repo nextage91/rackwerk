@@ -92,6 +92,18 @@ function eq8YToGain(y) {
   return Math.max(-EQ8_GAIN_RANGE, Math.min(EQ8_GAIN_RANGE, n * EQ8_GAIN_RANGE));
 }
 
+/** Skalen-Hilfslinien wie bei Ableton EQ8/FabFilter Pro-Q: viele feine,
+ *  unbeschriftete Frequenz-Gitterlinien, aber nur ein paar wenige BESCHRIFTETE
+ *  Zehnerpotenzen -- auf Handybreite (~300-350px) wäre jede Terz beschriftet
+ *  völlig überladen. dB-Linien alle 6dB, komplett beschriftet (nur 7 Werte). */
+const EQ8_FREQ_GRID = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+const EQ8_FREQ_TICKS = [
+  { hz: 100, label: '100' },
+  { hz: 1000, label: '1k' },
+  { hz: 10000, label: '10k' },
+];
+const EQ8_DB_TICKS = [-18, -12, -6, 0, 6, 12, 18];
+
 /** Feste, log-verteilte Stützstellen für getFrequencyResponse() -- einmal
  *  berechnet (modulweit, unabhängig von einzelnen Insert-Instanzen, da rein
  *  von der X-Achse abhängig), bei jedem Redraw wiederverwendet. */
@@ -214,6 +226,7 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
 function setupEq8Graph(row, insert, machine) {
   const graph = row.querySelector('[data-eq8-graph]');
   if (!graph) return;
+  const svg = graph.querySelector('.eq8__svg');
   const curvePath = graph.querySelector('[data-eq8-curve]');
   const HOLD_MS = 500;
   const TAP_TOLERANCE = 6; // Viewbox-Einheiten
@@ -226,23 +239,53 @@ function setupEq8Graph(row, insert, machine) {
     };
   };
 
+  // Nur AKTIVE Bänder zählen als "vorhandener Knoten" -- inaktive Bänder
+  // haben (noch) keinen sichtbaren Punkt (s. redraw()) und teilen sich
+  // ausserdem alle denselben Default (freq 1000/gain 0). Würden sie hier
+  // mitgezählt, fände ein Tap auf eine LEERE Stelle nahe dieser Default-
+  // Position fälschlich "es gibt hier schon ein Band" statt ein neues
+  // anzulegen -- und ein Halten dort hätte am eh schon inaktiven Band
+  // nichts sichtbar zu entfernen (genau der gemeldete "Punkt lässt sich
+  // nicht wegmachen"-Bug).
   const findNodeNear = (x, y, maxDist = 22) => {
     let best = -1, bestDist = maxDist;
     insert.params.bands.forEach((b, i) => {
-      const d = Math.hypot(eq8FreqToX(b.freq) - x, eq8GainToY(b.active ? b.gain : 0) - y);
+      if (!b.active) return;
+      const d = Math.hypot(eq8FreqToX(b.freq) - x, eq8GainToY(b.gain) - y);
       if (d < bestDist) { bestDist = d; best = i; }
     });
     return best;
   };
 
+  // Hält die <circle>-Elemente 1:1 mit den AKTIVEN Bändern synchron --
+  // erzeugt/entfernt Knoten statt (wie zuvor) alle 8 fix zu rendern, damit
+  // inaktive Bänder gar nicht erst als Punkt auftauchen können.
+  const syncNodes = () => {
+    const existing = new Map();
+    graph.querySelectorAll('[data-eq8-node]').forEach((el) => {
+      existing.set(parseInt(el.dataset.eq8Node, 10), el);
+    });
+    insert.params.bands.forEach((b, i) => {
+      let el = existing.get(i);
+      if (b.active) {
+        if (!el) {
+          el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          el.setAttribute('class', 'eq8__node is-active');
+          el.setAttribute('data-eq8-node', i);
+          el.setAttribute('r', 7);
+          svg.appendChild(el);
+        }
+        el.setAttribute('cx', eq8FreqToX(b.freq));
+        el.setAttribute('cy', eq8GainToY(b.gain));
+      } else if (el) {
+        el.remove();
+      }
+    });
+  };
+
   const redraw = () => {
     curvePath.setAttribute('d', eq8CurvePath(insert));
-    graph.querySelectorAll('[data-eq8-node]').forEach((el, i) => {
-      const b = insert.params.bands[i];
-      el.setAttribute('cx', eq8FreqToX(b.freq));
-      el.setAttribute('cy', eq8GainToY(b.active ? b.gain : 0));
-      el.classList.toggle('is-active', b.active);
-    });
+    syncNodes();
   };
   // setBand() ramp die echten Audio-Parameter sanft an (setTargetAtTime,
   // Klick-Vermeidung bei schnellen Touch-Änderungen) -- die Kurve liest
@@ -973,13 +1016,18 @@ export class Machine {
         bodyHtml = `
           <div class="eq8__graph" data-eq8-graph>
             <svg viewBox="0 0 ${EQ8_W} ${EQ8_H}" class="eq8__svg" preserveAspectRatio="none">
-              <line x1="0" y1="${EQ8_MIDY}" x2="${EQ8_W}" y2="${EQ8_MIDY}" class="eq8__zero"></line>
+              ${EQ8_FREQ_GRID.map((f) => `<line x1="${eq8FreqToX(f).toFixed(1)}" y1="0" x2="${eq8FreqToX(f).toFixed(1)}" y2="${EQ8_H}" class="eq8__grid"></line>`).join('')}
+              ${EQ8_DB_TICKS.map((db) => `<line x1="0" y1="${eq8GainToY(db).toFixed(1)}" x2="${EQ8_W}" y2="${eq8GainToY(db).toFixed(1)}" class="eq8__grid${db === 0 ? ' eq8__grid--zero' : ''}"></line>`).join('')}
               <path class="eq8__curve" data-eq8-curve d="${eq8CurvePath(insert)}"></path>
-              ${insert.params.bands.map((b, i) => `
-                <circle class="eq8__node${b.active ? ' is-active' : ''}" data-eq8-node="${i}"
-                  cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.active ? b.gain : 0)}" r="7"></circle>
-              `).join('')}
+              ${insert.params.bands.map((b, i) => (b.active ? `
+                <circle class="eq8__node is-active" data-eq8-node="${i}"
+                  cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.gain)}" r="7"></circle>
+              ` : '')).join('')}
             </svg>
+            <div class="eq8__labels" aria-hidden="true">
+              ${EQ8_FREQ_TICKS.map((t) => `<span class="eq8__label eq8__label--x" style="left:${(eq8FreqToX(t.hz) / EQ8_W * 100).toFixed(2)}%">${t.label}</span>`).join('')}
+              ${EQ8_DB_TICKS.map((db) => `<span class="eq8__label eq8__label--y" style="top:${(eq8GainToY(db) / EQ8_H * 100).toFixed(2)}%">${db > 0 ? `+${db}` : db}</span>`).join('')}
+            </div>
           </div>
           <p class="eq8__hint">Tap: add band · Drag: freq/gain · Two fingers: Q · Hold: type/remove</p>
         `;
