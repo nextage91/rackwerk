@@ -27,6 +27,7 @@ export class XFader extends HTMLElement {
         <span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−60</span>
       </div>
       <div class="fader__track">
+        <div class="fader__hitzone"></div>
         <div class="fader__fill"></div>
         <div class="fader__cap"></div>
       </div>
@@ -36,6 +37,7 @@ export class XFader extends HTMLElement {
     this.#cap = this.querySelector('.fader__cap');
     this.#fill = this.querySelector('.fader__fill');
     this.#readout = this.querySelector('.fader__value');
+    this.#hitzone = this.querySelector('.fader__hitzone');
 
     this.#track.addEventListener('pointerdown', this.#onDown);
     // Die Kappe überragt den Track um die halbe eigene Höhe an den Enden
@@ -48,12 +50,16 @@ export class XFader extends HTMLElement {
     // #onDown) -- unabhängig davon, welches der beiden Elemente den
     // Pointerdown tatsächlich empfangen hat.
     this.#cap.addEventListener('pointerdown', this.#onDown);
+    // Vergrössertes, unsichtbares Tippraster (s. .fader__hitzone in CSS) --
+    // fängt Taps ab, die knapp neben Track/Kappe landen, mit demselben
+    // Handler wie oben.
+    this.#hitzone.addEventListener('pointerdown', this.#onDown);
     this.#render();
   }
 
   #built = false;
   #value = 1;
-  #track; #cap; #fill; #readout;
+  #track; #cap; #fill; #readout; #hitzone;
   #trackTop = 0; #trackBottom = 0;
   #lastTap = 0;
   #downAt = 0; #downY = 0;

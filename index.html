@@ -1934,6 +1934,17 @@ x-fader {
   background: linear-gradient(90deg, #1c1811, #100d09 45%, #1c1811);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
 }
+/* Unsichtbares, vergrössertes Tippraster rund um den (nur 30px schmalen)
+   Track -- Finger treffen selten pixelgenau. Asymmetrisch, weil die Lücken
+   im Mixer-Kanalzug es sind: senkrecht nur 4px (der knappste Nachbar ist
+   die Regler-Reihe darüber, 6px Abstand -- 4px lässt 2px Puffer), seitlich
+   grosszügigere 10px (>20px Luft zur VU-Anzeige). */
+.fader__hitzone {
+  position: absolute;
+  inset: -4px -10px;
+  pointer-events: auto;
+  touch-action: none;
+}
 /* Fader-Nut in der Mitte, wie ein echter Kanalzug-Schlitz */
 .fader__track::before {
   content: "";
@@ -3298,6 +3309,7 @@ class XFader extends HTMLElement {
         <span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−60</span>
       </div>
       <div class="fader__track">
+        <div class="fader__hitzone"></div>
         <div class="fader__fill"></div>
         <div class="fader__cap"></div>
       </div>
@@ -3307,6 +3319,7 @@ class XFader extends HTMLElement {
     this.#cap = this.querySelector('.fader__cap');
     this.#fill = this.querySelector('.fader__fill');
     this.#readout = this.querySelector('.fader__value');
+    this.#hitzone = this.querySelector('.fader__hitzone');
 
     this.#track.addEventListener('pointerdown', this.#onDown);
     // Die Kappe überragt den Track um die halbe eigene Höhe an den Enden
@@ -3319,12 +3332,16 @@ class XFader extends HTMLElement {
     // #onDown) -- unabhängig davon, welches der beiden Elemente den
     // Pointerdown tatsächlich empfangen hat.
     this.#cap.addEventListener('pointerdown', this.#onDown);
+    // Vergrössertes, unsichtbares Tippraster (s. .fader__hitzone in CSS) --
+    // fängt Taps ab, die knapp neben Track/Kappe landen, mit demselben
+    // Handler wie oben.
+    this.#hitzone.addEventListener('pointerdown', this.#onDown);
     this.#render();
   }
 
   #built = false;
   #value = 1;
-  #track; #cap; #fill; #readout;
+  #track; #cap; #fill; #readout; #hitzone;
   #trackTop = 0; #trackBottom = 0;
   #lastTap = 0;
   #downAt = 0; #downY = 0;
