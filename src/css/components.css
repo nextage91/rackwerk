@@ -863,6 +863,20 @@ x-knob.has-auto .knob__dial::after {
   gap: 10px 6px;
 }
 
+/* Resonator: 5 einzeln bespielbare Tune-Regler (Halbton je Band) -- eigene,
+   kompaktere Reihe über den regulären Knobs, damit "Preset wählen, dann
+   einzeln nachstimmen" (wie Abletons Resonators) räumlich zusammengehört. */
+.resonator-tune {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,.2);
+}
+.resonator-tune x-knob { --knob-size: 38px; gap: 3px; }
+
 /* ---- Compressor: 1176-Style GR-Meter + Ratio-Taster statt -Regler ---- */
 .comp-meter {
   display: flex;
