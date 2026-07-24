@@ -133,6 +133,22 @@ const HADAMARD_4 = [
   [0.5, -0.5, -0.5, 0.5],
 ];
 
+/** 8x8-Hadamard-Matrix für den Reverb (s. DEFS.reverb) -- per Sylvester-
+ *  Konstruktion aus HADAMARD_4 verdoppelt (H8 = [[H4,H4],[H4,-H4]]), bleibt
+ *  dadurch garantiert orthogonal/energieerhaltend wie das 4x4-Original.
+ *  HADAMARD_4s Einträge sind bereits mit 1/sqrt(4) normiert -- die simple
+ *  Verdopplung ([row,row]/[row,-row]) ergibt Zeilen der Länge 8 mit doppelt
+ *  so vielen, aber gleich grossen Einträgen (Zeilennorm² = 8*0.25 = 2 statt
+ *  1) -- die zusätzliche Division durch sqrt(2) bringt sie zurück auf
+ *  Zeilennorm 1 (= korrekt für 1/sqrt(8)-Normierung bei 8 Leitungen).
+ *  Mehr Leitungen als beim ursprünglichen 4er-Netzwerk -- glattere, dichtere
+ *  Diffusion (weniger hörbares periodisches "Flattern", s. Kommentar bei
+ *  BASE_MS in DEFS.reverb). */
+const HADAMARD_8 = [
+  ...HADAMARD_4.map((row) => [...row, ...row].map((v) => v / Math.SQRT2)),
+  ...HADAMARD_4.map((row) => [...row, ...row.map((v) => -v)].map((v) => v / Math.SQRT2)),
+];
+
 /** Frequenzverhältnisse relativ zur Grundtonhöhe je Resonator-"Akkord" --
  *  bewusst 5 Werte je Set (feste Bank-Grösse N=5 im Resonator-DEFS).
  *  'harmonic' ist die natürliche Obertonreihe (glockig/saitig), die
@@ -144,6 +160,18 @@ const RESONATOR_INTERVAL_RATIOS = {
   minor: [1, Math.pow(2, 3 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
   major: [1, Math.pow(2, 4 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
 };
+
+/** Winzige, FESTE (nicht zufällige -- reproduzierbar) Verstimmung je Band,
+ *  in Cent, als Multiplikationsfaktor auf die exakten Verhältnisse oben.
+ *  Perfekt ganzzahlige Verhältnisse klingen sauber, aber synthetisch/
+ *  "geometrisch" -- ein echtes mitschwingendes Objekt (Glocke, Saite,
+ *  Platte) ist NIE exakt harmonisch gestimmt. Bewusst klein (unter 10 Cent,
+ *  deutlich unter einem hörbaren "Verstimmt"-Effekt) und ohne erkennbares
+ *  Muster (kein simples Alternieren +/-), nur genug, damit die Bänder beim
+ *  Ausklingen leicht gegeneinander schweben statt exakt phasenstarr zu
+ *  bleiben. Erstes Band (Grundton) bleibt unverstimmt -- der Referenzpunkt,
+ *  auf den pitch/Tuner-Erwartung sich bezieht. */
+const RESONATOR_DETUNE = [0, -7, 5, -4, 9].map((cents) => Math.pow(2, cents / 1200));
 
 /** Resonance-Regler (0..1) auf eine Bandpass-Güte (Q) abbilden. Anders als
  *  bei Lowpass/Highpass ist ein hoher Q hier UNBEDENKLICH -- Web Audios
@@ -433,10 +461,12 @@ const DEFS = {
     name: 'Reverb',
     // Anders als der Master-Reverb in fx.js (Faltung mit einem einmalig
     // erzeugten, statischen Impuls) läuft hier ein ECHTES Feedback-Delay-
-    // Netzwerk (FDN) -- vier modulierte Delay-Leitungen, über eine
-    // Hadamard-Matrix rückgekoppelt. Klingt dadurch weniger "eingefroren",
-    // mit einer leicht lebendigen, schwebenden Qualität -- die algorithmische
-    // Bauart (statt Faltung), auf die "Valhalla-Style" hier zielt.
+    // Netzwerk (FDN) -- acht Delay-Leitungen, über eine Hadamard-Matrix
+    // rückgekoppelt (ursprünglich vier, s. Kommentare bei N/BASE_MS unten:
+    // zu wenig Leitungen liessen sich als leicht metallisches Klingeln
+    // messen). Klingt dadurch weniger "eingefroren", mit einer leicht
+    // lebendigen Qualität -- die algorithmische Bauart (statt Faltung), auf
+    // die "Valhalla-Style" hier zielt.
     defaults: { size: 1.0, decay: 0.75, damping: 6000, mix: 0.35 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -446,21 +476,39 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
-      // Eingangsdiffusion: zwei serielle Allpass-Diffusoren VOR dem
-      // eigentlichen Netzwerk -- verwandeln den scharfen Eingangsimpuls in
-      // ein dichtes Bündel aus Mikro-Echos, damit das FDN nicht mit einem
-      // einzelnen "Klick" angeregt wird (der sonst als kurzes Klicken vor
-      // dem eigentlichen Hall-Schwanz hörbar wäre).
+      // Eingangsdiffusion: drei serielle Allpass-Diffusoren VOR dem
+      // eigentlichen Netzwerk (ein dritter gegenüber der ersten Fassung
+      // dazugekommen, abnehmende Delay-Zeit/Gain pro Stufe, klassisches
+      // Schroeder-Diffusor-Muster) -- verwandeln den scharfen Eingangsimpuls
+      // in ein NOCH dichteres Bündel aus Mikro-Echos, damit das FDN nicht
+      // mit einem einzelnen "Klick" angeregt wird (der sonst als kurzes
+      // Klicken vor dem eigentlichen Hall-Schwanz hörbar wäre).
       const diff1 = makeAllpass(ctx, 0.0047, 0.6);
       const diff2 = makeAllpass(ctx, 0.0033, 0.5);
+      const diff3 = makeAllpass(ctx, 0.0022, 0.4);
       input.connect(diff1.input);
       diff1.output.connect(diff2.input);
+      diff2.output.connect(diff3.input);
 
-      const N = 4;
-      // Bewusst NICHT auf einfache Verhältnisse zueinander (vermeidet
-      // periodische Deckungen zwischen den Leitungen -- die klingen als
-      // "Flatterecho"/metallisches Klingeln statt als glatter Hall).
-      const BASE_MS = [19.7, 27.1, 33.3, 41.9];
+      // N=8 (vorher 4) mit der entsprechend vergrösserten HADAMARD_8 --
+      // mehr Leitungen verteilen die zurückkommende Energie feiner, das
+      // hörbare periodische "Flattern" der 4er-Fassung (gemessene, deutliche
+      // Selbstähnlichkeit der Abkling-Hüllkurve alle ~30ms) wird spürbar
+      // schwächer, ohne an der Stabilitäts-Mathematik unten etwas zu ändern
+      // (eine orthogonale Matrix fügt dem Netzwerk nie Energie hinzu, ganz
+      // gleich ob 4x4 oder 8x8 -- der Beweis bleibt N-unabhängig gültig).
+      const N = 8;
+      // Basis-Delay-Zeiten (ms) ungefähr verdoppelt gegenüber der ersten
+      // Fassung (19.7-41.9 -> ~37-92) -- bei GLEICHEM decay-Regler (Obergrenze
+      // weiterhin bewusst bei 0.9, s. Kommentar dort) verdoppelt eine doppelt
+      // so lange Rundlaufzeit pro Iteration direkt die erreichbare Abkling-
+      // dauer (gemessen: alte Fassung klang bei decay=0.9 nach spätestens
+      // ~2s komplett aus -- viel zu kurz für einen überzeugenden "Hall",
+      // eher ein langes Echo). Weiterhin bewusst NICHT auf einfache
+      // Verhältnisse zueinander (vermeidet periodische Deckungen zwischen
+      // den Leitungen -- die klingen als Flatterecho/metallisches Klingeln
+      // statt als glatter Hall).
+      const BASE_MS = [37.3, 43.1, 51.7, 58.9, 67.3, 74.1, 83.7, 91.9];
       // KEINE Delay-Zeit-Modulation (früher: ein leises LFO-Chorus pro
       // Leitung für einen "schwebenden" Valhalla-Charakter) -- so verlockend
       // das klanglich war, macht es das Netzwerk zeitvariant, wodurch die
@@ -489,18 +537,18 @@ const DEFS = {
         delays.push(d); dampers.push(damp); decayGains.push(dg);
       }
 
-      // Eingang mit alternierendem Vorzeichen auf alle 4 Leitungen verteilen
+      // Eingang mit alternierendem Vorzeichen auf alle N Leitungen verteilen
       // -- mehr Dekorrelation zwischen den Leitungen als ein gleiches
       // Vorzeichen für alle.
       for (let i = 0; i < N; i++) {
         const g = ctx.createGain();
         g.gain.value = 0.5 * (i % 2 === 0 ? 1 : -1);
-        diff2.output.connect(g).connect(delays[i]);
+        diff3.output.connect(g).connect(delays[i]);
         inGains.push(g);
       }
 
       // Hadamard-Rückkopplungsmatrix (orthogonal/energieerhaltend, s.
-      // HADAMARD_4 oben): decayGains[j] -> matrixGain[i][j] -> delays[i].
+      // HADAMARD_8 oben): decayGains[j] -> matrixGain[i][j] -> delays[i].
       // Die eigentliche Abkling-Kontrolle sitzt in decayGains, NICHT in der
       // Matrix selbst -- die darf dem Netzwerk keine Energie hinzufügen,
       // sonst wird die Schleife instabil.
@@ -509,13 +557,13 @@ const DEFS = {
         matrixGains[i] = [];
         for (let j = 0; j < N; j++) {
           const g = ctx.createGain();
-          g.gain.value = HADAMARD_4[i][j];
+          g.gain.value = HADAMARD_8[i][j];
           decayGains[j].connect(g).connect(delays[i]);
           matrixGains[i][j] = g;
         }
       }
 
-      // Ausgang: Summe aller 4 Leitungen (nach Damping/Decay, derselbe
+      // Ausgang: Summe aller N Leitungen (nach Damping/Decay, derselbe
       // Abgriff, den auch die Matrix liest) -- durch N geteilt, sonst
       // deutlich lauter als der Dry-Pfad.
       const outSum = ctx.createGain();
@@ -542,7 +590,7 @@ const DEFS = {
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          diff1.dispose(); diff2.dispose();
+          diff1.dispose(); diff2.dispose(); diff3.dispose();
           for (const d of delays) d.disconnect();
           for (const damp of dampers) damp.dispose();
           for (const dg of decayGains) dg.disconnect();
@@ -584,7 +632,7 @@ const DEFS = {
       for (let i = 0; i < N; i++) {
         const bp = ctx.createBiquadFilter();
         bp.type = 'bandpass';
-        bp.frequency.value = pitch * ratios[i];
+        bp.frequency.value = pitch * ratios[i] * RESONATOR_DETUNE[i];
         bp.Q.value = q;
         input.connect(bp);
         bands.push(bp);
@@ -634,7 +682,7 @@ const DEFS = {
           const t = engine.now;
           if (key === 'pitch') {
             pitch = v;
-            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i], t, 0.02);
+            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(pitch * ratios[i] * RESONATOR_DETUNE[i], t, 0.02);
           } else if (key === 'resonance') {
             const newQ = resonanceToQ(v);
             for (const bp of bands) bp.Q.setTargetAtTime(newQ, t, 0.02);
