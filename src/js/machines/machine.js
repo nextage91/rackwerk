@@ -28,6 +28,7 @@ const INSERT_DISPLAY = {
   filterDelay: { name: 'Filter Delay', badge: 'FLT-DELAY' },
   reverb: { name: 'Algorithmic Reverb', badge: 'FDN-VERB' },
   resonator: { name: 'Resonator', badge: 'RESO-BANK' },
+  eq8: { name: '8-Band EQ', badge: 'EQ8-TOUCH' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -64,6 +65,60 @@ function eqCurvePath(type, freq, gain, q) {
   return `M0,${f1(midY)} L${f1(x0)},${f1(midY)} Q${f1(x)},${f1(midY - amp)} ${f1(x1)},${f1(midY)} L${w},${f1(midY)}`;
 }
 
+/* ---------- 8-Band-EQ: Koordinaten + echte Kurve ----------
+ * Anders als eqCurvePath() oben ist das hier keine Silhouette: die X/Y-
+ * Umrechnungen sind fest (log-Frequenzachse, lineare dB-Achse) und werden
+ * BEIDSEITIG genutzt -- zum Zeichnen der Knoten/Kurve UND zum Zurückrechnen
+ * von Zeigerkoordinaten auf Freq/Gain beim Ziehen (s. setupEq8Graph). */
+const EQ8_FREQ_MIN = 20, EQ8_FREQ_MAX = 20000;
+const EQ8_GAIN_RANGE = 24; // dB, symmetrisch +/- -- wie UI_PARAMS.eq.gain
+const EQ8_Q_MIN = 0.1, EQ8_Q_MAX = 10; // wie UI_PARAMS.eq.q
+const EQ8_W = 300, EQ8_H = 150, EQ8_MIDY = EQ8_H / 2;
+
+function eq8FreqToX(freq) {
+  const n = Math.log(freq / EQ8_FREQ_MIN) / Math.log(EQ8_FREQ_MAX / EQ8_FREQ_MIN);
+  return Math.max(0, Math.min(EQ8_W, n * EQ8_W));
+}
+function eq8XToFreq(x) {
+  const n = Math.max(0, Math.min(1, x / EQ8_W));
+  return EQ8_FREQ_MIN * (EQ8_FREQ_MAX / EQ8_FREQ_MIN) ** n;
+}
+function eq8GainToY(gain) {
+  const n = Math.max(-EQ8_GAIN_RANGE, Math.min(EQ8_GAIN_RANGE, gain)) / EQ8_GAIN_RANGE;
+  return EQ8_MIDY - n * (EQ8_MIDY - 8);
+}
+function eq8YToGain(y) {
+  const n = (EQ8_MIDY - y) / (EQ8_MIDY - 8);
+  return Math.max(-EQ8_GAIN_RANGE, Math.min(EQ8_GAIN_RANGE, n * EQ8_GAIN_RANGE));
+}
+
+/** Feste, log-verteilte Stützstellen für getFrequencyResponse() -- einmal
+ *  berechnet (modulweit, unabhängig von einzelnen Insert-Instanzen, da rein
+ *  von der X-Achse abhängig), bei jedem Redraw wiederverwendet. */
+let eq8FreqSamples = null;
+function getEq8FreqSamples() {
+  if (eq8FreqSamples) return eq8FreqSamples;
+  const N = 120;
+  eq8FreqSamples = new Float32Array(N);
+  for (let i = 0; i < N; i++) eq8FreqSamples[i] = eq8XToFreq((i / (N - 1)) * EQ8_W);
+  return eq8FreqSamples;
+}
+
+/** Echte Summenkurve über alle aktiven Bänder (s. inserts.js#getEq8Response) --
+ *  im Gegensatz zu eqCurvePath() oben keine geschätzte Form. */
+function eq8CurvePath(insert) {
+  const freqs = getEq8FreqSamples();
+  const db = insert.getEq8Response?.(freqs);
+  if (!db) return `M0,${EQ8_MIDY} L${EQ8_W},${EQ8_MIDY}`;
+  let d = '';
+  for (let i = 0; i < freqs.length; i++) {
+    const x = (i / (freqs.length - 1)) * EQ8_W;
+    const y = eq8GainToY(db[i]);
+    d += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+  }
+  return d.trim();
+}
+
 /** GR-Meter des Compressor-Moduls: pollt den echten `reduction`-Wert des
  *  nativen DynamicsCompressorNode (Web Audio liefert ihn direkt, kein
  *  zusätzliches Analyser-Tapping nötig). Selbstbeendend: sobald die Zeile
@@ -93,6 +148,218 @@ function startCompMeter(row, insert) {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+/* ---------- 8-Band-EQ: Halten-Menü (Typ/Entfernen) ----------
+ * Ein einzelnes, modulweites Popup -- gleiches Muster wie padMenu/
+ * openSampleEditor in sampler.js (nie mehr als eines gleichzeitig offen). */
+let eq8Menu = null;
+const dismissEq8Menu = () => {
+  eq8Menu?.remove();
+  eq8Menu = null;
+  document.removeEventListener('pointerdown', onOutsideEq8Menu, true);
+};
+const onOutsideEq8Menu = (e) => { if (eq8Menu && !eq8Menu.contains(e.target)) dismissEq8Menu(); };
+
+function openEq8Menu(insert, i, clientX, clientY, onChange) {
+  dismissEq8Menu();
+  const b = insert.params.bands[i];
+  eq8Menu = document.createElement('div');
+  eq8Menu.className = 'pat-chip';
+
+  for (const t of EQ_TYPES) {
+    const btn = document.createElement('button');
+    btn.className = `pat-chip__btn${b.type === t.value ? ' is-active' : ''}`;
+    btn.textContent = t.label;
+    btn.addEventListener('click', () => {
+      b.type = t.value;
+      insert.setBand(i, 'type');
+      onChange();
+      dismissEq8Menu();
+    });
+    eq8Menu.appendChild(btn);
+  }
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'pat-chip__btn pat-chip__btn--danger';
+  removeBtn.textContent = '🗑 Remove';
+  removeBtn.addEventListener('click', () => {
+    b.active = false;
+    insert.setBand(i, 'active');
+    onChange();
+    dismissEq8Menu();
+  });
+  eq8Menu.appendChild(removeBtn);
+
+  document.body.appendChild(eq8Menu);
+  const left = Math.max(8, Math.min(window.innerWidth - eq8Menu.offsetWidth - 8, clientX - eq8Menu.offsetWidth / 2));
+  eq8Menu.style.left = `${left}px`;
+  eq8Menu.style.top = `${Math.max(8, clientY - eq8Menu.offsetHeight - 16)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideEq8Menu, true), 0);
+  clearTimeout(eq8Menu.dismissTimer);
+  eq8Menu.dismissTimer = setTimeout(dismissEq8Menu, 6000);
+}
+
+/**
+ * Touch-Interaktion des 8-Band-EQ-Graphen: EIN Satz Zeiger-Listener auf dem
+ * Graph-CONTAINER statt auf jedem einzelnen Knoten-Element (erster Entwurf
+ * war pro Knoten -- verworfen: bei einer echten Zwei-Finger-Geste landet der
+ * zweite Finger fast nie exakt auf dem kleinen Knoten, sondern daneben auf
+ * dem Hintergrund, dessen "leere Fläche antippen fügt Band hinzu"-Handler
+ * dann fälschlich ausgelöst hätte). Zeiger werden per pointerId in einer Map
+ * verfolgt, die Geste (Tap/Drag/Pinch-Q/Halten) wird aus activePointers.size
+ * plus Distanz zum nächsten Knoten hergeleitet -- gleiches Idiom wie die
+ * Trim-Handle-Erkennung im Sample-Editor (sampler.js#setupWaveformEditor).
+ */
+function setupEq8Graph(row, insert, machine) {
+  const graph = row.querySelector('[data-eq8-graph]');
+  if (!graph) return;
+  const curvePath = graph.querySelector('[data-eq8-curve]');
+  const HOLD_MS = 500;
+  const TAP_TOLERANCE = 6; // Viewbox-Einheiten
+
+  const toViewBox = (clientX, clientY) => {
+    const rect = graph.getBoundingClientRect();
+    return {
+      x: ((clientX - rect.left) / rect.width) * EQ8_W,
+      y: ((clientY - rect.top) / rect.height) * EQ8_H,
+    };
+  };
+
+  const findNodeNear = (x, y, maxDist = 22) => {
+    let best = -1, bestDist = maxDist;
+    insert.params.bands.forEach((b, i) => {
+      const d = Math.hypot(eq8FreqToX(b.freq) - x, eq8GainToY(b.active ? b.gain : 0) - y);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    return best;
+  };
+
+  const redraw = () => {
+    curvePath.setAttribute('d', eq8CurvePath(insert));
+    graph.querySelectorAll('[data-eq8-node]').forEach((el, i) => {
+      const b = insert.params.bands[i];
+      el.setAttribute('cx', eq8FreqToX(b.freq));
+      el.setAttribute('cy', eq8GainToY(b.active ? b.gain : 0));
+      el.classList.toggle('is-active', b.active);
+    });
+  };
+  // setBand() ramp die echten Audio-Parameter sanft an (setTargetAtTime,
+  // Klick-Vermeidung bei schnellen Touch-Änderungen) -- die Kurve liest
+  // aber den ECHTEN, gerade noch mitten im Ramp befindlichen Filterwert
+  // (s. getEq8Response/getFrequencyResponse), zeigt direkt nach einer
+  // einzelnen, diskreten Änderung (Tap-Add, Loslassen, Typ-Wechsel im
+  // Halten-Menü) also kurz einen noch nicht eingeschwungenen Zwischenwert.
+  // Während eines Drags gleicht sich das von selbst aus (redraw() läuft ja
+  // bei jedem weiteren pointermove erneut) -- nur nach der LETZTEN Änderung
+  // braucht es einen verzögerten Nachzieh-Redraw, der den eingeschwungenen
+  // Endwert nachträglich einfängt.
+  let settleTimer = null;
+  const redrawSettled = () => {
+    redraw();
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(redraw, 80);
+  };
+
+  const activePointers = new Map(); // pointerId -> {x, y} in Viewbox-Koordinaten
+  let dragNode = -1, qNode = -1;
+  let qStartDist = 0, qStartQ = 1;
+  let downPos = null, downClient = null, moved = false, holdTimer = null;
+  const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+
+  graph.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const pos = toViewBox(e.clientX, e.clientY);
+    activePointers.set(e.pointerId, pos);
+
+    if (activePointers.size === 1) {
+      moved = false;
+      downPos = pos;
+      downClient = { x: e.clientX, y: e.clientY };
+      dragNode = findNodeNear(pos.x, pos.y);
+      if (dragNode >= 0) {
+        clearHold();
+        holdTimer = setTimeout(() => {
+          if (!moved) openEq8Menu(insert, dragNode, downClient.x, downClient.y, redrawSettled);
+        }, HOLD_MS);
+      }
+    } else if (activePointers.size === 2) {
+      clearHold();
+      const pts = [...activePointers.values()];
+      const midX = (pts[0].x + pts[1].x) / 2, midY = (pts[0].y + pts[1].y) / 2;
+      qNode = dragNode >= 0 ? dragNode : findNodeNear(midX, midY, 40);
+      dragNode = -1;
+      if (qNode >= 0) {
+        qStartDist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+        qStartQ = insert.params.bands[qNode].q;
+      }
+    }
+  });
+
+  graph.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    const pos = toViewBox(e.clientX, e.clientY);
+    activePointers.set(e.pointerId, pos);
+
+    if (activePointers.size === 1 && dragNode >= 0) {
+      if (!moved && Math.hypot(pos.x - downPos.x, pos.y - downPos.y) > TAP_TOLERANCE) {
+        moved = true;
+        clearHold();
+      }
+      if (moved) {
+        const b = insert.params.bands[dragNode];
+        b.freq = eq8XToFreq(pos.x);
+        b.gain = eq8YToGain(pos.y);
+        insert.setBand(dragNode, 'freq');
+        insert.setBand(dragNode, 'gain');
+        redrawSettled();
+      }
+    } else if (activePointers.size === 2 && qNode >= 0) {
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const q = Math.max(EQ8_Q_MIN, Math.min(EQ8_Q_MAX, qStartQ * (dist / qStartDist)));
+      insert.params.bands[qNode].q = q;
+      insert.setBand(qNode, 'q');
+      redrawSettled();
+    }
+  });
+
+  const onUp = (e) => {
+    activePointers.delete(e.pointerId);
+    clearHold();
+    if (activePointers.size === 0) {
+      if (dragNode < 0 && qNode < 0 && !moved && downPos) {
+        // Tap auf leere Fläche -- erstes noch inaktives Band an dieser
+        // Stelle aktivieren (alle 8 Bänder existieren fest, s. inserts.js).
+        const emptyIdx = insert.params.bands.findIndex((b) => !b.active);
+        if (emptyIdx >= 0) {
+          const b = insert.params.bands[emptyIdx];
+          b.freq = eq8XToFreq(downPos.x);
+          b.gain = eq8YToGain(downPos.y);
+          b.active = true;
+          insert.setBand(emptyIdx, 'active');
+          insert.setBand(emptyIdx, 'freq');
+          insert.setBand(emptyIdx, 'gain');
+          redrawSettled();
+        }
+      }
+      dragNode = -1;
+      qNode = -1;
+      moved = false;
+      downPos = null;
+    } else if (activePointers.size === 1) {
+      // Von zwei auf einen Finger zurück -- Q-Geste beenden, mit dem
+      // verbliebenen Finger direkt als Freq/Gain-Drag weitermachen (kein
+      // neuer Tap, kein erneutes Hold-Menü).
+      qNode = -1;
+      const [remaining] = activePointers.values();
+      dragNode = findNodeNear(remaining.x, remaining.y);
+      downPos = remaining;
+      moved = true;
+    }
+  };
+  graph.addEventListener('pointerup', onUp);
+  graph.addEventListener('pointercancel', onUp);
 }
 
 let nextId = 1;
@@ -698,6 +965,24 @@ export class Machine {
           </div>
           <div class="insert-row__params">${knobsHtml}</div>
         `;
+      } else if (insert.type === 'eq8') {
+        // Kein knobsHtml (UI_PARAMS.eq8 gibt es bewusst nicht) -- der Graph
+        // wird nach dem Rendern von setupEq8Graph() imperativ bespielt,
+        // damit ein Drag NICHT bei jedem Frame ein komplettes innerHTML-
+        // Neubauen auslöst (s. Kommentar über #renderInserts()).
+        bodyHtml = `
+          <div class="eq8__graph" data-eq8-graph>
+            <svg viewBox="0 0 ${EQ8_W} ${EQ8_H}" class="eq8__svg" preserveAspectRatio="none">
+              <line x1="0" y1="${EQ8_MIDY}" x2="${EQ8_W}" y2="${EQ8_MIDY}" class="eq8__zero"></line>
+              <path class="eq8__curve" data-eq8-curve d="${eq8CurvePath(insert)}"></path>
+              ${insert.params.bands.map((b, i) => `
+                <circle class="eq8__node${b.active ? ' is-active' : ''}" data-eq8-node="${i}"
+                  cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.active ? b.gain : 0)}" r="7"></circle>
+              `).join('')}
+            </svg>
+          </div>
+          <p class="eq8__hint">Tap: add band · Drag: freq/gain · Two fingers: Q · Hold: type/remove</p>
+        `;
       } else {
         bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
       }
@@ -811,6 +1096,7 @@ export class Machine {
         });
       }
       if (insert.type === 'comp') startCompMeter(row, insert);
+      if (insert.type === 'eq8') setupEq8Graph(row, insert, this);
     }
   }
 
