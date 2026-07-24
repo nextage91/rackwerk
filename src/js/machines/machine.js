@@ -222,6 +222,16 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
  * verfolgt, die Geste (Tap/Drag/Pinch-Q/Halten) wird aus activePointers.size
  * plus Distanz zum nächsten Knoten hergeleitet -- gleiches Idiom wie die
  * Trim-Handle-Erkennung im Sample-Editor (sampler.js#setupWaveformEditor).
+ *
+ * Q per Zwei-Finger-Geste war ursprünglich an die Fingerposition GEBUNDEN
+ * (zweiter Finger musste nah am Knoten oder dessen Mittelpunkt landen) --
+ * bei mehreren, eng benachbarten Bändern in der Praxis fummelig (Nutzer-
+ * Feedback). Jetzt entkoppelt über eine explizite Auswahl (selectedBand):
+ * ein Band antippen SELEKTIERT es (Ring-Hervorhebung), danach stellt eine
+ * Zwei-Finger-Geste IRGENDWO auf dem Graphen dessen Q ein -- die Finger
+ * müssen den Knoten selbst nicht mehr treffen. Ziehen mit einem Finger auf
+ * dem Knoten bleibt der direkte Weg für Freq/Gain und setzt die Auswahl
+ * gleich mit.
  */
 function setupEq8Graph(row, insert, machine) {
   const graph = row.querySelector('[data-eq8-graph]');
@@ -257,6 +267,8 @@ function setupEq8Graph(row, insert, machine) {
     return best;
   };
 
+  let selectedBand = -1;
+
   // Hält die <circle>-Elemente 1:1 mit den AKTIVEN Bändern synchron --
   // erzeugt/entfernt Knoten statt (wie zuvor) alle 8 fix zu rendern, damit
   // inaktive Bänder gar nicht erst als Punkt auftauchen können.
@@ -272,11 +284,12 @@ function setupEq8Graph(row, insert, machine) {
           el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
           el.setAttribute('class', 'eq8__node is-active');
           el.setAttribute('data-eq8-node', i);
-          el.setAttribute('r', 7);
           svg.appendChild(el);
         }
         el.setAttribute('cx', eq8FreqToX(b.freq));
         el.setAttribute('cy', eq8GainToY(b.gain));
+        el.setAttribute('r', i === selectedBand ? 9 : 7);
+        el.classList.toggle('is-selected', i === selectedBand);
       } else if (el) {
         el.remove();
       }
@@ -307,32 +320,48 @@ function setupEq8Graph(row, insert, machine) {
   const activePointers = new Map(); // pointerId -> {x, y} in Viewbox-Koordinaten
   let dragNode = -1, qNode = -1;
   let qStartDist = 0, qStartQ = 1;
-  let downPos = null, downClient = null, moved = false, holdTimer = null;
+  let downPos = null, downClient = null, moved = false, holdTimer = null, holdFired = false;
   const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
 
   graph.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    // Pointer-Capture: hält pointermove/pointerup am Graphen fest, auch
+    // wenn ein Finger beim Auseinanderziehen (Q-Geste, jetzt bewusst
+    // "irgendwo auf dem Graphen" statt nah am Knoten) über dessen kleinen
+    // Rand hinauswandert -- ohne das bliebe der Finger sonst "verloren"
+    // (kein weiteres pointermove/pointerup mehr für ihn), sobald er ein
+    // Nachbarelement überquert. try/catch: manche Testumgebungen lösen für
+    // synthetisch erzeugte PointerEvents keinen "aktiven Zeiger" aus (dann
+    // wirft dies NotFoundError) -- auf echten Touch-Geräten greift es immer.
+    try { graph.setPointerCapture(e.pointerId); } catch { /* s. oben */ }
     const pos = toViewBox(e.clientX, e.clientY);
     activePointers.set(e.pointerId, pos);
 
     if (activePointers.size === 1) {
       moved = false;
+      holdFired = false;
       downPos = pos;
       downClient = { x: e.clientX, y: e.clientY };
       dragNode = findNodeNear(pos.x, pos.y);
       if (dragNode >= 0) {
         clearHold();
         holdTimer = setTimeout(() => {
-          if (!moved) openEq8Menu(insert, dragNode, downClient.x, downClient.y, redrawSettled);
+          if (!moved) {
+            holdFired = true;
+            openEq8Menu(insert, dragNode, downClient.x, downClient.y, redrawSettled);
+          }
         }, HOLD_MS);
       }
     } else if (activePointers.size === 2) {
       clearHold();
-      const pts = [...activePointers.values()];
-      const midX = (pts[0].x + pts[1].x) / 2, midY = (pts[0].y + pts[1].y) / 2;
-      qNode = dragNode >= 0 ? dragNode : findNodeNear(midX, midY, 40);
+      // An die AUSWAHL gebunden statt an die Fingerposition -- die Finger
+      // müssen den (oft winzigen) Knoten nicht mehr treffen. Wird gerade
+      // mit einem Finger gezogen, hat das Vorrang (dragNode), sonst zählt
+      // die zuletzt per Tap/Drag gesetzte Auswahl.
+      qNode = dragNode >= 0 ? dragNode : selectedBand;
       dragNode = -1;
       if (qNode >= 0) {
+        const pts = [...activePointers.values()];
         qStartDist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
         qStartQ = insert.params.bands[qNode].q;
       }
@@ -348,6 +377,7 @@ function setupEq8Graph(row, insert, machine) {
       if (!moved && Math.hypot(pos.x - downPos.x, pos.y - downPos.y) > TAP_TOLERANCE) {
         moved = true;
         clearHold();
+        selectedBand = dragNode;
       }
       if (moved) {
         const b = insert.params.bands[dragNode];
@@ -371,19 +401,29 @@ function setupEq8Graph(row, insert, machine) {
     activePointers.delete(e.pointerId);
     clearHold();
     if (activePointers.size === 0) {
-      if (dragNode < 0 && qNode < 0 && !moved && downPos) {
-        // Tap auf leere Fläche -- erstes noch inaktives Band an dieser
-        // Stelle aktivieren (alle 8 Bänder existieren fest, s. inserts.js).
-        const emptyIdx = insert.params.bands.findIndex((b) => !b.active);
-        if (emptyIdx >= 0) {
-          const b = insert.params.bands[emptyIdx];
-          b.freq = eq8XToFreq(downPos.x);
-          b.gain = eq8YToGain(downPos.y);
-          b.active = true;
-          insert.setBand(emptyIdx, 'active');
-          insert.setBand(emptyIdx, 'freq');
-          insert.setBand(emptyIdx, 'gain');
-          redrawSettled();
+      if (!moved && !holdFired) {
+        if (dragNode >= 0) {
+          // Tap auf ein bestehendes Band -- selektieren (erneutes Tippen
+          // auf das schon selektierte Band hebt die Auswahl wieder auf).
+          selectedBand = selectedBand === dragNode ? -1 : dragNode;
+          redraw();
+        } else if (qNode < 0 && downPos) {
+          // Tap auf leere Fläche -- erstes noch inaktives Band an dieser
+          // Stelle aktivieren (alle 8 Bänder existieren fest, s. inserts.js)
+          // und gleich selektieren (direkt per Zwei-Finger-Geste die Q
+          // einstellen können, ohne erst extra antippen zu müssen).
+          const emptyIdx = insert.params.bands.findIndex((b) => !b.active);
+          if (emptyIdx >= 0) {
+            const b = insert.params.bands[emptyIdx];
+            b.freq = eq8XToFreq(downPos.x);
+            b.gain = eq8YToGain(downPos.y);
+            b.active = true;
+            insert.setBand(emptyIdx, 'active');
+            insert.setBand(emptyIdx, 'freq');
+            insert.setBand(emptyIdx, 'gain');
+            selectedBand = emptyIdx;
+            redrawSettled();
+          }
         }
       }
       dragNode = -1;
@@ -1097,7 +1137,7 @@ export class Machine {
               ${EQ8_DB_TICKS.map((db) => `<span class="eq8__label eq8__label--y" style="top:${(eq8GainToY(db) / EQ8_H * 100).toFixed(2)}%">${db > 0 ? `+${db}` : db}</span>`).join('')}
             </div>
           </div>
-          <p class="eq8__hint">Tap: add band · Drag: freq/gain · Two fingers: Q · Hold: type/remove</p>
+          <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/remove</p>
         `;
       } else {
         bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
