@@ -32,6 +32,8 @@ import { undo } from '../core/undo.js';
 import { hintOnce, showHintToast } from '../core/hints.js';
 import { sampleStore, newSampleId, base64ToArrayBuffer } from '../core/sample-store.js';
 import { micRecorder } from '../core/mic-recorder.js';
+import { env, applyFilterEnv } from '../core/dsp.js';
+import { FILTER_DELAY_TYPES } from '../core/inserts.js';
 
 const PAD_COUNT = 8;
 const PAD_HOLD_MS = 500; // gleiche Halten-Schwelle wie pattern-bank.js/jam-view.js
@@ -81,6 +83,17 @@ export class Sampler extends Machine {
     return {
       name, sampleId: null, buffer: null, loading: false,
       tune: 0, level: 0.9, pan: 0, sendDelay: 0, sendReverb: 0,
+      // Trim: reiner Wiedergabe-Ausschnitt (kein destruktives Schneiden,
+      // s. #trigger) -- trimEnd bleibt bis zum ersten Laden Infinity,
+      // #resetTrim() setzt beide sobald buffer.duration bekannt ist.
+      trimStart: 0, trimEnd: Infinity,
+      // Amp-Hüllkurve (dsp.js#env) -- bewusst "transparente" Defaults
+      // (langer Decay, kurzer Release), damit ein frisch geladenes Sample
+      // sich unverändert anhört, bis man aktiv dreht.
+      ampAttack: 0, ampDecay: 2.0, ampRelease: 0.05,
+      // Filter + Filterhüllkurve (dsp.js#applyFilterEnv, identisch zu
+      // SubSynth/PolySynth) -- Cutoff komplett offen, Env Amt aus.
+      filterType: 'lowpass', cutoff: 20000, resonance: 0.707, envAmt: 0, fDecay: 0.2,
       panner, sendDelayNode, sendReverbNode,
     };
   }
@@ -146,17 +159,44 @@ export class Sampler extends Machine {
     return tr.meterAnalyser;
   }
 
+  /** Trim-Grenzen an die tatsächliche Buffer-Länge geklemmt (defensiv --
+   *  z. B. falls trimEnd noch von einem vorher geladenen, längeren Sample
+   *  stammt und #resetTrim aus irgendeinem Grund übersprungen wurde). */
+  #clampedTrim(tr) {
+    const dur = tr.buffer.duration;
+    const start = Math.min(Math.max(0, tr.trimStart), dur);
+    const end = Math.max(start + 0.001, Math.min(tr.trimEnd, dur));
+    return { start, end };
+  }
+
   #trigger(tr, time) {
     this.pulse(time);
     if (!tr.buffer) return; // leeres oder noch ladendes Pad — kein Ton, kein Sonderfall nötig
+    const t = engine.quantizeTime(time);
+    const { start, end } = this.#clampedTrim(tr);
+
     const src = engine.ctx.createBufferSource();
     src.buffer = tr.buffer;
     src.playbackRate.value = 2 ** (tr.tune / 12); // Tune in Halbtönen
-    const g = engine.ctx.createGain();
-    g.gain.value = tr.level;
-    src.connect(g);
-    g.connect(tr.panner);
-    src.start(engine.quantizeTime(time));
+
+    // Filter + Filterhüllkurve -- dieselbe Funktion wie SubSynth/PolySynth
+    // (dsp.js#applyFilterEnv), nur mit den Pad-eigenen Feldnamen.
+    const filter = engine.ctx.createBiquadFilter();
+    filter.type = tr.filterType;
+    filter.Q.value = tr.resonance;
+    applyFilterEnv(filter, t, tr);
+
+    // Amp-Hüllkurve (dsp.js#env) -- peak ist direkt tr.level, spart einen
+    // separaten Level-Gain-Node. Läuft unabhängig von der Trim-Dauer: ist
+    // die Hüllkurve länger als der getrimmte Ausschnitt, endet die Quelle
+    // einfach vorher (Stille), ohne Sonderfall; ist sie kürzer, "gated"
+    // sie das Sample wie gewünscht ab.
+    const ampEnv = env(engine.ctx, t, tr.level, tr.ampDecay, { attack: tr.ampAttack, release: tr.ampRelease });
+
+    src.connect(filter).connect(ampEnv).connect(tr.panner);
+    // Drei-Parameter-start(): spielt nur den getrimmten Ausschnitt, ohne
+    // den Original-Buffer anzutasten (kein destruktives Schneiden).
+    src.start(t, start, end - start);
   }
 
   /* ---------- Mixer: Pegel & Panorama pro Pad ---------- */
@@ -230,6 +270,13 @@ export class Sampler extends Machine {
     return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i) });
   }
 
+  /** Für den Sample-Editor (Popup, s. openSampleEditor): #trigger ist
+   *  privat, das Popup lebt als modulweite Funktion ausserhalb der Klasse
+   *  (gleiches Muster wie openPadMenu/openRecordPopup). */
+  previewPad(i) {
+    this.#trigger(this.tracks[i], engine.ctx.currentTime);
+  }
+
   /* ---------- Sample laden/aufnehmen/leeren ---------- */
 
   /** Datei-Auswahl (Dateisystem des Telefons) → dekodieren + ablegen. */
@@ -253,6 +300,8 @@ export class Sampler extends Machine {
         const buffer = await engine.ctx.decodeAudioData(arrBuf);
         tr.sampleId = id;
         tr.buffer = buffer;
+        tr.trimStart = 0;
+        tr.trimEnd = buffer.duration; // neues Audio -- alte Trim-Punkte wären bedeutungslos
       } catch (err) {
         console.error('Sampler: file could not be loaded as audio:', err);
         showHintToast('This file could not be loaded as audio.');
@@ -276,6 +325,8 @@ export class Sampler extends Machine {
       const buffer = await engine.ctx.decodeAudioData(arrBuf);
       tr.sampleId = id;
       tr.buffer = buffer;
+      tr.trimStart = 0;
+      tr.trimEnd = buffer.duration; // neues Audio -- alte Trim-Punkte wären bedeutungslos
     } catch (err) {
       console.error('Sampler: recording could not be processed:', err);
       showHintToast('The recording could not be processed.');
@@ -349,6 +400,10 @@ export class Sampler extends Machine {
       tracks: this.tracks.map((tr) => ({
         name: tr.name, sampleId: tr.sampleId, tune: tr.tune, level: tr.level, pan: tr.pan,
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
+        trimStart: tr.trimStart, trimEnd: tr.trimEnd,
+        ampAttack: tr.ampAttack, ampDecay: tr.ampDecay, ampRelease: tr.ampRelease,
+        filterType: tr.filterType, cutoff: tr.cutoff, resonance: tr.resonance,
+        envAmt: tr.envAmt, fDecay: tr.fDecay,
       })),
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
@@ -373,6 +428,20 @@ export class Sampler extends Machine {
       tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
       tr.sendReverb = saved.sendReverb ?? 0;
       tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
+      // Trim/Hüllkurven/Filter -- trimEnd bleibt Infinity (voller Ausschnitt),
+      // solange kein Sample geladen ist bzw. keine gespeicherte Grenze
+      // vorliegt; #clampedTrim() klemmt das beim Triggern ohnehin auf die
+      // tatsächliche Buffer-Länge.
+      tr.trimStart = saved.trimStart ?? 0;
+      tr.trimEnd = saved.trimEnd ?? Infinity;
+      tr.ampAttack = saved.ampAttack ?? 0;
+      tr.ampDecay = saved.ampDecay ?? 2.0;
+      tr.ampRelease = saved.ampRelease ?? 0.05;
+      tr.filterType = saved.filterType ?? 'lowpass';
+      tr.cutoff = saved.cutoff ?? 20000;
+      tr.resonance = saved.resonance ?? 0.707;
+      tr.envAmt = saved.envAmt ?? 0;
+      tr.fDecay = saved.fDecay ?? 0.2;
       // Sample: entweder eine eingebettete Datei (Import aus einer
       // portablen Projekt-Datei) oder eine Referenz auf eine schon lokal
       // vorhandene IndexedDB-ID (Autosave/benanntes Projekt) — beides läuft
@@ -611,6 +680,14 @@ function openPadMenu(sampler, i, anchorEl) {
   recBtn.addEventListener('click', () => { dismissPadMenu(); openRecordPopup(sampler, i); });
   padMenu.appendChild(recBtn);
 
+  if (tr.buffer) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'pat-chip__btn';
+    editBtn.textContent = '✏️ Edit';
+    editBtn.addEventListener('click', () => { dismissPadMenu(); openSampleEditor(sampler, i); });
+    padMenu.appendChild(editBtn);
+  }
+
   if (tr.sampleId) {
     const clearBtn = document.createElement('button');
     clearBtn.className = 'pat-chip__btn pat-chip__btn--danger';
@@ -696,4 +773,181 @@ function openRecordPopup(sampler, i) {
       if (result) await sampler.assignRecording(i, result.blob);
     }
   });
+}
+
+/* ---------- Sample-Editor (Trim + ADR-Hüllkurve + Filter) ----------
+ * Grösseres Popup wie das Aufnahme-Popup, mit Wellenform + zwei ziehbaren
+ * Trim-Marken, einem Preview-Button und den 7 Klangformungs-Reglern.
+ * Änderungen wirken sofort (kein "Übernehmen"-Schritt, wie jeder andere
+ * Regler in der App). Bewusst NICHT automatisierbar: die Knobs leben nur
+ * so lange wie das Popup, das bestehende Automation-System geht von einem
+ * dauerhaft vorhandenen Knob-Element aus (s. Tune/Level-Reihe im
+ * Panel) -- für Sound-Design-Regler, die man selten mitten in einer
+ * Aufnahme dreht, ist das ein akzeptabler Verzicht statt echte
+ * Ephemeral-Knob-Unterstützung ins Automation-System nachzurüsten. */
+let sampleEditorPop = null;
+
+function closeSampleEditor() {
+  sampleEditorPop?.remove();
+  sampleEditorPop = null;
+}
+
+function openSampleEditor(sampler, i) {
+  dismissPadMenu();
+  closeSampleEditor();
+  const tr = sampler.tracks[i];
+
+  const pop = document.createElement('div');
+  pop.className = 'sample-editor';
+  pop.innerHTML = `
+    <div class="sample-editor__head">
+      <span class="sample-editor__title">Edit — ${tr.name}</span>
+      <button type="button" class="sample-editor__close" aria-label="Close">✕</button>
+    </div>
+    <div class="sample-editor__wave">
+      <canvas class="sample-editor__canvas"></canvas>
+    </div>
+    <div class="sample-editor__trim-readout"></div>
+    <button type="button" class="sample-editor__preview">▶ Preview</button>
+
+    <div class="sample-editor__section">Filter</div>
+    <div class="seg sample-editor__filter-type">
+      ${FILTER_DELAY_TYPES.map((t) => `
+        <button type="button" class="seg__btn${tr.filterType === t.value ? ' is-active' : ''}" data-filter-type="${t.value}">${t.label}</button>
+      `).join('')}
+    </div>
+    <div class="sample-editor__knobs">
+      <x-knob label="Cutoff" min="80" max="20000" value="${tr.cutoff}" curve="log" unit="Hz" data-p="cutoff"></x-knob>
+      <x-knob label="Reso" min="0.5" max="20" value="${tr.resonance}" data-p="resonance"></x-knob>
+      <x-knob label="Env Amt" min="0" max="1" value="${tr.envAmt}" data-p="envAmt"></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="1.5" value="${tr.fDecay}" curve="log" unit="s" data-p="fDecay"></x-knob>
+    </div>
+
+    <div class="sample-editor__section">Amp Envelope</div>
+    <div class="sample-editor__knobs sample-editor__knobs--3">
+      <x-knob label="Attack" min="0.002" max="1" value="${Math.max(0.002, tr.ampAttack)}" curve="log" unit="s" data-p="ampAttack"></x-knob>
+      <x-knob label="Decay" min="0.05" max="5" value="${tr.ampDecay}" curve="log" unit="s" data-p="ampDecay"></x-knob>
+      <x-knob label="Release" min="0.01" max="2" value="${tr.ampRelease}" curve="log" unit="s" data-p="ampRelease"></x-knob>
+    </div>
+  `;
+  document.body.appendChild(pop);
+  sampleEditorPop = pop;
+
+  pop.querySelector('.sample-editor__close').addEventListener('click', closeSampleEditor);
+  pop.querySelector('.sample-editor__preview').addEventListener('click', () => sampler.previewPad(i));
+
+  pop.querySelectorAll('[data-filter-type]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      tr.filterType = btn.dataset.filterType;
+      pop.querySelectorAll('[data-filter-type]').forEach((b) => b.classList.toggle('is-active', b === btn));
+    });
+  });
+
+  pop.querySelectorAll('.sample-editor__knobs x-knob').forEach((knob) => {
+    knob.addEventListener('input', (e) => { tr[knob.dataset.p] = e.detail.value; });
+  });
+
+  setupWaveformEditor(
+    pop.querySelector('.sample-editor__canvas'),
+    pop.querySelector('.sample-editor__trim-readout'),
+    tr,
+  );
+}
+
+/** Peak-pro-Pixel-Wellenform (min/max je Spalte) -- Standardansatz fürs
+ *  Zeichnen langer Audiodaten in eine schmale, feste Breite, ohne jeden
+ *  einzelnen Sample-Frame zu rendern. */
+function computePeaks(data, width) {
+  const step = Math.max(1, Math.floor(data.length / width));
+  const peaks = [];
+  for (let x = 0; x < width; x++) {
+    let min = 0, max = 0;
+    const startIdx = x * step;
+    const endIdx = Math.min(data.length, startIdx + step);
+    for (let j = startIdx; j < endIdx; j++) {
+      const v = data[j];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    peaks.push([min, max]);
+  }
+  return peaks;
+}
+
+/** Wellenform zeichnen + zwei ziehbare Trim-Marken -- gleiches Pointer-
+ *  Idiom wie der X/Y-Pad (jam-view.js#buildXYPad): pointerdown/
+ *  setPointerCapture/getBoundingClientRect-Clamping, hier für zwei statt
+ *  einen Handle, die sich gegenseitig nicht überholen können. */
+function setupWaveformEditor(canvas, readout, tr) {
+  const buffer = tr.buffer;
+  const dur = buffer.duration;
+  // trimEnd kann noch Infinity sein (Pad, das seit dem Laden nie
+  // getriggert/editiert wurde) -- hier auf die echte Dauer klemmen.
+  if (!Number.isFinite(tr.trimEnd) || tr.trimEnd > dur) tr.trimEnd = dur;
+  tr.trimStart = Math.min(Math.max(0, tr.trimStart), dur);
+
+  const cssWidth = 280;
+  const cssHeight = 90;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = cssWidth * dpr;
+  canvas.height = cssHeight * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const peaks = computePeaks(buffer.getChannelData(0), cssWidth);
+  const timeToX = (s) => (s / dur) * cssWidth;
+  const xToTime = (x) => Math.max(0, Math.min(dur, (x / cssWidth) * dur));
+
+  const draw = () => {
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+    const mid = cssHeight / 2;
+    ctx.strokeStyle = '#8a7f68';
+    ctx.beginPath();
+    for (let x = 0; x < cssWidth; x++) {
+      const [min, max] = peaks[x];
+      ctx.moveTo(x + 0.5, mid + min * mid);
+      ctx.lineTo(x + 0.5, mid + max * mid);
+    }
+    ctx.stroke();
+
+    const xs = timeToX(tr.trimStart);
+    const xe = timeToX(tr.trimEnd);
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fillRect(0, 0, xs, cssHeight);
+    ctx.fillRect(xe, 0, cssWidth - xe, cssHeight);
+    ctx.fillStyle = '#ffb84d';
+    ctx.fillRect(xs - 1.5, 0, 3, cssHeight);
+    ctx.fillRect(xe - 1.5, 0, 3, cssHeight);
+
+    readout.textContent = `${tr.trimStart.toFixed(2)}s – ${tr.trimEnd.toFixed(2)}s`;
+  };
+  draw();
+
+  const HANDLE_HIT = 14; // px Trefferbereich um jeden Handle
+  let dragging = null; // 'start' | 'end' | null
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const xs = timeToX(tr.trimStart);
+    const xe = timeToX(tr.trimEnd);
+    if (Math.abs(x - xs) <= HANDLE_HIT && Math.abs(x - xs) <= Math.abs(x - xe)) dragging = 'start';
+    else if (Math.abs(x - xe) <= HANDLE_HIT) dragging = 'end';
+    else return;
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const t = xToTime(e.clientX - rect.left);
+    if (dragging === 'start') tr.trimStart = Math.min(t, tr.trimEnd - 0.01);
+    else tr.trimEnd = Math.max(t, tr.trimStart + 0.01);
+    draw();
+  });
+  const endDrag = () => { dragging = null; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
 }

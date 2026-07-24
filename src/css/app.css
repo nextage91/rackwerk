@@ -1446,3 +1446,97 @@ button {
   box-shadow: 0 0 12px rgba(255,77,77,.5), var(--shadow-panel);
   animation: rec-pulse 1.2s ease-in-out infinite;
 }
+
+/* ===================== Sampler: Sample-Editor (Trim + ADR + Filter) ==== *
+ * Grösseres Popup als .rec-pop (Wellenform + 7 Regler) -- gleiche
+ * Kopfzeile/Chrome wie .macro-pop/.rec-pop, aber mit eigenem, scrollbarem
+ * Body fürs kleinste Handy (s. sampler.js#openSampleEditor). */
+.sample-editor {
+  position: fixed;
+  z-index: 65;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 300px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px;
+  border-radius: 12px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 8px 30px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+  animation: chip-in .15s ease-out;
+}
+.sample-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.sample-editor__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lcd-ink);
+}
+.sample-editor__close {
+  flex: none;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(255,236,190,.1);
+  color: var(--lcd-ink);
+  font-size: 12px;
+  line-height: 1;
+}
+.sample-editor__close:active { background: rgba(255,236,190,.2); }
+
+.sample-editor__wave {
+  display: flex;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(0,0,0,.35);
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+  padding: 4px;
+  touch-action: none; /* Drag der Trim-Marken soll nicht die Seite scrollen */
+}
+.sample-editor__canvas { display: block; border-radius: 4px; }
+.sample-editor__trim-readout {
+  text-align: center;
+  font-family: var(--font-lcd);
+  font-size: 12px;
+  color: var(--lcd-ink);
+  margin: 6px 0 10px;
+}
+.sample-editor__preview {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 8px;
+  background: linear-gradient(#2c3a2c, #1c241c);
+  box-shadow: var(--shadow-panel);
+  color: var(--led-play);
+  font-size: 13px;
+  font-weight: 700;
+  touch-action: manipulation;
+  margin-bottom: 12px;
+}
+.sample-editor__preview:active { transform: translateY(1px); }
+
+.sample-editor__section {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 4px 0 6px;
+}
+.sample-editor__filter-type { margin-bottom: 10px; }
+.sample-editor__filter-type .seg__btn { min-width: 0; flex: 1 1 0; padding: 0 4px; font-size: 10px; }
+.sample-editor__knobs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px 4px;
+  margin-bottom: 12px;
+}
+.sample-editor__knobs--3 { grid-template-columns: repeat(3, 1fr); }
+.sample-editor__knobs x-knob { --knob-size: 38px; gap: 3px; }
+.sample-editor__knobs x-knob .knob__label,
+.sample-editor__knobs x-knob .knob__value { font-size: 9px; white-space: nowrap; }
