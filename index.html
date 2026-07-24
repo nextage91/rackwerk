@@ -1966,7 +1966,13 @@ x-fader {
   box-shadow:
     0 1px 0 var(--edge-light) inset,
     0 2px 5px rgba(0,0,0,.6);
-  pointer-events: none;
+  /* Die Kappe überragt den Track um die halbe eigene Höhe (s. margin-bottom
+     oben), gerade an den Enden (ganz oben/unten) -- genau dort, wo man sie
+     greift. touch-action:none sitzt schon auf x-fader (ganzer Host), daher
+     hier unbedenklich klickbar statt (wie zuvor) "none": s. fader.js, wo
+     dieselbe #onDown-Handler-Funktion jetzt auch hier registriert ist. */
+  pointer-events: auto;
+  touch-action: none;
 }
 /* Griffrillen auf der Fader-Kappe */
 .fader__cap::before {
@@ -3303,6 +3309,16 @@ class XFader extends HTMLElement {
     this.#readout = this.querySelector('.fader__value');
 
     this.#track.addEventListener('pointerdown', this.#onDown);
+    // Die Kappe überragt den Track um die halbe eigene Höhe an den Enden
+    // (s. CSS margin-bottom auf .fader__cap) -- genau dort, wo man sie
+    // greift, wenn der Fader ganz unten oder ganz oben steht. Ohne einen
+    // eigenen Listener hier würde ein Tap exakt auf die sichtbare Kappe an
+    // dieser Stelle am Track vorbei ins Leere (bzw. auf die Pegelanzeige
+    // darunter) treffen -- der Fader würde gar nicht erst reagieren.
+    // Derselbe Handler, dieselbe Pointer-Capture (immer auf #track, s.
+    // #onDown) -- unabhängig davon, welches der beiden Elemente den
+    // Pointerdown tatsächlich empfangen hat.
+    this.#cap.addEventListener('pointerdown', this.#onDown);
     this.#render();
   }
 

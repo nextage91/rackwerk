@@ -326,7 +326,13 @@ x-fader {
   box-shadow:
     0 1px 0 var(--edge-light) inset,
     0 2px 5px rgba(0,0,0,.6);
-  pointer-events: none;
+  /* Die Kappe überragt den Track um die halbe eigene Höhe (s. margin-bottom
+     oben), gerade an den Enden (ganz oben/unten) -- genau dort, wo man sie
+     greift. touch-action:none sitzt schon auf x-fader (ganzer Host), daher
+     hier unbedenklich klickbar statt (wie zuvor) "none": s. fader.js, wo
+     dieselbe #onDown-Handler-Funktion jetzt auch hier registriert ist. */
+  pointer-events: auto;
+  touch-action: none;
 }
 /* Griffrillen auf der Fader-Kappe */
 .fader__cap::before {

@@ -38,6 +38,16 @@ export class XFader extends HTMLElement {
     this.#readout = this.querySelector('.fader__value');
 
     this.#track.addEventListener('pointerdown', this.#onDown);
+    // Die Kappe überragt den Track um die halbe eigene Höhe an den Enden
+    // (s. CSS margin-bottom auf .fader__cap) -- genau dort, wo man sie
+    // greift, wenn der Fader ganz unten oder ganz oben steht. Ohne einen
+    // eigenen Listener hier würde ein Tap exakt auf die sichtbare Kappe an
+    // dieser Stelle am Track vorbei ins Leere (bzw. auf die Pegelanzeige
+    // darunter) treffen -- der Fader würde gar nicht erst reagieren.
+    // Derselbe Handler, dieselbe Pointer-Capture (immer auf #track, s.
+    // #onDown) -- unabhängig davon, welches der beiden Elemente den
+    // Pointerdown tatsächlich empfangen hat.
+    this.#cap.addEventListener('pointerdown', this.#onDown);
     this.#render();
   }
 
