@@ -2,8 +2,10 @@
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
  * Format (v1):
- * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, clips?, lanes } ] }
+ * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, clips?, lanes, label? } ] }
  *   - state: maschinenspezifisch (machine.serialize/deserialize)
+ *   - label: Nutzer-Umbenennung der Maschine (Basisklasse), fehlt in
+ *     alten Projekten → Typ-Name bleibt Default (s. machine.js#displayName)
  *   - sends: FX-Send-Pegel der Maschine (Basisklasse)
  *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
  *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
@@ -36,6 +38,7 @@ export function serializeProject(rack) {
       inserts: m.serializeInserts(),
       clips: m.serializeClips(),
       lanes: automation.exportLanes(m.id),
+      label: m.label,
     })),
   };
 }
@@ -78,6 +81,7 @@ export function loadProject(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
       loaded++;
@@ -116,6 +120,7 @@ export function importMachines(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
       added.push(machine);

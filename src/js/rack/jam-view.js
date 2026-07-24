@@ -953,7 +953,7 @@ function buildColumn(machine) {
   col.innerHTML = `
     <div class="channel__head">
       <span class="channel__stripe"></span>
-      <div class="channel__name">${machine.constructor.meta.name}<small>#${machine.id}</small></div>
+      <div class="channel__name">${machine.displayName}<small>#${machine.id}</small></div>
     </div>
     <div class="clips"></div>
     <button type="button" class="clip-stop">STOP</button>
@@ -1038,7 +1038,7 @@ function openMacroPopup(machine, anchorEl) {
   head.className = 'macro-pop__head';
   const title = document.createElement('span');
   title.className = 'macro-pop__title';
-  title.textContent = machine.constructor.meta.name;
+  title.textContent = machine.displayName;
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'macro-pop__close';
