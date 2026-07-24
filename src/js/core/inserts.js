@@ -14,6 +14,7 @@
  * Entfernen/Verschieben eines Inserts, nicht beim Bypass-Toggle.
  */
 import { engine } from './audio-engine.js';
+import { transport } from './transport.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -35,6 +36,27 @@ function makeDriveCurve(amount) {
     const x = (i * 2) / (n - 1) - 1;
     const driven = Math.tanh(K * x) / norm;
     curve[i] = (1 - amount) * x + amount * driven;
+  }
+  return curve;
+}
+
+/** Sicherheits-Weichbegrenzer für die Filter-Delay-Feedback-Schleife (s.
+ *  DEFS.filterDelay) -- reines tanh(x), UNNORMALISIERT (anders als
+ *  makeDriveCurve oben): für normale Pegel (|x| deutlich unter 1) praktisch
+ *  linear/unhörbar, biegt aber mathematisch GARANTIERT nie über ±1 hinaus,
+ *  egal wie viel Gain sich in der Schleife aufbaut. Ersetzt eine reine
+ *  Gain-Reduktion (DynamicsCompressorNode) -- die reagiert nur graduell
+ *  (Ratio 20:1 ist kein hartes Ceiling) und kam bei sehr kurzer Delay-Zeit
+ *  (kürzer als ihre eigene Release-Zeit) nicht schnell genug hinterher, um
+ *  dichte Retriggerung bei extrem hohem Feedback abzufangen (gemessen: Peak
+ *  > 2.6 trotz Limiter, auch mit sehr schnellem Attack/Release). Ein
+ *  WaveShaper reagiert dagegen pro Sample, ganz ohne Attack-/Release-Zeit. */
+function makeFeedbackClipCurve() {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / (n - 1) - 1;
+    curve[i] = Math.tanh(x);
   }
   return curve;
 }
@@ -249,8 +271,21 @@ const DEFS = {
     name: 'Compressor',
     // 1176-Style: Input (treibt in die feste Schwelle), Attack, Release,
     // Ratio-Modus (Taster statt Regler), Output (Makeup) — kein Threshold.
-    defaults: { input: 0, output: 0, attack: 0.003, release: 0.25, ratioMode: '4' },
+    // mix: Parallelkompression ("New-York-Style", wie Abletons Compressor-
+    // Dry/Wet) -- 1.0 (Default) entspricht dem alten, immer volltrocken-
+    // freien Verhalten, rückwärtskompatibel zu alten Projekten ohne dieses
+    // Feld.
+    defaults: { input: 0, output: 0, attack: 0.003, release: 0.25, ratioMode: '4', mix: 1 },
     build(ctx, p) {
+      // Eigener äusserer Ein-/Ausgang für den Dry/Wet-Blend -- getrennt von
+      // inputGain (der bleibt die reine, compressor-interne "Input"-Trimmung
+      // vor der festen Schwelle, soll die trockene Kopie nicht mitfärben).
+      const input = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
       const inputGain = ctx.createGain();
       inputGain.gain.value = dbToLin(p.input);
       const node = ctx.createDynamicsCompressor();
@@ -262,11 +297,18 @@ const DEFS = {
       node.release.value = p.release;
       const outputGain = ctx.createGain();
       outputGain.gain.value = dbToLin(p.output);
+
+      input.connect(dry);
+      input.connect(inputGain);
       inputGain.connect(node);
       node.connect(outputGain);
+      outputGain.connect(wet);
+      const outSum = ctx.createGain();
+      dry.connect(outSum);
+      wet.connect(outSum);
+
       return {
-        input: inputGain,
-        output: outputGain,
+        input, output: outSum,
         setParam(key, v) {
           const t = engine.now;
           if (key === 'input') inputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
@@ -277,13 +319,19 @@ const DEFS = {
             const m = RATIO_MODES[v] ?? RATIO_MODES['4'];
             node.ratio.setTargetAtTime(m.ratio, t, 0.01);
             node.knee.setTargetAtTime(m.knee, t, 0.01);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
         // Live-Gain-Reduction fürs GR-Meter — Web Audio liefert den Wert
         // direkt vom nativen Compressor, kein separates Analyse-Tapping
         // nötig (negative dB, 0 = keine Reduktion).
         getReductionDb() { return node.reduction ?? 0; },
-        dispose() { inputGain.disconnect(); node.disconnect(); outputGain.disconnect(); },
+        dispose() {
+          input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
+          inputGain.disconnect(); node.disconnect(); outputGain.disconnect();
+        },
       };
     },
   },
@@ -381,8 +429,28 @@ const DEFS = {
   },
   drive: {
     name: 'Drive',
-    defaults: { drive: 0.4, tone: 0.6, level: 0.8 },
+    // base: Pre-Shaper-Filter (wie Abletons Saturator-"Color"-Sektion) --
+    // VOR der Sättigung, entscheidet WELCHE Frequenzen überhaupt in den
+    // Shaper laufen, nicht nur wie das Ergebnis klingt (das macht `tone`
+    // danach, ein reiner Ausgangs-Klangfarbe-Filter). Ein Low-Shelf: positiver
+    // Wert hebt Bässe VOR der Sättigung an (mehr/wärmere Bass-Harmonische),
+    // negativer senkt sie ab (Sättigung verlagert sich zu Mitten/Höhen --
+    // "fizzy"/präsenter statt wummernd). 0 = flach = unverändert.
+    // mix: Dry/Wet wie Abletons Saturator -- 1.0 (Default) entspricht dem
+    // alten, immer volltrockenfreien Verhalten.
+    defaults: { drive: 0.4, tone: 0.6, level: 0.8, base: 0, mix: 1 },
     build(ctx, p) {
+      const input = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const pre = ctx.createBiquadFilter();
+      pre.type = 'lowshelf';
+      pre.frequency.value = 300;
+      pre.gain.value = p.base * 15; // ±15dB, deutlich hörbar ohne extrem zu sein
+
       const shaper = ctx.createWaveShaper();
       shaper.oversample = '4x';
       shaper.curve = makeDriveCurve(p.drive);
@@ -392,8 +460,17 @@ const DEFS = {
       tone.frequency.value = 400 * Math.pow(12000 / 400, p.tone);
       const level = ctx.createGain();
       level.gain.value = p.level;
+
+      input.connect(dry);
+      input.connect(pre);
+      pre.connect(shaper);
       shaper.connect(tone);
       tone.connect(level);
+      level.connect(wet);
+      const outSum = ctx.createGain();
+      dry.connect(outSum);
+      wet.connect(outSum);
+
       // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
       // Audio-Thread, das zudem bei aktivem Signal hörbar knackst, weil
       // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- der Knob
@@ -401,8 +478,7 @@ const DEFS = {
       // Gleiches Entprellen wie fx.js' #buildIR() für den Reverb-Impuls.
       let driveTimer = null;
       return {
-        input: shaper,
-        output: level,
+        input, output: outSum,
         setParam(key, v) {
           if (key === 'drive') {
             clearTimeout(driveTimer);
@@ -410,8 +486,17 @@ const DEFS = {
           }
           else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
           else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
+          else if (key === 'base') pre.gain.setTargetAtTime(v * 15, engine.now, 0.01);
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, engine.now, 0.01);
+            wet.gain.setTargetAtTime(v, engine.now, 0.01);
+          }
         },
-        dispose() { clearTimeout(driveTimer); shaper.disconnect(); tone.disconnect(); level.disconnect(); },
+        dispose() {
+          clearTimeout(driveTimer);
+          input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
+          pre.disconnect(); shaper.disconnect(); tone.disconnect(); level.disconnect();
+        },
       };
     },
   },
@@ -422,8 +507,28 @@ const DEFS = {
     // dryGain/wetGain-Umschalter von createInsert() ist ein reiner Bypass
     // (0 oder 1, kein Zwischenwert), kein Mix-Regler. Der Mix-Regler lebt
     // deshalb INNERHALB dieses Effekts, wie schon Drive's `level`.
+    //
+    // pingPong (wie Abletons Delay): zwei Verzögerungsleitungen im Über-
+    // Kreuz-Feedback (delayL -> filterL -> [Panner] UND -> feedbackL ->
+    // delayR -> filterR -> [Panner] UND -> feedbackR -> zurück in delayL,
+    // usw.) statt einer einzelnen. Mathematisch ÄQUIVALENT zum alten
+    // Einzelleitungs-Mono-Delay, wenn beide Panner auf 0 (Mitte) stehen --
+    // jede Wiederholung durchläuft exakt dieselbe Anzahl Filter-/Feedback-
+    // Stufen wie im alten Design, nur auf zwei Knoten verteilt (Echo n
+    // erscheint bei nT, gedämpft um feedback^(n-1), identisch zum Original
+    // -- nachgerechnet). Deshalb KEIN struktureller Graph-Umbau nötig, wenn
+    // pingPong ein-/ausgeschaltet wird: nur die beiden Panner-Werte ändern
+    // sich (0/0 = Mono wie bisher, -1/1 = volles Ping-Pong).
+    //
+    // division (wie Abletons Delay-Sync): 'free' (Default) lässt `time`
+    // (Sekunden) wie bisher frei wirken; jeder Notenwert überschreibt die
+    // Delay-Zeit relativ zu transport.bpm und hält sie bei jeder Tempo-
+    // Änderung aktuell (transport.addListener, gleiche Set-basierte
+    // Registry wie bei Maschinen -- ein Insert ist selbst keine Maschine,
+    // meldet sich hier aber genauso an).
     defaults: {
       time: 0.35, feedback: 0.4, filterFreq: 2000, filterType: 'lowpass', mix: 0.35,
+      pingPong: false, division: 'free',
     },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -433,6 +538,20 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
+      // 4s statt 2s Maximum: bei tiefstem Tempo (40 BPM, s. transport.js)
+      // braucht selbst eine gesynct 1/2-Note schon 3s -- 2s hätte das
+      // stillschweigend gekappt (DelayNode klemmt delayTime laut Spezifikation
+      // ohne Fehler auf maxDelayTime, kein Crash, aber falsche/verwirrende
+      // Zeit).
+      const delayL = ctx.createDelay(4.0);
+      const delayR = ctx.createDelay(4.0);
+      const computeTime = () => (p.division === 'free'
+        ? p.time
+        : transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 1));
+      const t0 = computeTime();
+      delayL.delayTime.value = t0;
+      delayR.delayTime.value = t0;
+
       // Feedback-Schleife: delay -> filter -> feedback -> zurück in delay.
       // Der WET-Abgriff sitzt NACH dem Filter, nicht am rohen Delay-Ausgang
       // -- sonst wäre bei Mix=100% das ERSTE Echo noch ein unverändertes,
@@ -441,38 +560,99 @@ const DEFS = {
       // durchkommen. So durchläuft JEDE Wiederholung, auch die erste, den
       // Filter -- nur die nachfolgenden (die zusätzlich durch die
       // Feedback-Schleife liefen) werden zunehmend stärker gefiltert.
-      const delay = ctx.createDelay(2.0);
-      delay.delayTime.value = p.time;
-      const filter = ctx.createBiquadFilter();
-      filter.type = p.filterType;
-      filter.frequency.value = p.filterFreq;
-      filter.Q.value = 0.7;
-      const feedback = ctx.createGain();
-      feedback.gain.value = p.feedback;
+      const filterL = ctx.createBiquadFilter();
+      const filterR = ctx.createBiquadFilter();
+      for (const f of [filterL, filterR]) {
+        f.type = p.filterType;
+        f.frequency.value = p.filterFreq;
+        f.Q.value = 0.7;
+      }
+      const feedbackL = ctx.createGain();
+      const feedbackR = ctx.createGain();
+      feedbackL.gain.value = p.feedback;
+      feedbackR.gain.value = p.feedback;
+      // Weichbegrenzer IN der Feedback-Schleife (s. makeFeedbackClipCurve()
+      // oben) -- fängt genau die Filter-Überhöhung ab, die bisher die
+      // 0.8-Feedback-Obergrenze nötig machte (s. UI_PARAMS.filterDelay-
+      // Kommentar), erlaubt dadurch ein deutlich höheres, fast selbst-
+      // schwingendes Feedback ohne unbegrenztes Aufschaukeln -- verifiziert
+      // per Stresstest (dichte Retriggerung über Feedback x Filtertyp x
+      // Filterfrequenz x Zeit x PingPong). Ein erster Versuch mit einem
+      // DynamicsCompressorNode (wie beim Resonator-Limiter) reichte NICHT:
+      // dessen Ratio (20:1) ist kein hartes Ceiling, nur eine graduelle
+      // Reduktion, und bei sehr kurzer Delay-Zeit (Minimum 0.01s, kürzer als
+      // jede sinnvolle Release-Zeit) kam er nie zur Ruhe -- gemessen Peak
+      // > 2.6 trotz Kompressor. Der WaveShaper reagiert dagegen pro Sample,
+      // ganz ohne Attack-/Release-Verzögerung.
+      const clipL = ctx.createWaveShaper();
+      const clipR = ctx.createWaveShaper();
+      const feedbackClipCurve = makeFeedbackClipCurve();
+      clipL.curve = feedbackClipCurve;
+      clipR.curve = feedbackClipCurve;
+      clipL.oversample = '2x';
+      clipR.oversample = '2x';
+      const pannerL = ctx.createStereoPanner();
+      const pannerR = ctx.createStereoPanner();
+      pannerL.pan.value = p.pingPong ? -1 : 0;
+      pannerR.pan.value = p.pingPong ? 1 : 0;
 
       input.connect(dry).connect(output);
-      input.connect(delay);
-      delay.connect(filter);
-      filter.connect(wet).connect(output);
-      filter.connect(feedback);
-      feedback.connect(delay);
+      input.connect(delayL);
+      delayL.connect(filterL);
+      filterL.connect(pannerL).connect(wet);
+      filterL.connect(feedbackL).connect(clipL).connect(delayR);
+      delayR.connect(filterR);
+      filterR.connect(pannerR).connect(wet);
+      filterR.connect(feedbackR).connect(clipR).connect(delayL);
+      wet.connect(output);
+
+      const bpmListener = {
+        onTransport(event) {
+          if (event !== 'bpm' || p.division === 'free') return;
+          const time = computeTime();
+          delayL.delayTime.setTargetAtTime(time, engine.now, 0.02);
+          delayR.delayTime.setTargetAtTime(time, engine.now, 0.02);
+        },
+      };
+      transport.addListener(bpmListener);
 
       return {
         input, output,
         setParam(key, v) {
           const t = engine.now;
-          if (key === 'time') delay.delayTime.setTargetAtTime(v, t, 0.02);
-          else if (key === 'feedback') feedback.gain.setTargetAtTime(v, t, 0.01);
-          else if (key === 'filterFreq') filter.frequency.setTargetAtTime(v, t, 0.01);
-          else if (key === 'filterType') filter.type = v;
-          else if (key === 'mix') {
+          if (key === 'time') {
+            if (p.division === 'free') {
+              delayL.delayTime.setTargetAtTime(v, t, 0.02);
+              delayR.delayTime.setTargetAtTime(v, t, 0.02);
+            }
+          } else if (key === 'feedback') {
+            feedbackL.gain.setTargetAtTime(v, t, 0.01);
+            feedbackR.gain.setTargetAtTime(v, t, 0.01);
+          } else if (key === 'filterFreq') {
+            filterL.frequency.setTargetAtTime(v, t, 0.01);
+            filterR.frequency.setTargetAtTime(v, t, 0.01);
+          } else if (key === 'filterType') {
+            filterL.type = v; filterR.type = v;
+          } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
+          } else if (key === 'pingPong') {
+            pannerL.pan.setTargetAtTime(v ? -1 : 0, t, 0.02);
+            pannerR.pan.setTargetAtTime(v ? 1 : 0, t, 0.02);
+          } else if (key === 'division') {
+            const time = computeTime();
+            delayL.delayTime.setTargetAtTime(time, t, 0.02);
+            delayR.delayTime.setTargetAtTime(time, t, 0.02);
           }
         },
         dispose() {
+          transport.removeListener(bpmListener);
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
-          delay.disconnect(); filter.disconnect(); feedback.disconnect();
+          delayL.disconnect(); delayR.disconnect();
+          filterL.disconnect(); filterR.disconnect();
+          feedbackL.disconnect(); feedbackR.disconnect();
+          clipL.disconnect(); clipR.disconnect();
+          pannerL.disconnect(); pannerR.disconnect();
         },
       };
     },
@@ -810,6 +990,7 @@ export const UI_PARAMS = {
     { key: 'attack', label: 'Attack', min: 0.0002, max: 0.5, curve: 'log', unit: 's' },
     { key: 'release', label: 'Release', min: 0.02, max: 1, curve: 'log', unit: 's' },
     { key: 'output', label: 'Output', min: -20, max: 20, unit: 'dB' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
   eq: [
     { key: 'freq', label: 'Freq', min: 20, max: 20000, curve: 'log', unit: 'Hz' },
@@ -818,24 +999,35 @@ export const UI_PARAMS = {
   ],
   drive: [
     { key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' },
+    { key: 'base', label: 'Base', min: -1, max: 1, unit: '' },
     { key: 'tone', label: 'Tone', min: 0, max: 1, unit: '' },
     { key: 'level', label: 'Level', min: 0, max: 2, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
   filterDelay: [
     { key: 'time', label: 'Time', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
-    // Feedback bewusst auf 0.8 gedeckelt (nicht 1.0 oder gar 0.9): die
-    // Schleife delay->filter->feedback->delay summiert sich sonst
-    // unbegrenzt auf. Der naheliegende Gedanke "der Tiefpass/Hochpass
-    // dämpft ja pro Durchlauf zusätzlich, das reicht als Sicherheit" ist
-    // TRÜGERISCH -- Chromes BiquadFilterNode zeigt bei lowpass/highpass
-    // nahe der Cutoff-Frequenz eine Überhöhung von >1.0 (gemessen ~1.15-
-    // 1.22x, praktisch unabhängig von Q, auch bei sehr kleinem Q nicht
-    // wegzubekommen). Bei Feedback=0.9 wächst die Schleife dadurch über
-    // Sekunden tatsächlich exponentiell auf (gemessen, kein Bandpass
-    // betroffen -- der hat wegen konstantem 0dB-Spitzenpegel keine
-    // Überhöhung). 0.8 hat auch am Rand des Filter-Bereichs (200Hz/
-    // 8000Hz) über 20s Rendertest nachweislich Sicherheitsabstand.
-    { key: 'feedback', label: 'Feedback', min: 0, max: 0.8, unit: '' },
+    // War früher auf 0.8 gedeckelt (Filter-Überhöhung bei lowpass/highpass
+    // nahe der Cutoff-Frequenz, ~1.15-1.22x, liess die Schleife sonst
+    // unbegrenzt aufschaukeln, s. alte Fassung dieses Kommentars in der
+    // Git-History). Jetzt durch einen tanh-Weichbegrenzer IN der Feedback-
+    // Schleife (s. makeFeedbackClipCurve()/DEFS.filterDelay) sicher bis 0.9
+    // anhebbar -- per Stresstest verifiziert (dichte Retriggerung über
+    // Feedback x Filtertyp x Filterfrequenz x Zeit x PingPong, 72 Kombina-
+    // tionen). WICHTIG: "sicher" heisst hier "schaukelt nicht mehr
+    // unbegrenzt auf" (bounded), NICHT "Spitzenpegel bleibt immer <= 1.0" --
+    // am ungünstigsten Punkt (sehr kurze Zeit nahe dem Minimum + lowpass/
+    // highpass nahe einer Resonanzspitze) wurden Spitzenpegel bis ~1.75
+    // gemessen, klar über 1.0, aber STABIL (10s-Dauertest praktisch gleicher
+    // Wert wie 4s, kein weiteres Wachstum) -- der App-weite Master-Limiter
+    // fängt das am Ende der Kette ab. bandpass war in JEDER getesteten
+    // Kombination unauffällig (< 0.6 Spitzenpegel), da bandpass laut
+    // Web-Audio-Spezifikation keine Überhöhung kennt (s. Kommentar bei
+    // DEFS.resonator). Ein Versuch, den Weichbegrenzer selbst schärfer zu
+    // stimmen (tanh(1.6x) statt tanh(x)), verschlimmerte die Extremfälle
+    // deutlich (Spitzen bis 2.8) statt sie zu verbessern -- die zusätzlichen
+    // Oberwellen der schärferen Kurve regen die Filterresonanz offenbar
+    // zusätzlich an. tanh(x) unnormalisiert war die bessere Wahl.
+    { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
     { key: 'filterFreq', label: 'Filter', min: 200, max: 8000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
@@ -881,6 +1073,33 @@ export const FILTER_DELAY_TYPES = [
   { value: 'lowpass', label: 'Low Pass' },
   { value: 'highpass', label: 'High Pass' },
   { value: 'bandpass', label: 'Band Pass' },
+];
+
+/** Tempo-Sync-Notenwerte für den Filter Delay (wie Abletons Delay) -- als
+ *  Faktor relativ zu EINER Viertelnote (= 1 Beat). 'free' (nicht hier, s.
+ *  DEFS.filterDelay) lässt die Zeit weiterhin frei in Sekunden (Time-Regler)
+ *  -- diese Werte überschreiben sie stattdessen relativ zum Song-Tempo,
+ *  bei jeder BPM-Änderung live nachgeführt (transport.addListener). */
+export const DELAY_SYNC_DIVISIONS = {
+  '1/16': 0.25,
+  '1/8t': 1 / 3,
+  '1/8': 0.5,
+  '1/8d': 0.75,
+  '1/4t': 2 / 3,
+  '1/4': 1,
+  '1/4d': 1.5,
+  '1/2': 2,
+};
+export const DELAY_SYNC_BUTTONS = [
+  { value: 'free', label: 'Free' },
+  { value: '1/16', label: '1/16' },
+  { value: '1/8t', label: '1/8t' },
+  { value: '1/8', label: '1/8' },
+  { value: '1/8d', label: '1/8.' },
+  { value: '1/4t', label: '1/4t' },
+  { value: '1/4', label: '1/4' },
+  { value: '1/4d', label: '1/4.' },
+  { value: '1/2', label: '1/2' },
 ];
 
 /** Resonator-Intervall-Set (welche Töne relativ zur Grundtonhöhe

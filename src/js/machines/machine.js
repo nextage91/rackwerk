@@ -14,7 +14,7 @@
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
-import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
+import { createInsert, INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS } from '../core/inserts.js';
 import { masterFX } from '../core/fx.js';
 import { undo } from '../core/undo.js';
 
@@ -1050,13 +1050,14 @@ export class Machine {
     if (!this.insertsListEl) return;
     this.insertsListEl.innerHTML = this.inserts.map((insert, idx) => {
       const paramDefs = UI_PARAMS[insert.type] ?? [];
-      const knobsHtml = paramDefs.map((def) => `
+      const knobHtml = (def) => `
         <x-knob label="${def.label}" min="${def.min}" max="${def.max}"
           value="${insert.params[def.key]}"
           ${def.curve ? `curve="${def.curve}"` : ''}
           ${def.unit ? `unit="${def.unit}"` : ''}
           data-insert-id="${insert.id}" data-insert-param="${def.key}"></x-knob>
-      `).join('');
+      `;
+      const knobsHtml = paramDefs.map(knobHtml).join('');
 
       let bodyHtml;
       if (insert.type === 'comp') {
@@ -1099,13 +1100,26 @@ export class Machine {
           <div class="insert-row__params">${knobsHtml}</div>
         `;
       } else if (insert.type === 'filterDelay') {
+        // Bei Tempo-Sync ist der Time-Regler (freie Sekunden) irreführend --
+        // die tatsächliche Zeit kommt dann aus BPM+Notenwert, nicht aus dem
+        // Regler. Statt ihn nur zu deaktivieren (könnte man trotzdem ziehen,
+        // ohne dass es wirkt), blendet ihn eine gefilterte Knob-Liste
+        // komplett aus, solange division nicht "free" ist.
+        const synced = insert.params.division !== 'free';
+        const delayKnobsHtml = paramDefs.filter((d) => d.key !== 'time' || !synced).map(knobHtml).join('');
         bodyHtml = `
+          <div class="seg">
+            ${DELAY_SYNC_BUTTONS.map((s) => `
+              <button type="button" class="seg__btn${insert.params.division === s.value ? ' is-active' : ''}" data-filterdelay-sync="${s.value}">${s.label}</button>
+            `).join('')}
+          </div>
           <div class="seg">
             ${FILTER_DELAY_TYPES.map((t) => `
               <button type="button" class="seg__btn${insert.params.filterType === t.value ? ' is-active' : ''}" data-filterdelay-type="${t.value}">${t.label}</button>
             `).join('')}
+            <button type="button" class="seg__btn${insert.params.pingPong ? ' is-active' : ''}" data-filterdelay-pingpong>Ping-Pong</button>
           </div>
-          <div class="insert-row__params">${knobsHtml}</div>
+          <div class="insert-row__params">${delayKnobsHtml}</div>
         `;
       } else if (insert.type === 'resonator') {
         // Preset-Knöpfe befüllen alle 5 Tune-Regler auf einen Schlag (s.
@@ -1229,6 +1243,17 @@ export class Machine {
           this.#renderInserts();
         });
       }
+      for (const btn of row.querySelectorAll('[data-filterdelay-sync]')) {
+        btn.addEventListener('click', () => {
+          this.setInsertParam(id, 'division', btn.dataset.filterdelaySync);
+          this.#renderInserts(); // Time-Regler muss ggf. ein-/ausgeblendet werden
+        });
+      }
+      const pingPongBtn = row.querySelector('[data-filterdelay-pingpong]');
+      pingPongBtn?.addEventListener('click', () => {
+        this.setInsertParam(id, 'pingPong', !insert.params.pingPong);
+        pingPongBtn.classList.toggle('is-active', insert.params.pingPong);
+      });
       for (const btn of row.querySelectorAll('[data-resonator-interval]')) {
         btn.addEventListener('click', () => {
           const oldIdx = RESONATOR_INTERVALS.findIndex((t) => t.value === insert.params.interval);
