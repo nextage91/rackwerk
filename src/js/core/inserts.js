@@ -264,6 +264,73 @@ const DEFS = {
       };
     },
   },
+  eq8: {
+    name: '8-Band EQ',
+    // 8 feste Bänder (anders als 'eq' oben) -- touch-bedienbares Pendant zu
+    // EQ8/Pro-Q. Ein inaktives Band bleibt fest in der Kette (kein
+    // Umverkabeln beim An-/Ausschalten), wird aber lautlos auf neutral
+    // (Gain 0) gezwungen -- für peaking/lowshelf/highshelf ist Gain 0 in
+    // jedem Fall die neutrale, unhörbare Stellung. Deshalb bewusst nur
+    // diese drei Typen (kein High-/Lowcut, das wäre bei Gain 0 nicht neutral).
+    defaults: {
+      bands: Array.from({ length: 8 }, () => ({ active: false, type: 'peaking', freq: 1000, gain: 0, q: 1 })),
+    },
+    build(ctx, p) {
+      const nodes = p.bands.map((b) => {
+        const node = ctx.createBiquadFilter();
+        node.type = b.type;
+        node.frequency.value = b.freq;
+        node.gain.value = b.active ? b.gain : 0;
+        node.Q.value = b.q;
+        return node;
+      });
+      for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]);
+
+      return {
+        input: nodes[0],
+        output: nodes[nodes.length - 1],
+        // Der generische Insert-Wrapper kennt nur ein flaches key/value-
+        // setParam -- passt nicht auf "ein Feld eines von 8 Bändern".
+        // setBand/getEq8Response sind bewusst zusätzliche, eq8-eigene
+        // Methoden (gleiches Muster wie getReductionDb beim Compressor),
+        // die createInsert() unten optional durchreicht. p.bands wird
+        // von der UI direkt mutiert (dieselbe Referenz wie insert.params.
+        // bands), setBand liest daraus nur den aktuellen Wert und schreibt
+        // ihn an den echten Audio-Node.
+        setParam() {}, // eq8 läuft komplett über setBand, s. oben
+        setBand(i, field) {
+          const b = p.bands[i];
+          const node = nodes[i];
+          if (!node) return;
+          if (field === 'type') node.type = b.type;
+          else if (field === 'freq') node.frequency.setTargetAtTime(b.freq, engine.now, 0.01);
+          else if (field === 'gain' || field === 'active') {
+            node.gain.setTargetAtTime(b.active ? b.gain : 0, engine.now, 0.01);
+          } else if (field === 'q') node.Q.setTargetAtTime(b.q, engine.now, 0.01);
+        },
+        /** Summierte dB-Antwort aller AKTIVEN Bänder über freqArray (Hz) --
+         *  echte Berechnung über das native getFrequencyResponse() jedes
+         *  Bandes statt einer geschätzten Silhouette (s. machine.js#
+         *  eqCurvePath für den Einzelband-EQ). dB-Werte addieren sich für
+         *  in Serie geschaltete Filter korrekt (Amplituden multiplizieren
+         *  sich, log(a*b) = log(a)+log(b)). */
+        getEq8Response(freqArray) {
+          const mag = new Float32Array(freqArray.length);
+          const phase = new Float32Array(freqArray.length);
+          const totalDb = new Float32Array(freqArray.length);
+          for (let i = 0; i < nodes.length; i++) {
+            if (!p.bands[i].active) continue;
+            nodes[i].getFrequencyResponse(freqArray, mag, phase);
+            for (let j = 0; j < freqArray.length; j++) {
+              totalDb[j] += 20 * Math.log10(Math.max(1e-6, mag[j]));
+            }
+          }
+          return totalDb;
+        },
+        dispose() { nodes.forEach((n) => n.disconnect()); },
+      };
+    },
+  },
   drive: {
     name: 'Drive',
     defaults: { drive: 0.4, tone: 0.6, level: 0.8 },
@@ -603,6 +670,7 @@ export function insertMeta(type) {
 export const INSERT_COLORS = {
   comp: '#e8b84b',   // FET-Kompressor: Messing/Gold, wie ein 1176
   eq: '#4fd1a5',     // Rack-EQ: kühles Teal
+  eq8: '#5ec8e0',    // 8-Band-EQ: helles Cyan, deutlich von der Teal-Farbe des Einzelband-EQ abgesetzt
   drive: '#e8643f',  // Sättigung: warmes Glühen
   filterDelay: '#6f9ceb', // Delay: kühles Blau, wie ein Tape-/Digital-Delay-Rack
   reverb: '#a888e0', // Reverb: Violett, wie ein Hall-/Space-Rack
@@ -717,7 +785,13 @@ export function createInsert(type, saved = null) {
   const def = DEFS[type];
   if (!def) throw new Error(`Unbekannter Insert-Typ: ${type}`);
   const ctx = engine.ctx;
-  const params = { ...def.defaults, ...saved?.params };
+  // structuredClone statt einfachem Spread: def.defaults ist modulweit EIN
+  // Objekt -- bei verschachtelten Werten (eq8s bands-Array) würde ein
+  // flacher Spread nur die Referenz kopieren, alle Instanzen desselben
+  // Insert-Typs teilten sich dann dieselben Bänder (jede Änderung an EINEM
+  // Insert würde alle anderen mitverändern). Für die bisherigen, rein
+  // flachen defaults (Zahlen/Strings) ändert der Clone nichts.
+  const params = structuredClone({ ...def.defaults, ...saved?.params });
   const bypassed = saved?.bypassed ?? false;
   const id = saved?.id ?? nextInsertId++;
   if (saved?.id != null) nextInsertId = Math.max(nextInsertId, saved.id + 1);
@@ -752,6 +826,9 @@ export function createInsert(type, saved = null) {
     },
     // Nur beim Compressor vorhanden — UI prüft auf Existenz statt Typ.
     getReductionDb: effect.getReductionDb ? () => effect.getReductionDb() : undefined,
+    // Nur beim 8-Band-EQ vorhanden (s. dortigen Kommentar in DEFS.eq8).
+    setBand: effect.setBand ? (i, field) => effect.setBand(i, field) : undefined,
+    getEq8Response: effect.getEq8Response ? (freqArray) => effect.getEq8Response(freqArray) : undefined,
     setBypass(b) {
       insert.bypassed = b;
       const t = engine.now;
