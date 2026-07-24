@@ -19,6 +19,7 @@ import { PercSynth } from '../machines/percsynth.js';
 import { PolySynth } from '../machines/polysynth.js';
 import { AnalogKit } from '../machines/analogkit.js';
 import { Sampler } from '../machines/sampler.js';
+import { openRenamePopup } from '../machines/machine.js';
 import { undo } from '../core/undo.js';
 import { automation } from '../core/automation.js';
 
@@ -58,7 +59,7 @@ export class Rack {
       this.views.delete(machine);
 
       const MachineClass = machine.constructor;
-      undo.offer(`${MachineClass.meta.name} removed`, () => {
+      undo.offer(`${machine.displayName} removed`, () => {
         const restored = new MachineClass();
         // Vollständiges Bundle wiederherstellen (state/sends/inserts/clips/
         // lanes) -- derselbe Pfad wie project.js#loadProject, damit "Undo"
@@ -69,6 +70,7 @@ export class Rack {
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
         if (state?.clips) restored.deserializeClips(state.clips);
+        if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
         if (state?.lanes) {
@@ -148,13 +150,13 @@ export class Rack {
     panel.appendChild(fullEl);
     overlay.appendChild(panel);
 
-    const { name, color } = machine.constructor.meta;
+    const { color } = machine.constructor.meta;
     const row = document.createElement('div');
     row.className = 'rack-row';
     row.style.setProperty('--m-color', color);
     row.innerHTML = `
       <span class="rack-row__stripe"></span>
-      <span class="rack-row__name">${name}<span class="rack-row__led" data-led></span></span>
+      <span class="rack-row__name"><span data-name-text>${machine.displayName}</span><span class="rack-row__led" data-led></span></span>
       <span class="rack-row__pattern" data-pattern hidden></span>
       <span class="rack-row__actions">
         <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
@@ -162,6 +164,7 @@ export class Rack {
       </span>
       <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
+    machine.rowNameEl = row.querySelector('[data-name-text]');
     // Aktivitäts-LED + aktiver Pattern-Buchstabe direkt in der Kompakt-
     // Zeile -- ohne das war das Rack bei laufendem Transport blind: man
     // sah nicht, welche Maschine gerade spielt oder welches Pattern aktiv
@@ -190,7 +193,32 @@ export class Rack {
       machine.setMuted(!machine.muted);
       muteBtn.classList.toggle('is-active', machine.muted);
     });
-    row.addEventListener('click', () => this.#openFocus(machine));
+    // Halten -> Umbenennen-Popup (wie die anderen Halten-Menüs im Repo),
+    // kurzes Antippen -> Vollbild-Editor öffnen (unverändertes Verhalten).
+    // Bricht bei nennenswerter Fingerbewegung ab (MOVE_TOLERANCE) -- die
+    // Zeile sitzt in einer scrollbaren Liste, ein Scroll-Start darf nicht
+    // nach 500ms plötzlich das Rename-Popup aufreissen.
+    const RENAME_HOLD_MS = 500, MOVE_TOLERANCE = 8;
+    let holdTimer = null, held = false, downX = 0, downY = 0;
+    const cancelRowHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    row.addEventListener('pointerdown', (e) => {
+      held = false;
+      downX = e.clientX; downY = e.clientY;
+      holdTimer = setTimeout(() => {
+        held = true;
+        openRenamePopup(machine, row);
+      }, RENAME_HOLD_MS);
+    });
+    row.addEventListener('pointermove', (e) => {
+      if (holdTimer && Math.hypot(e.clientX - downX, e.clientY - downY) > MOVE_TOLERANCE) cancelRowHold();
+    });
+    row.addEventListener('pointerup', cancelRowHold);
+    row.addEventListener('pointerleave', cancelRowHold);
+    row.addEventListener('pointercancel', cancelRowHold);
+    row.addEventListener('click', () => {
+      if (held) { held = false; return; }
+      this.#openFocus(machine);
+    });
 
     const beforeView = beforeMachine ? this.views.get(beforeMachine) : null;
     document.body.insertBefore(overlay, beforeView?.overlay ?? null);

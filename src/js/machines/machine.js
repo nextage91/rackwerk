@@ -449,6 +449,62 @@ function openInsertPicker(onPick) {
   insertPickerEl.hidden = false;
 }
 
+/* ---------- Spuren/Instrumente umbenennen ----------
+ * Ein einzelnes, modulweites Popup (wie insertPickerEl oben, eq8Menu/
+ * padMenu in sampler.js) -- erreichbar über Antippen des Namens im
+ * Vollbild-Editor (s. render()) UND über Halten der Rack-Zeile
+ * (s. rack.js#mount). Anders als die reinen Auswahl-Popups trägt dieses
+ * hier ein Textfeld -- "woanders hintippen" soll den gerade getippten
+ * Namen deshalb SPEICHERN statt verwerfen (wie ein normales Formularfeld
+ * beim Blur), nur Escape verwirft explizit. */
+let renamePop = null;
+const dismissRenamePop = (commit = true) => {
+  if (!renamePop) return;
+  if (commit) renamePop._machine.setLabel(renamePop._input.value);
+  renamePop.remove();
+  renamePop = null;
+  document.removeEventListener('pointerdown', onOutsideRenamePop, true);
+};
+const onOutsideRenamePop = (e) => { if (renamePop && !renamePop.contains(e.target)) dismissRenamePop(true); };
+
+export function openRenamePopup(machine, anchorEl) {
+  dismissRenamePop(); // vorheriges Popup (falls offen) zuerst übernehmen
+
+  renamePop = document.createElement('div');
+  renamePop.className = 'rename-pop';
+  renamePop._machine = machine;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-pop__input';
+  input.maxLength = 30;
+  input.placeholder = machine.constructor.meta.name;
+  input.value = machine.label ?? '';
+  renamePop._input = input;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); dismissRenamePop(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); dismissRenamePop(false); }
+  });
+  renamePop.appendChild(input);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'rename-pop__reset';
+  resetBtn.textContent = '↺';
+  resetBtn.setAttribute('aria-label', 'Reset to default name');
+  resetBtn.addEventListener('click', () => { input.value = ''; dismissRenamePop(true); });
+  renamePop.appendChild(resetBtn);
+
+  document.body.appendChild(renamePop);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - renamePop.offsetWidth - 8, r.left));
+  renamePop.style.left = `${left}px`;
+  renamePop.style.top = `${Math.max(8, r.top - renamePop.offsetHeight - 8)}px`;
+  input.focus();
+  input.select();
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideRenamePop, true), 0);
+}
+
 /** Zuletzt hörbare Maschinen — Vergleichsbasis, um zu erkennen, ob ein
  *  Mute/Solo-Wechsel die hörbare Menge SCHRUMPFEN lässt (s. refreshGates). */
 let lastAudible = new Set();
@@ -512,6 +568,8 @@ export class Machine {
     this.id = nextId++;
     this.muted = false;
     this.soloed = false;
+    /** Nutzer-Label statt des Typ-Namens, s. displayName/setLabel unten. */
+    this.label = null;
     /** Von der Jam-Ansicht gesetzt (s. setJamGate) — unabhängig von Mute/
      *  Solo. Default offen: solange niemand jammt, keine Einschränkung. */
     this.jamGateOpen = true;
@@ -781,7 +839,7 @@ export class Machine {
 
   /* ---------- Faceplate ---------- */
   render() {
-    const { name, type, color, model = 'RW-00' } = this.constructor.meta;
+    const { type, color, model = 'RW-00' } = this.constructor.meta;
 
     const el = document.createElement('section');
     el.className = 'machine';
@@ -798,7 +856,7 @@ export class Machine {
         <div class="machine__title" data-collapse-toggle>
           <span class="machine__chevron" aria-hidden="true">▾</span>
           <span>
-            <div class="machine__name">${name}</div>
+            <div class="machine__name" data-rename title="Tap to rename"><span data-name-text>${this.displayName}</span><span class="machine__rename-hint" aria-hidden="true">✎</span></div>
             <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
           </span>
         </div>
@@ -817,6 +875,15 @@ export class Machine {
     // .mixer-group__toggle, das ebenfalls nicht persistiert wird).
     el.querySelector('[data-collapse-toggle]').addEventListener('click', () => {
       el.classList.toggle('is-collapsed');
+    });
+
+    // Name antippen -> umbenennen, statt (wie der Rest der Kopfzeile) das
+    // Panel ein-/auszuklappen -- stopPropagation, sonst würde derselbe Klick
+    // AUCH is-collapsed umschalten (der Name sitzt innerhalb des Toggle-Bereichs).
+    const nameEl = el.querySelector('[data-rename]');
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRenamePopup(this, nameEl);
     });
 
     this.headMuteBtn = el.querySelector('[data-mute]');
@@ -855,6 +922,7 @@ export class Machine {
           inserts: this.serializeInserts(),
           clips: this.serializeClips(),
           lanes: automation.exportLanes(this.id),
+          label: this.label,
         };
         // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
         // ein bubbling Event auf einem bereits entfernten Knoten erreicht
@@ -1215,6 +1283,27 @@ export class Machine {
     if (this.jamGateOpen === open) return;
     this.jamGateOpen = open;
     refreshGates();
+  }
+
+  /** Nutzer-Label ("Kick", "Bassline", ...) statt des festen Typ-Namens
+   *  (this.constructor.meta.name) -- überall dort angezeigt, wo bisher der
+   *  Typ-Name stand (Rack-Zeile, Vollbild-Kopfzeile, Mixer/Jam/Song). Diese
+   *  beiden UI-Stellen bleiben dauerhaft im DOM (anders als Mixer/Jam/Song,
+   *  die bei jedem Öffnen komplett neu gerendert werden, s. deren render()-
+   *  Kommentare) -- deshalb hier direkt patchen statt auf ein Neu-Rendern
+   *  zu warten. */
+  get displayName() { return this.label || this.constructor.meta.name; }
+
+  setLabel(v) {
+    const trimmed = (v ?? '').trim().slice(0, 30);
+    this.label = trimmed || null;
+    // Nur den Text-Kindknoten patchen, nie den ganzen Container -- der
+    // trägt noch das LED-/Stift-Icon-Geschwisterelement (s. render()/
+    // rack.js#mount), ein textContent-Reset auf dem Container würde die
+    // mitreissen.
+    const nameTextEl = this.el?.querySelector('.machine__name [data-name-text]');
+    if (nameTextEl) nameTextEl.textContent = this.displayName;
+    if (this.rowNameEl) this.rowNameEl.textContent = this.displayName;
   }
 
   /* ---------- Aufräumen ---------- */

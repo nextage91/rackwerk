@@ -37,7 +37,7 @@ MODULES = [
     ("js/core/mic-recorder.js", ["micRecorder"]),
     ("js/core/sample-store.js", ["sampleStore", "newSampleId", "arrayBufferToBase64", "base64ToArrayBuffer"]),
     ("js/core/jamlink.js",      ["jamlink", "packSignal", "unpackSignal"]),
-    ("js/machines/machine.js",  ["Machine"]),
+    ("js/machines/machine.js",  ["Machine", "openRenamePopup"]),
     ("js/machines/tracked-drum-machine.js", ["TrackedDrumMachine"]),
     ("js/machines/step-sequenced-synth.js", ["StepSequencedSynth"]),
     ("js/machines/subsynth.js", ["SubSynth"]),

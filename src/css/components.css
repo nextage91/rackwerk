@@ -60,6 +60,14 @@
   text-transform: uppercase;
   /* graviert: dunkle Kante oben, Lichtkante unten */
   text-shadow: 0 -1px 0 rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.08);
+  cursor: pointer;
+}
+.machine__rename-hint {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: .45;
+  text-transform: none;
+  letter-spacing: 0;
 }
 .machine__type {
   font-family: var(--font-lcd);   /* Typenschild-Optik */
@@ -472,6 +480,39 @@ x-fader {
   color: var(--m-color, var(--lcd-ink));
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset;
 }
+
+/* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
+   gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
+.rename-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  animation: chip-in .15s ease-out;
+}
+.rename-pop__input {
+  min-height: 40px;
+  width: 180px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--bg-panel-deep);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.5) inset;
+}
+.rename-pop__input::placeholder { color: var(--ink-faint); }
+.rename-pop__reset {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 16px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+}
+.rename-pop__reset:active { transform: translateY(1px); }
 
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }

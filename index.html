@@ -1700,6 +1700,14 @@ button {
   text-transform: uppercase;
   /* graviert: dunkle Kante oben, Lichtkante unten */
   text-shadow: 0 -1px 0 rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.08);
+  cursor: pointer;
+}
+.machine__rename-hint {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: .45;
+  text-transform: none;
+  letter-spacing: 0;
 }
 .machine__type {
   font-family: var(--font-lcd);   /* Typenschild-Optik */
@@ -2112,6 +2120,39 @@ x-fader {
   color: var(--m-color, var(--lcd-ink));
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset;
 }
+
+/* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
+   gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
+.rename-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  animation: chip-in .15s ease-out;
+}
+.rename-pop__input {
+  min-height: 40px;
+  width: 180px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--bg-panel-deep);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.5) inset;
+}
+.rename-pop__input::placeholder { color: var(--ink-faint); }
+.rename-pop__reset {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(#3a342b, #23201a);
+  color: var(--lcd-ink);
+  font-size: 16px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.6), 0 1px 0 var(--edge-light) inset;
+}
+.rename-pop__reset:active { transform: translateY(1px); }
 
 /* ===================== Step-Sequenzer ===================== */
 .stepseq { margin-top: 12px; }
@@ -17697,7 +17738,7 @@ return { jamlink, packSignal, unpackSignal };
 })();
 
 /* ===== js/machines/machine.js ===== */
-const { Machine } = (() => {
+const { Machine, openRenamePopup } = (() => {
 /**
  * Machine — Basisklasse für alle Rack-Maschinen.
  *
@@ -18143,6 +18184,62 @@ function openInsertPicker(onPick) {
   insertPickerEl.hidden = false;
 }
 
+/* ---------- Spuren/Instrumente umbenennen ----------
+ * Ein einzelnes, modulweites Popup (wie insertPickerEl oben, eq8Menu/
+ * padMenu in sampler.js) -- erreichbar über Antippen des Namens im
+ * Vollbild-Editor (s. render()) UND über Halten der Rack-Zeile
+ * (s. rack.js#mount). Anders als die reinen Auswahl-Popups trägt dieses
+ * hier ein Textfeld -- "woanders hintippen" soll den gerade getippten
+ * Namen deshalb SPEICHERN statt verwerfen (wie ein normales Formularfeld
+ * beim Blur), nur Escape verwirft explizit. */
+let renamePop = null;
+const dismissRenamePop = (commit = true) => {
+  if (!renamePop) return;
+  if (commit) renamePop._machine.setLabel(renamePop._input.value);
+  renamePop.remove();
+  renamePop = null;
+  document.removeEventListener('pointerdown', onOutsideRenamePop, true);
+};
+const onOutsideRenamePop = (e) => { if (renamePop && !renamePop.contains(e.target)) dismissRenamePop(true); };
+
+function openRenamePopup(machine, anchorEl) {
+  dismissRenamePop(); // vorheriges Popup (falls offen) zuerst übernehmen
+
+  renamePop = document.createElement('div');
+  renamePop.className = 'rename-pop';
+  renamePop._machine = machine;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-pop__input';
+  input.maxLength = 30;
+  input.placeholder = machine.constructor.meta.name;
+  input.value = machine.label ?? '';
+  renamePop._input = input;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); dismissRenamePop(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); dismissRenamePop(false); }
+  });
+  renamePop.appendChild(input);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'rename-pop__reset';
+  resetBtn.textContent = '↺';
+  resetBtn.setAttribute('aria-label', 'Reset to default name');
+  resetBtn.addEventListener('click', () => { input.value = ''; dismissRenamePop(true); });
+  renamePop.appendChild(resetBtn);
+
+  document.body.appendChild(renamePop);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - renamePop.offsetWidth - 8, r.left));
+  renamePop.style.left = `${left}px`;
+  renamePop.style.top = `${Math.max(8, r.top - renamePop.offsetHeight - 8)}px`;
+  input.focus();
+  input.select();
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideRenamePop, true), 0);
+}
+
 /** Zuletzt hörbare Maschinen — Vergleichsbasis, um zu erkennen, ob ein
  *  Mute/Solo-Wechsel die hörbare Menge SCHRUMPFEN lässt (s. refreshGates). */
 let lastAudible = new Set();
@@ -18206,6 +18303,8 @@ class Machine {
     this.id = nextId++;
     this.muted = false;
     this.soloed = false;
+    /** Nutzer-Label statt des Typ-Namens, s. displayName/setLabel unten. */
+    this.label = null;
     /** Von der Jam-Ansicht gesetzt (s. setJamGate) — unabhängig von Mute/
      *  Solo. Default offen: solange niemand jammt, keine Einschränkung. */
     this.jamGateOpen = true;
@@ -18475,7 +18574,7 @@ class Machine {
 
   /* ---------- Faceplate ---------- */
   render() {
-    const { name, type, color, model = 'RW-00' } = this.constructor.meta;
+    const { type, color, model = 'RW-00' } = this.constructor.meta;
 
     const el = document.createElement('section');
     el.className = 'machine';
@@ -18492,7 +18591,7 @@ class Machine {
         <div class="machine__title" data-collapse-toggle>
           <span class="machine__chevron" aria-hidden="true">▾</span>
           <span>
-            <div class="machine__name">${name}</div>
+            <div class="machine__name" data-rename title="Tap to rename"><span data-name-text>${this.displayName}</span><span class="machine__rename-hint" aria-hidden="true">✎</span></div>
             <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
           </span>
         </div>
@@ -18511,6 +18610,15 @@ class Machine {
     // .mixer-group__toggle, das ebenfalls nicht persistiert wird).
     el.querySelector('[data-collapse-toggle]').addEventListener('click', () => {
       el.classList.toggle('is-collapsed');
+    });
+
+    // Name antippen -> umbenennen, statt (wie der Rest der Kopfzeile) das
+    // Panel ein-/auszuklappen -- stopPropagation, sonst würde derselbe Klick
+    // AUCH is-collapsed umschalten (der Name sitzt innerhalb des Toggle-Bereichs).
+    const nameEl = el.querySelector('[data-rename]');
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRenamePopup(this, nameEl);
     });
 
     this.headMuteBtn = el.querySelector('[data-mute]');
@@ -18549,6 +18657,7 @@ class Machine {
           inserts: this.serializeInserts(),
           clips: this.serializeClips(),
           lanes: automation.exportLanes(this.id),
+          label: this.label,
         };
         // Event VOR dispose() feuern: dispose() hängt el aus dem DOM aus,
         // ein bubbling Event auf einem bereits entfernten Knoten erreicht
@@ -18911,6 +19020,27 @@ class Machine {
     refreshGates();
   }
 
+  /** Nutzer-Label ("Kick", "Bassline", ...) statt des festen Typ-Namens
+   *  (this.constructor.meta.name) -- überall dort angezeigt, wo bisher der
+   *  Typ-Name stand (Rack-Zeile, Vollbild-Kopfzeile, Mixer/Jam/Song). Diese
+   *  beiden UI-Stellen bleiben dauerhaft im DOM (anders als Mixer/Jam/Song,
+   *  die bei jedem Öffnen komplett neu gerendert werden, s. deren render()-
+   *  Kommentare) -- deshalb hier direkt patchen statt auf ein Neu-Rendern
+   *  zu warten. */
+  get displayName() { return this.label || this.constructor.meta.name; }
+
+  setLabel(v) {
+    const trimmed = (v ?? '').trim().slice(0, 30);
+    this.label = trimmed || null;
+    // Nur den Text-Kindknoten patchen, nie den ganzen Container -- der
+    // trägt noch das LED-/Stift-Icon-Geschwisterelement (s. render()/
+    // rack.js#mount), ein textContent-Reset auf dem Container würde die
+    // mitreissen.
+    const nameTextEl = this.el?.querySelector('.machine__name [data-name-text]');
+    if (nameTextEl) nameTextEl.textContent = this.displayName;
+    if (this.rowNameEl) this.rowNameEl.textContent = this.displayName;
+  }
+
   /* ---------- Aufräumen ---------- */
   dispose() {
     transport.removeListener(this);
@@ -18934,7 +19064,7 @@ class Machine {
   }
 }
 
-return { Machine };
+return { Machine, openRenamePopup };
 })();
 
 /* ===== js/machines/tracked-drum-machine.js ===== */
@@ -22194,7 +22324,7 @@ class Rack {
       this.views.delete(machine);
 
       const MachineClass = machine.constructor;
-      undo.offer(`${MachineClass.meta.name} removed`, () => {
+      undo.offer(`${machine.displayName} removed`, () => {
         const restored = new MachineClass();
         // Vollständiges Bundle wiederherstellen (state/sends/inserts/clips/
         // lanes) -- derselbe Pfad wie project.js#loadProject, damit "Undo"
@@ -22205,6 +22335,7 @@ class Rack {
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
         if (state?.clips) restored.deserializeClips(state.clips);
+        if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
         if (state?.lanes) {
@@ -22284,13 +22415,13 @@ class Rack {
     panel.appendChild(fullEl);
     overlay.appendChild(panel);
 
-    const { name, color } = machine.constructor.meta;
+    const { color } = machine.constructor.meta;
     const row = document.createElement('div');
     row.className = 'rack-row';
     row.style.setProperty('--m-color', color);
     row.innerHTML = `
       <span class="rack-row__stripe"></span>
-      <span class="rack-row__name">${name}<span class="rack-row__led" data-led></span></span>
+      <span class="rack-row__name"><span data-name-text>${machine.displayName}</span><span class="rack-row__led" data-led></span></span>
       <span class="rack-row__pattern" data-pattern hidden></span>
       <span class="rack-row__actions">
         <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
@@ -22298,6 +22429,7 @@ class Rack {
       </span>
       <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
+    machine.rowNameEl = row.querySelector('[data-name-text]');
     // Aktivitäts-LED + aktiver Pattern-Buchstabe direkt in der Kompakt-
     // Zeile -- ohne das war das Rack bei laufendem Transport blind: man
     // sah nicht, welche Maschine gerade spielt oder welches Pattern aktiv
@@ -22326,7 +22458,32 @@ class Rack {
       machine.setMuted(!machine.muted);
       muteBtn.classList.toggle('is-active', machine.muted);
     });
-    row.addEventListener('click', () => this.#openFocus(machine));
+    // Halten -> Umbenennen-Popup (wie die anderen Halten-Menüs im Repo),
+    // kurzes Antippen -> Vollbild-Editor öffnen (unverändertes Verhalten).
+    // Bricht bei nennenswerter Fingerbewegung ab (MOVE_TOLERANCE) -- die
+    // Zeile sitzt in einer scrollbaren Liste, ein Scroll-Start darf nicht
+    // nach 500ms plötzlich das Rename-Popup aufreissen.
+    const RENAME_HOLD_MS = 500, MOVE_TOLERANCE = 8;
+    let holdTimer = null, held = false, downX = 0, downY = 0;
+    const cancelRowHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    row.addEventListener('pointerdown', (e) => {
+      held = false;
+      downX = e.clientX; downY = e.clientY;
+      holdTimer = setTimeout(() => {
+        held = true;
+        openRenamePopup(machine, row);
+      }, RENAME_HOLD_MS);
+    });
+    row.addEventListener('pointermove', (e) => {
+      if (holdTimer && Math.hypot(e.clientX - downX, e.clientY - downY) > MOVE_TOLERANCE) cancelRowHold();
+    });
+    row.addEventListener('pointerup', cancelRowHold);
+    row.addEventListener('pointerleave', cancelRowHold);
+    row.addEventListener('pointercancel', cancelRowHold);
+    row.addEventListener('click', () => {
+      if (held) { held = false; return; }
+      this.#openFocus(machine);
+    });
 
     const beforeView = beforeMachine ? this.views.get(beforeMachine) : null;
     document.body.insertBefore(overlay, beforeView?.overlay ?? null);
@@ -23350,7 +23507,7 @@ function buildColumn(machine) {
   col.innerHTML = `
     <div class="channel__head">
       <span class="channel__stripe"></span>
-      <div class="channel__name">${machine.constructor.meta.name}<small>#${machine.id}</small></div>
+      <div class="channel__name">${machine.displayName}<small>#${machine.id}</small></div>
     </div>
     <div class="clips"></div>
     <button type="button" class="clip-stop">STOP</button>
@@ -23435,7 +23592,7 @@ function openMacroPopup(machine, anchorEl) {
   head.className = 'macro-pop__head';
   const title = document.createElement('span');
   title.className = 'macro-pop__title';
-  title.textContent = machine.constructor.meta.name;
+  title.textContent = machine.displayName;
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'macro-pop__close';
@@ -23481,8 +23638,10 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  * project — komplette Sessions serialisieren und wiederherstellen.
  *
  * Format (v1):
- * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, clips?, lanes } ] }
+ * { v: 1, bpm, fx?, machines: [ { type, state, sends?, inserts?, clips?, lanes, label? } ] }
  *   - state: maschinenspezifisch (machine.serialize/deserialize)
+ *   - label: Nutzer-Umbenennung der Maschine (Basisklasse), fehlt in
+ *     alten Projekten → Typ-Name bleibt Default (s. machine.js#displayName)
  *   - sends: FX-Send-Pegel der Maschine (Basisklasse)
  *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
  *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
@@ -23510,6 +23669,7 @@ function serializeProject(rack) {
       inserts: m.serializeInserts(),
       clips: m.serializeClips(),
       lanes: automation.exportLanes(m.id),
+      label: m.label,
     })),
   };
 }
@@ -23552,6 +23712,7 @@ function loadProject(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
       loaded++;
@@ -23590,6 +23751,7 @@ function importMachines(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
       added.push(machine);
@@ -24326,7 +24488,7 @@ function wireSongUI(rack) {
         const name = document.createElement('span');
         name.className = 'song-lane__name';
         name.style.setProperty('--lane-color', color);
-        name.textContent = m.constructor.meta.name;
+        name.textContent = m.displayName;
         const track = document.createElement('div');
         track.className = 'song-track';
         const evs = song.events.filter((e) => e.m === idx).sort((a, b) => a.step - b.step);
@@ -24485,7 +24647,8 @@ function wireMixerUI(rack) {
       return;
     }
     for (const m of rack.machines) {
-      const { name, color } = m.constructor.meta;
+      const { color } = m.constructor.meta;
+      const name = m.displayName;
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
 
       if (Array.isArray(m.tracks)) {

@@ -737,7 +737,7 @@ function wireSongUI(rack) {
         const name = document.createElement('span');
         name.className = 'song-lane__name';
         name.style.setProperty('--lane-color', color);
-        name.textContent = m.constructor.meta.name;
+        name.textContent = m.displayName;
         const track = document.createElement('div');
         track.className = 'song-track';
         const evs = song.events.filter((e) => e.m === idx).sort((a, b) => a.step - b.step);
@@ -896,7 +896,8 @@ function wireMixerUI(rack) {
       return;
     }
     for (const m of rack.machines) {
-      const { name, color } = m.constructor.meta;
+      const { color } = m.constructor.meta;
+      const name = m.displayName;
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
 
       if (Array.isArray(m.tracks)) {
