@@ -639,6 +639,14 @@ export class Machine {
      *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
     this.clips = [];
 
+    /** Auto-Return-Schalter des Jam-X/Y-Pads (s. jam-view.js#buildXYPad,
+     *  .xy-spring-btn) — anders als die restlichen Jam-Pad-Einstellungen
+     *  (Achsen-Zuordnung, s. dort) EIN Sibling-Feld wie sends/inserts/clips,
+     *  weil Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie
+     *  sie ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
+     *  Default zurückzufallen. */
+    this.xySpring = false;
+
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
      *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
     this.sends = { delay: 0, reverb: 0 };
@@ -965,6 +973,7 @@ export class Machine {
           sends: { ...this.sends },
           inserts: this.serializeInserts(),
           clips: this.serializeClips(),
+          xySpring: this.xySpring,
           lanes: automation.exportLanes(this.id),
           label: this.label,
         };

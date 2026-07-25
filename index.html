@@ -18901,6 +18901,14 @@ class Machine {
      *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
     this.clips = [];
 
+    /** Auto-Return-Schalter des Jam-X/Y-Pads (s. jam-view.js#buildXYPad,
+     *  .xy-spring-btn) — anders als die restlichen Jam-Pad-Einstellungen
+     *  (Achsen-Zuordnung, s. dort) EIN Sibling-Feld wie sends/inserts/clips,
+     *  weil Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie
+     *  sie ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
+     *  Default zurückzufallen. */
+    this.xySpring = false;
+
     /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
      *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
     this.sends = { delay: 0, reverb: 0 };
@@ -19227,6 +19235,7 @@ class Machine {
           sends: { ...this.sends },
           inserts: this.serializeInserts(),
           clips: this.serializeClips(),
+          xySpring: this.xySpring,
           lanes: automation.exportLanes(this.id),
           label: this.label,
         };
@@ -23001,6 +23010,7 @@ class Rack {
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
         if (state?.clips) restored.deserializeClips(state.clips);
+        if (state?.xySpring) restored.xySpring = true;
         if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
@@ -23401,7 +23411,7 @@ function valueFromNorm(norm, meta) {
 
 /* ---------- X/Y-Pad-Zuordnung (pro Maschine, nicht persistiert -- wie
  * jamState: eine Performance-Einstellung fürs aktuelle Jammen, kein
- * Projekt-Zustand). Jede Achse trägt jetzt eine LISTE von Einträgen
+ * Projekt-Zustand -- EINZIGE Ausnahme ist `spring`, s. dort). Jede Achse trägt jetzt eine LISTE von Einträgen
  * { key, from, to } statt eines einzelnen Schlüssels -- "stacken" heisst
  * einfach: mehr als ein Eintrag in der Liste, jeder bekommt beim Ziehen
  * dieselbe normalisierte Pad-Position, nur auf sein eigenes [from,to]
@@ -23424,10 +23434,14 @@ function xyStateFor(machine) {
       x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
       y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
       // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
-      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Aus per
-      // Default, damit sich am bisherigen "haftenden" Verhalten nichts
-      // ändert, bis jemand es aktiv einschaltet.
-      spring: false,
+      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Startwert
+      // kommt aus machine.xySpring (Sibling-Feld, s. machine.js/project.js)
+      // -- das EINZIGE Stück Jam-Pad-Zustand, das über Neuladen hinweg
+      // erhalten bleibt (Achsen-Zuordnung bleibt bewusst reine Session-
+      // Einstellung, s. Kommentar oben). Jeder Toggle schreibt sofort
+      // zurück auf machine.xySpring (s. buildXYPad()), damit es dieselbe
+      // Quelle der Wahrheit bleibt, die auch serialisiert wird.
+      spring: machine.xySpring ?? false,
     };
     xyState.set(machine, st);
   }
@@ -24043,6 +24057,7 @@ function buildXYPad(machine) {
   springBtn.classList.toggle('is-active', st.spring);
   springBtn.addEventListener('click', () => {
     st.spring = !st.spring;
+    machine.xySpring = st.spring; // Sibling-Feld -- s. xyStateFor(), macht den Toggle persistent
     springBtn.classList.toggle('is-active', st.spring);
   });
 
@@ -24322,6 +24337,8 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  *     Teil des unterklassen-eigenen state)
  *   - clips: Jam-Clips der Maschine (Basisklasse), gleiches Sibling-
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
+ *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
+ *     fehlt in alten Projekten → Default false (aus)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
@@ -24342,6 +24359,7 @@ function serializeProject(rack) {
       sends: { ...m.sends },
       inserts: m.serializeInserts(),
       clips: m.serializeClips(),
+      xySpring: m.xySpring,
       lanes: automation.exportLanes(m.id),
       label: m.label,
     })),
@@ -24386,6 +24404,7 @@ function loadProject(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
@@ -24425,6 +24444,7 @@ function importMachines(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();

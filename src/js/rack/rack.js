@@ -70,6 +70,7 @@ export class Rack {
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
         if (state?.clips) restored.deserializeClips(state.clips);
+        if (state?.xySpring) restored.xySpring = true;
         if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
