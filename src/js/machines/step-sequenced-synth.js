@@ -70,7 +70,7 @@ export class StepSequencedSynth extends Machine {
    *  über den Halten-Chip im Rack (s. buildPatternControls#onAddClip),
    *  nur ohne den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
   addClipFromPattern(i) {
-    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })) });
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'notes', data: this.patterns[i].map((s) => ({ ...s })), sourceSlot: i });
   }
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */

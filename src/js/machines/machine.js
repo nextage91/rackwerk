@@ -857,9 +857,13 @@ export class Machine {
    * Wiedergabe weiss, wie er anzuwenden ist. Klips leben NEBEN den vier
    * A/B/C/D-Pattern-Slots, nicht als fünfter Slot — Hinzufügen ändert
    * `this.patterns`/`this.patternIndex` nicht.
+   * `sourceSlot` (optional, nur von addClipFromPattern() gesetzt) merkt
+   * sich, aus welchem A/B/C/D-Slot der Clip kam — jam-view.js nutzt das,
+   * um die Jam-Proto-Clip-Kacheln nach dem Hinzufügen um genau diesen
+   * Buchstaben zu verkürzen (s. dort).
    */
-  addClip({ name, shape, data }) {
-    const clip = { id: nextClipId++, name, shape, data };
+  addClip({ name, shape, data, sourceSlot }) {
+    const clip = { id: nextClipId++, name, shape, data, sourceSlot };
     this.clips.push(clip);
     return clip;
   }
@@ -870,7 +874,7 @@ export class Machine {
 
   /** Für project.js — analog zu `sends`/`inserts`, als Sibling-Feld. */
   serializeClips() {
-    return this.clips.map((c) => ({ name: c.name, shape: c.shape, data: c.data }));
+    return this.clips.map((c) => ({ name: c.name, shape: c.shape, data: c.data, sourceSlot: c.sourceSlot }));
   }
 
   deserializeClips(list) {

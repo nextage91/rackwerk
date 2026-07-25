@@ -642,41 +642,39 @@ function openClipDeleteMenu(machine, clipId, anchorEl) {
 
 /* ---------- Rendering ---------- */
 
-/** Solange eine Spur noch keine echten Clips hat: die vier A/B/C/D-
- *  Pattern-Slots direkt als antippbare "Proto-Clips" zeigen, statt nur
- *  auf den Halten-Chip im Rack zu verweisen -- der schnellste Weg vom
- *  "ich habe ein Pattern" zum "es läuft als Clip im Jam", ganz ohne
- *  Rack-Umweg. Ein Tap legt den Clip an (addClipFromPattern, dieselbe
- *  Kopie wie "+ Add Clip" im Rack) UND startet/reiht ihn direkt ein, wie
- *  ein echter Clip-Launcher-Slot. Leere Pattern-Slots bleiben antippbar,
- *  wirken aber blass (kein Grund, sie zu sperren -- vielleicht will man
- *  bewusst einen stillen Clip). Sobald mind. ein echter Clip existiert,
- *  übernimmt die normale Clip-Liste unten wieder (keine Dopplung). */
-function renderProtoClips(machine, clipsEl) {
-  clipsEl.innerHTML = `
-    <p class="proto-clips__hint">Tap a pattern to launch it as a clip:</p>
+/** Die A/B/C/D-Pattern-Slots, die noch KEINEN Clip haben, direkt als
+ *  antippbare "Proto-Clips" zeigen, statt nur auf den Halten-Chip im Rack
+ *  zu verweisen -- der schnellste Weg vom "ich habe ein Pattern" zum "es
+ *  läuft als Clip im Jam", ganz ohne Rack-Umweg. Ein Tap legt den Clip an
+ *  (addClipFromPattern, dieselbe Kopie wie "+ Add Clip" im Rack) UND
+ *  startet/reiht ihn direkt ein, wie ein echter Clip-Launcher-Slot. Leere
+ *  Pattern-Slots bleiben antippbar, wirken aber blass (kein Grund, sie zu
+ *  sperren -- vielleicht will man bewusst einen stillen Clip).
+ *  Bleibt (anders als früher) auch NACH dem ersten hinzugefügten Clip
+ *  sichtbar -- verkürzt sich aber um jeden bereits belegten Buchstaben
+ *  (`usedSlots`, aus den `sourceSlot`-Feldern der echten Clips, s.
+ *  machine.js#addClip), damit man mehrere Pattern-Slots nacheinander mit
+ *  je einem weiteren Tap in den Jam holen kann, ohne zwischendurch woanders
+ *  hinzutippen. Sind alle vier Slots schon Clips, gibt es nichts mehr
+ *  anzubieten -- liefert dann `''` (kein leerer Rest-Rahmen). */
+function renderProtoClipsHtml(machine, usedSlots) {
+  const remaining = [0, 1, 2, 3].filter((i) => !usedSlots.has(i));
+  if (!remaining.length) return '';
+  const hint = usedSlots.size ? 'Add another:' : 'Tap a pattern to launch it as a clip:';
+  return `
+    <p class="proto-clips__hint">${hint}</p>
     <div class="proto-clips">
-      ${'ABCD'.split('').map((letter, i) => `
-        <button type="button" class="proto-clip${machine.hasPatternContent(i) ? '' : ' is-empty'}" data-slot="${i}">${letter}</button>
+      ${remaining.map((i) => `
+        <button type="button" class="proto-clip${machine.hasPatternContent(i) ? '' : ' is-empty'}" data-slot="${i}">${'ABCD'[i]}</button>
       `).join('')}
     </div>
   `;
-  clipsEl.querySelectorAll('.proto-clip').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const clip = machine.addClipFromPattern(Number(btn.dataset.slot));
-      renderClips(machine, clipsEl);
-      toggleClip(machine, clip.id);
-    });
-  });
 }
 
 function renderClips(machine, clipsEl) {
-  if (!machine.clips.length) {
-    renderProtoClips(machine, clipsEl);
-    return;
-  }
   const st = stateFor(machine);
-  clipsEl.innerHTML = machine.clips.map((clip) => {
+  const usedSlots = new Set(machine.clips.map((c) => c.sourceSlot).filter((s) => s != null));
+  const clipsHtml = machine.clips.map((clip) => {
     const state = clip.id === st.activeClipId ? 'playing' : clip.id === st.queuedClipId ? 'queued' : 'filled';
     return `
       <div class="clip" data-clip-id="${clip.id}" data-state="${state}">
@@ -685,13 +683,23 @@ function renderClips(machine, clipsEl) {
       </div>
     `;
   }).join('');
+  clipsEl.innerHTML = clipsHtml + renderProtoClipsHtml(machine, usedSlots);
+
   clipsEl.querySelectorAll('.clip').forEach((el) => {
     el.addEventListener('click', () => {
       if (el.dataset.suppressClick) return;
       toggleClip(machine, Number(el.dataset.clipId));
     });
   });
-  makeReorderable(clipsEl, machine);
+  if (machine.clips.length) makeReorderable(clipsEl, machine);
+
+  clipsEl.querySelectorAll('.proto-clip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const clip = machine.addClipFromPattern(Number(btn.dataset.slot));
+      renderClips(machine, clipsEl);
+      toggleClip(machine, clip.id);
+    });
+  });
 }
 
 /** Clips innerhalb ihrer Spalte per Ziehen umsortieren (Pointer-Events,

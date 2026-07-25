@@ -132,7 +132,7 @@ export class TrackedDrumMachine extends Machine {
    *  über den Halten-Chip im Rack (s. buildControls#onAddClip), nur ohne
    *  den Umweg dorthin (Jam-Proto-Clips, s. jam-view.js). */
   addClipFromPattern(i) {
-    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i) });
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i), sourceSlot: i });
   }
 
   /* ---------- Sequenzer ---------- */

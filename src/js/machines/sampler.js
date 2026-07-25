@@ -267,7 +267,7 @@ export class Sampler extends Machine {
    *  Shape-Namens: Copy/Paste zwischen Sampler und anderen 8-Pad-Kits
    *  funktioniert dadurch nebenbei mit (gleiche Spuranzahl vorausgesetzt). */
   addClipFromPattern(i) {
-    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i) });
+    return this.addClip({ name: `Pattern ${'ABCD'[i]}`, shape: 'drums', data: this.#cloneSlot(i), sourceSlot: i });
   }
 
   /** Für den Sample-Editor (Popup, s. openSampleEditor): #trigger ist
