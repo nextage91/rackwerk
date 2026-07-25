@@ -12,6 +12,8 @@
  *     Teil des unterklassen-eigenen state)
  *   - clips: Jam-Clips der Maschine (Basisklasse), gleiches Sibling-
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
+ *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
+ *     fehlt in alten Projekten → Default false (aus)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
@@ -37,6 +39,7 @@ export function serializeProject(rack) {
       sends: { ...m.sends },
       inserts: m.serializeInserts(),
       clips: m.serializeClips(),
+      xySpring: m.xySpring,
       lanes: automation.exportLanes(m.id),
       label: m.label,
     })),
@@ -81,6 +84,7 @@ export function loadProject(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
@@ -120,6 +124,7 @@ export function importMachines(rack, data) {
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
       if (md.clips) machine.deserializeClips(md.clips);
+      if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();

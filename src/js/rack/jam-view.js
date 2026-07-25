@@ -181,7 +181,7 @@ function valueFromNorm(norm, meta) {
 
 /* ---------- X/Y-Pad-Zuordnung (pro Maschine, nicht persistiert -- wie
  * jamState: eine Performance-Einstellung fürs aktuelle Jammen, kein
- * Projekt-Zustand). Jede Achse trägt jetzt eine LISTE von Einträgen
+ * Projekt-Zustand -- EINZIGE Ausnahme ist `spring`, s. dort). Jede Achse trägt jetzt eine LISTE von Einträgen
  * { key, from, to } statt eines einzelnen Schlüssels -- "stacken" heisst
  * einfach: mehr als ein Eintrag in der Liste, jeder bekommt beim Ziehen
  * dieselbe normalisierte Pad-Position, nur auf sein eigenes [from,to]
@@ -204,10 +204,14 @@ function xyStateFor(machine) {
       x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
       y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
       // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
-      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Aus per
-      // Default, damit sich am bisherigen "haftenden" Verhalten nichts
-      // ändert, bis jemand es aktiv einschaltet.
-      spring: false,
+      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Startwert
+      // kommt aus machine.xySpring (Sibling-Feld, s. machine.js/project.js)
+      // -- das EINZIGE Stück Jam-Pad-Zustand, das über Neuladen hinweg
+      // erhalten bleibt (Achsen-Zuordnung bleibt bewusst reine Session-
+      // Einstellung, s. Kommentar oben). Jeder Toggle schreibt sofort
+      // zurück auf machine.xySpring (s. buildXYPad()), damit es dieselbe
+      // Quelle der Wahrheit bleibt, die auch serialisiert wird.
+      spring: machine.xySpring ?? false,
     };
     xyState.set(machine, st);
   }
@@ -823,6 +827,7 @@ function buildXYPad(machine) {
   springBtn.classList.toggle('is-active', st.spring);
   springBtn.addEventListener('click', () => {
     st.spring = !st.spring;
+    machine.xySpring = st.spring; // Sibling-Feld -- s. xyStateFor(), macht den Toggle persistent
     springBtn.classList.toggle('is-active', st.spring);
   });
 
