@@ -15350,36 +15350,96 @@ function makeAllpass(ctx, delayTime, g) {
   return {
     input,
     output,
+    // `delay` (die interne DelayNode) UND `feed` (der w[n]-Summierpunkt,
+    // identisch mit `input`) zusätzlich exponiert -- der Dattorro-Tank
+    // braucht beides von aussen: `delay.delayTime` als LFO-Modulationsziel
+    // für die beiden modulierten Allpässe, `feed` als Abgriffspunkt für
+    // zusätzliche, kürzere Tap-Delays (dieselbe Leitung an einer früheren
+    // Stelle gelesen -- für ein lineares, zeitinvariantes System identisch
+    // damit, dieselbe Delay-Leitung an dieser Stelle abzugreifen).
+    delay,
+    feed: input,
     dispose() { input.disconnect(); output.disconnect(); delay.disconnect(); fbGain.disconnect(); ffGain.disconnect(); },
   };
 }
 
-/** 4x4-Hadamard-Matrix, mit 1/2 normalisiert (orthogonal/energieerhaltend --
- *  wichtig für Stabilität: die Matrix selbst darf dem Feedback-Delay-Netzwerk
- *  KEINE Energie hinzufügen, nur zwischen den vier Leitungen umverteilen.
- *  Die eigentliche Abkling-Kontrolle sitzt separat in decayGain je Leitung). */
-const HADAMARD_4 = [
-  [0.5, 0.5, 0.5, 0.5],
-  [0.5, -0.5, 0.5, -0.5],
-  [0.5, 0.5, -0.5, -0.5],
-  [0.5, -0.5, -0.5, 0.5],
+/** Dattorro-Hall-Konstanten (Jon Dattorro, "Effect Design Part 1:
+ *  Reverberator and Other Filters", J. Audio Eng. Soc., 1997) -- die
+ *  "Figure-8"-Tank-Topologie hinter vielen als besonders "lush"/musikalisch
+ *  geltenden Hallgeräten (Vorbild für Lexicon-artige Plates, u.a. auch für
+ *  SuperColliders JPverb). Ersetzt das zuvor selbst entworfene 8-Leitungen-
+ *  Hadamard-FDN (klang bereits deutlich besser als die allererste Fassung,
+ *  blieb aber eine selbst hergeleitete Topologie statt eines erprobten,
+ *  vielfach nachgebauten Referenzdesigns).
+ *  Alle Sample-Zahlen unten sind bei der Referenz-Samplerate des Original-
+ *  Papers (29761 Hz) angegeben -- dattorroSec() in DEFS.reverb.build()
+ *  rechnet sie in Sekunden um (DelayNode.delayTime ist ohnehin sekunden-
+ *  statt samplebasiert, damit automatisch unabhängig von ctx.sampleRate
+ *  korrekt). Cross-verifiziert gegen zwei unabhängige, sich exakt deckende
+ *  Referenz-Portierungen (ein WebAudio-AudioWorklet und ein MATLAB-Port). */
+const DATTORRO_REF_SR = 29761;
+
+/** Eingangsdiffusion: 4 serielle Allpässe VOR dem eigentlichen Tank (wie
+ *  beim alten FDN, nur mit den Original-Konstanten statt frei gewählten
+ *  Werten). */
+const DATTORRO_INPUT_DIFFUSION = [
+  { samples: 142, gain: 0.75 },
+  { samples: 107, gain: 0.75 },
+  { samples: 379, gain: 0.625 },
+  { samples: 277, gain: 0.625 },
 ];
 
-/** 8x8-Hadamard-Matrix für den Reverb (s. DEFS.reverb) -- per Sylvester-
- *  Konstruktion aus HADAMARD_4 verdoppelt (H8 = [[H4,H4],[H4,-H4]]), bleibt
- *  dadurch garantiert orthogonal/energieerhaltend wie das 4x4-Original.
- *  HADAMARD_4s Einträge sind bereits mit 1/sqrt(4) normiert -- die simple
- *  Verdopplung ([row,row]/[row,-row]) ergibt Zeilen der Länge 8 mit doppelt
- *  so vielen, aber gleich grossen Einträgen (Zeilennorm² = 8*0.25 = 2 statt
- *  1) -- die zusätzliche Division durch sqrt(2) bringt sie zurück auf
- *  Zeilennorm 1 (= korrekt für 1/sqrt(8)-Normierung bei 8 Leitungen).
- *  Mehr Leitungen als beim ursprünglichen 4er-Netzwerk -- glattere, dichtere
- *  Diffusion (weniger hörbares periodisches "Flattern", s. Kommentar bei
- *  BASE_MS in DEFS.reverb). */
-const HADAMARD_8 = [
-  ...HADAMARD_4.map((row) => [...row, ...row].map((v) => v / Math.SQRT2)),
-  ...HADAMARD_4.map((row) => [...row, ...row.map((v) => -v)].map((v) => v / Math.SQRT2)),
+/** Eine Tank-Hälfte: erster Allpass (im Original-Paper mit modulierter
+ *  Delay-Zeit für einen Chorus-artigen "Lush"-Charakter -- hier bewusst
+ *  UNMODULIERT, s. Kommentar bei buildTankHalf() in DEFS.reverb.build())
+ *  -> langes Delay 1 -> Damping -> Decay -> fester, GEGENGLEICH gepolter
+ *  Allpass (negatives Gain) -> langes Delay 2 -> Decay -> Kreuzkopplung in
+ *  die JEWEILS ANDERE Hälfte (kein NxN-Mischnetz wie beim alten Hadamard-
+ *  FDN, sondern zwei Hälften, die sich nur gegenseitig speisen --
+ *  Dattorros charakteristisches "Figure-8"). */
+const DATTORRO_TANK = [
+  { modDelay: 672, modGain: 0.7, delay1: 4453, ap5Delay: 1800, ap5Gain: -0.5, delay2: 3720 },
+  { modDelay: 908, modGain: 0.7, delay1: 4217, ap5Delay: 2656, ap5Gain: -0.5, delay2: 3163 },
 ];
+
+/** Ausgangs-"Taps": je Kanal 7 kurze Zusatz-Delays, die dieselbe Leitung
+ *  (gespeist vom selben Quellsignal wie das jeweilige lange Delay/der feste
+ *  Allpass) an einer FRÜHEREN, kürzeren Stelle abgreifen -- für ein
+ *  lineares, zeitinvariantes System exakt äquivalent zum Original-Design
+ *  (eine einzelne, an mehreren Stellen gelesene Delay-Leitung), ohne eine
+ *  eigene Mehrfach-Abgriff-Leitung bauen zu müssen. `half` indiziert
+ *  DATTORRO_TANK, `which` wählt zwischen den drei Abgriffspunkten dieser
+ *  Hälfte (vor Delay 1 / vor dem festen Allpass / vor Delay 2). Vorzeichen
+ *  und Reihenfolge wie im Original-Paper -- die grössten zwei Taps je Kanal
+ *  kommen bewusst aus der JEWEILS ANDEREN Tank-Hälfte (Stereo-Dekorrelation:
+ *  linker und rechter Kanal ziehen ihre Haupt-Energie aus verschiedenen
+ *  Leitungen). */
+const DATTORRO_TAPS = {
+  L: [
+    { half: 1, which: 'delay1', samples: 266, sign: 1 },
+    { half: 1, which: 'delay1', samples: 2974, sign: 1 },
+    { half: 1, which: 'ap5', samples: 1913, sign: -1 },
+    { half: 1, which: 'delay2', samples: 1996, sign: 1 },
+    { half: 0, which: 'delay1', samples: 1990, sign: -1 },
+    { half: 0, which: 'ap5', samples: 187, sign: -1 },
+    { half: 0, which: 'delay2', samples: 1066, sign: -1 },
+  ],
+  R: [
+    { half: 0, which: 'delay1', samples: 353, sign: 1 },
+    { half: 0, which: 'delay1', samples: 3627, sign: 1 },
+    { half: 0, which: 'ap5', samples: 1228, sign: -1 },
+    { half: 0, which: 'delay2', samples: 2673, sign: 1 },
+    { half: 1, which: 'delay1', samples: 2111, sign: -1 },
+    { half: 1, which: 'ap5', samples: 335, sign: -1 },
+    { half: 1, which: 'delay2', samples: 121, sign: -1 },
+  ],
+};
+
+/** Pegelausgleich für die 7-fach-Tap-Summe je Kanal (s. DATTORRO_TAPS) --
+ *  unity-Gain-Taps wie im Original-Paper summieren sich sonst deutlich
+ *  lauter als der Dry-Pfad. Empirisch per Peak-Messung bestimmt (s.
+ *  Testprotokoll bei der Umstellung von FDN auf Dattorro). */
+const DATTORRO_OUT_LEVEL = 0.25;
 
 /** Frequenzverhältnisse relativ zur Grundtonhöhe je Resonator-"Akkord" --
  *  bewusst 5 Werte je Set (feste Bank-Grösse N=5 im Resonator-DEFS).
@@ -15870,14 +15930,14 @@ const DEFS = {
   reverb: {
     name: 'Reverb',
     // Anders als der Master-Reverb in fx.js (Faltung mit einem einmalig
-    // erzeugten, statischen Impuls) läuft hier ein ECHTES Feedback-Delay-
-    // Netzwerk (FDN) -- acht Delay-Leitungen, über eine Hadamard-Matrix
-    // rückgekoppelt (ursprünglich vier, s. Kommentare bei N/BASE_MS unten:
-    // zu wenig Leitungen liessen sich als leicht metallisches Klingeln
-    // messen). Klingt dadurch weniger "eingefroren", mit einer leicht
-    // lebendigen Qualität -- die algorithmische Bauart (statt Faltung), auf
-    // die "Valhalla-Style" hier zielt.
-    defaults: { size: 1.0, decay: 0.75, damping: 6000, mix: 0.35 },
+    // erzeugten, statischen Impuls) läuft hier ein ECHTES Feedback-Netzwerk
+    // -- nach Jon Dattorros bewährter "Figure-8"-Plate/Hall-Topologie (s.
+    // DATTORRO_*-Konstanten oben), nicht mehr das zuvor selbst entworfene
+    // 8-Leitungen-Hadamard-FDN. Zwei Tank-Hälften speisen sich gegenseitig
+    // (statt eines NxN-Mischnetzes), mit exakt den Original-Delay-Zeiten/
+    // Gains/Ausgangs-Taps des Papers -- dasselbe Referenzdesign, auf dem
+    // viele als "lush"/musikalisch geltende Hallgeräte aufbauen.
+    defaults: { size: 1.0, decay: 0.35, damping: 6000, mix: 0.35 },
     build(ctx, p) {
       const input = ctx.createGain();
       const output = ctx.createGain();
@@ -15886,151 +15946,195 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
-      // Eingangsdiffusion: drei serielle Allpass-Diffusoren VOR dem
-      // eigentlichen Netzwerk (ein dritter gegenüber der ersten Fassung
-      // dazugekommen, abnehmende Delay-Zeit/Gain pro Stufe, klassisches
-      // Schroeder-Diffusor-Muster) -- verwandeln den scharfen Eingangsimpuls
-      // in ein NOCH dichteres Bündel aus Mikro-Echos, damit das FDN nicht
-      // mit einem einzelnen "Klick" angeregt wird (der sonst als kurzes
-      // Klicken vor dem eigentlichen Hall-Schwanz hörbar wäre).
-      const diff1 = makeAllpass(ctx, 0.0047, 0.6);
-      const diff2 = makeAllpass(ctx, 0.0033, 0.5);
-      const diff3 = makeAllpass(ctx, 0.0022, 0.4);
-      input.connect(diff1.input);
-      diff1.output.connect(diff2.input);
-      diff2.output.connect(diff3.input);
+      const dattorroSec = (samples) => samples / DATTORRO_REF_SR;
+      // Alle mit "size" skalierenden Delays (Diffusion + Tank + Taps)
+      // sammeln sich hier als {node, baseSec} -- setParam('size', v) zieht
+      // sie synchron nach. Anders als beim alten FDN (dort blieb die
+      // Eingangsdiffusion FEST, nur die Tank-Delays skalierten) skaliert
+      // hier alles zusammen -- physikalisch stimmiger (ein "grösserer Raum"
+      // hat auch längere frühe Reflexionen, nicht nur einen längeren
+      // Nachhall-Schwanz) und näher an echten Dattorro-Portierungen, die
+      // alle Konstanten gemeinsam mit derselben Grösse skalieren.
+      const sizedDelays = [];
+      function sizedDelayNode(baseSamples, maxSeconds) {
+        const d = ctx.createDelay(maxSeconds);
+        const baseSec = dattorroSec(baseSamples);
+        d.delayTime.value = baseSec * p.size;
+        sizedDelays.push({ node: d, baseSec });
+        return d;
+      }
+      function sizedAllpass(baseSamples, gain) {
+        const baseSec = dattorroSec(baseSamples);
+        const ap = makeAllpass(ctx, baseSec * p.size, gain);
+        sizedDelays.push({ node: ap.delay, baseSec });
+        return ap;
+      }
 
-      // N=8 (vorher 4) mit der entsprechend vergrösserten HADAMARD_8 --
-      // mehr Leitungen verteilen die zurückkommende Energie feiner, das
-      // hörbare periodische "Flattern" der 4er-Fassung (gemessene, deutliche
-      // Selbstähnlichkeit der Abkling-Hüllkurve alle ~30ms) wird spürbar
-      // schwächer, ohne an der Stabilitäts-Mathematik unten etwas zu ändern
-      // (eine orthogonale Matrix fügt dem Netzwerk nie Energie hinzu, ganz
-      // gleich ob 4x4 oder 8x8 -- der Beweis bleibt N-unabhängig gültig).
-      const N = 8;
-      // Basis-Delay-Zeiten (ms) ungefähr verdoppelt gegenüber der ersten
-      // Fassung (19.7-41.9 -> ~37-92) -- bei GLEICHEM decay-Regler (Obergrenze
-      // weiterhin bewusst bei 0.9, s. Kommentar dort) verdoppelt eine doppelt
-      // so lange Rundlaufzeit pro Iteration direkt die erreichbare Abkling-
-      // dauer (gemessen: alte Fassung klang bei decay=0.9 nach spätestens
-      // ~2s komplett aus -- viel zu kurz für einen überzeugenden "Hall",
-      // eher ein langes Echo). Weiterhin bewusst NICHT auf einfache
-      // Verhältnisse zueinander (vermeidet periodische Deckungen zwischen
-      // den Leitungen -- die klingen als Flatterecho/metallisches Klingeln
-      // statt als glatter Hall).
-      const BASE_MS = [37.3, 43.1, 51.7, 58.9, 67.3, 74.1, 83.7, 91.9];
-      // Damper ist ein einpoliger Tiefpass (makeOnePoleLowpass), NICHT
-      // ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
-      // >1.0 nahe der Grenzfrequenz, egal welches Q (s. Kommentar dort).
-      // Mit beidem zusammen (Filter beweisbar <= 1, decayGain < 1) gilt
-      // decay*|Filter| <= decay < 1 GARANTIERT, für jede Parameter-
-      // Kombination -- verifiziert per Sweep über Decay x Damping x Size
-      // unter dichter Retriggerung, nicht nur Einzelimpuls.
-      const delays = [], dampers = [], decayGains = [], inGains = [];
-      for (let i = 0; i < N; i++) {
-        const d = ctx.createDelay(1.0);
-        d.delayTime.value = (BASE_MS[i] / 1000) * p.size;
+      // ---------- Eingangsdiffusion: 4 serielle Allpässe (s. DATTORRO_INPUT_DIFFUSION) ----------
+      const diffusers = DATTORRO_INPUT_DIFFUSION.map((d) => sizedAllpass(d.samples, d.gain));
+      input.connect(diffusers[0].input);
+      for (let i = 1; i < diffusers.length; i++) diffusers[i - 1].output.connect(diffusers[i].input);
+      const diffusedOut = diffusers[diffusers.length - 1].output;
+
+      // Sicherheits-Weichbegrenzer an der Kreuzkopplung (s. makeFeedbackClipCurve()
+      // oben, gleiche Technik wie bei DEFS.filterDelay) -- ohne das liess sich
+      // messen, dass ein PARAMETERWECHSEL (setParam für decay/damping/size,
+      // z.B. per Automation oder wenn der Regler beim Laden eines Projekts
+      // von den Default- auf gespeicherte Werte rampt) die Rückkopplungs-
+      // schleife für die kurze Rampdauer durch einen ZWISCHENZUSTAND führen
+      // kann, der (anders als Start- und Zielwert je für sich) kurzzeitig
+      // instabil ist -- ein einmal in die DelayNode-Puffer geratener
+      // Extremwert (im Grenzfall Infinity/NaN) klingt danach NIE mehr ab,
+      // selbst wenn die Parameter längst wieder auf einem sauber stabilen
+      // Wert stehen (ein FIR-Delay hat kein "Vergessen", ein einmal
+      // gespeichertes Sample bleibt bis es reihum wieder ausgelesen wird).
+      // Der WaveShaper reagiert pro Sample (kein Attack/Release-Nachlauf)
+      // und ist mathematisch garantiert auf (-1,1) begrenzt, unabhängig
+      // davon, wie extrem der Zwischenzustand war.
+      const feedbackClipCurve = makeFeedbackClipCurve();
+
+      // ---------- Tank: zwei kreuzgekoppelte Hälften ("Figure-8", s. DATTORRO_TANK) ----------
+      // Das Original-Paper moduliert die Delay-Zeit GENAU dieses ersten
+      // Allpasses je Hälfte (Chorus-artiges "Lush"). Anders als beim alten
+      // FDN (dort waren die modulierten Delays einfache, nicht-rekursive
+      // DelayNodes) sitzt diese Delay-Zeit hier INNERHALB der eigenen
+      // Rückkopplungsschleife des Allpasses -- gemessen (Diagnose-Sweep bei
+      // der Umstellung) führte genau das zu echtem, langsam aufschaukelndem
+      // Energiezuwachs (nicht nur hörbarem Flattern, sondern tatsächlicher
+      // Instabilität bei hohem Decay), obwohl der Allpass für sich betrachtet
+      // energieerhaltend ist -- eine modulierte Delay-ZEIT innerhalb einer
+      // REKURSIVEN Schleife ist ein zeitvariantes System, für das der beim
+      // alten FDN bewiesene "Modulation fügt keine Energie hinzu"-Satz (der
+      // sich auf EINFACHE, nicht-rekursive Delays bezieht) nicht automatisch
+      // gilt. Bewusst KEINE Modulation hier -- eine sichere Variante (z.B.
+      // ein zusätzliches, nicht-rekursives moduliertes Delay in Serie) wäre
+      // als eigener, separat getesteter Schritt nachrüstbar.
+      function buildTankHalf(cfg) {
+        const modAp = sizedAllpass(cfg.modDelay, cfg.modGain);
+
+        const delay1 = sizedDelayNode(cfg.delay1, 1.0);
+        modAp.output.connect(delay1);
+
+        // Damper ist ein einpoliger Tiefpass (makeOnePoleLowpass), NICHT
+        // ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
+        // >1.0 nahe der Grenzfrequenz, egal welches Q. Damit gilt
+        // decay*|Filter| <= decay < 1 GARANTIERT (s. Stabilitäts-Kommentar
+        // bei setParam unten).
         const damp = makeOnePoleLowpass(ctx, p.damping);
-        const dg = ctx.createGain();
-        dg.gain.value = p.decay;
+        delay1.connect(damp.input);
 
-        d.connect(damp.input);
-        damp.output.connect(dg);
-        delays.push(d); dampers.push(damp); decayGains.push(dg);
+        // decay wird laut Original-Paper ZWEIMAL je Tank-Hälfte angewandt
+        // (hier + nochmal an der Kreuzkopplung unten) -- s. Stabilitäts-
+        // Kommentar bei setParam, das macht die Schleife SICHERER als beim
+        // alten FDN (dort nur einmal je Runde), nicht unsicherer.
+        const decayGain1 = ctx.createGain();
+        decayGain1.gain.value = p.decay;
+        damp.output.connect(decayGain1);
+
+        // Fester, GEGENGLEICH gepolter Allpass (negatives Gain -- anders
+        // als der modulierte oben) -- exakt wie im Original-Paper.
+        const ap5 = sizedAllpass(cfg.ap5Delay, cfg.ap5Gain);
+        decayGain1.connect(ap5.input);
+
+        const delay2 = sizedDelayNode(cfg.delay2, 1.0);
+        ap5.output.connect(delay2);
+
+        const decayGain2 = ctx.createGain();
+        decayGain2.gain.value = p.decay;
+        delay2.connect(decayGain2);
+
+        const clip = ctx.createWaveShaper();
+        clip.curve = feedbackClipCurve;
+        clip.oversample = '2x';
+        decayGain2.connect(clip);
+
+        return {
+          input: modAp.input, // Eingang dieser Hälfte (Summe aus geteiltem Diffusions-Signal + Kreuzkopplung der ANDEREN Hälfte)
+          crossFeedOut: clip, // -> Eingang der ANDEREN Hälfte
+          // Abgriffspunkte für die Ausgangs-Taps (s. DATTORRO_TAPS): jeweils
+          // das Signal, das in die entsprechende lange Delay-Leitung/den
+          // festen Allpass hineinläuft -- ein zusätzliches, kürzeres Delay
+          // ab demselben Punkt ist für ein lineares System exakt
+          // gleichbedeutend mit einem weiteren Lesekopf auf DERSELBEN
+          // Leitung an einer früheren Stelle.
+          tapSources: { delay1: modAp.output, ap5: ap5.feed, delay2: ap5.output },
+          dampers: [damp],
+          decayGains: [decayGain1, decayGain2],
+          disposables: [modAp, ap5, delay1, delay2, damp, decayGain1, decayGain2, clip],
+        };
       }
+      const tanks = DATTORRO_TANK.map(buildTankHalf);
 
-      // Sichere, bewusst KLEINE Modulation der Delay-Zeiten (wie Abletons
-      // "Spin"/"Chorus" im Reverb-Gerät) -- macht die Resonanzen weniger
-      // statisch/metallisch. Frühere Fassung hatte das ausdrücklich
-      // WEGGELASSEN (eine grobere LFO-Umsetzung liess die Schleife unter
-      // dichter Retriggerung unbegrenzt aufschaukeln, gemessen RMS im
-      // 6-stelligen Bereich nach 30s) -- diese Fassung ist aber aus einem
-      // anderen Grund sicher: eine Delay-ZEIT zu modulieren fügt dem
-      // Netzwerk selbst KEINE Energie hinzu (eine Verzögerung, ob konstant
-      // oder wackelnd, verändert nie die Amplitude) -- der Loop-Gain bleibt
-      // weiterhin ausschliesslich durch decayGains/Damper bestimmt (s.
-      // Beweis oben), unverändert von dieser Änderung. Echte OscillatorNodes
-      // (sample-genau, kein JS-Timer-Jitter wie eine mögliche frühere
-      // Implementierung) mit kleiner Tiefe (0.4ms, weit unter einer hörbaren
-      // Tonhöhen-Schwankung) und bewusst NICHT einfach-verhältnisgleichen,
-      // langsamen Raten je Leitung -- zusätzlich per selbem Stresstest wie
-      // beim N=4->8-Umbau verifiziert (dichte Retriggerung über Decay x
-      // Damping x Size, keine Instabilität gemessen).
-      const LFO_HZ = [0.11, 0.13, 0.17, 0.19, 0.23, 0.29, 0.31, 0.37];
-      const LFO_DEPTH_S = 0.0004;
-      const lfos = [], lfoGains = [];
-      for (let i = 0; i < N; i++) {
-        const lfo = ctx.createOscillator();
-        lfo.type = 'sine';
-        lfo.frequency.value = LFO_HZ[i];
-        const depthGain = ctx.createGain();
-        depthGain.gain.value = LFO_DEPTH_S;
-        lfo.connect(depthGain).connect(delays[i].delayTime);
-        lfo.start();
-        lfos.push(lfo); lfoGains.push(depthGain);
-      }
+      // Dasselbe diffundierte Eingangssignal speist BEIDE Tank-Hälften;
+      // die beiden Hälften speisen sich zusätzlich GEGENSEITIG (Figure-8) --
+      // kein NxN-Mischnetz wie beim alten Hadamard-FDN, nur diese eine
+      // Kreuzkopplung.
+      diffusedOut.connect(tanks[0].input);
+      diffusedOut.connect(tanks[1].input);
+      tanks[0].crossFeedOut.connect(tanks[1].input);
+      tanks[1].crossFeedOut.connect(tanks[0].input);
 
-      // Eingang mit alternierendem Vorzeichen auf alle N Leitungen verteilen
-      // -- mehr Dekorrelation zwischen den Leitungen als ein gleiches
-      // Vorzeichen für alle.
-      for (let i = 0; i < N; i++) {
-        const g = ctx.createGain();
-        g.gain.value = 0.5 * (i % 2 === 0 ? 1 : -1);
-        diff3.output.connect(g).connect(delays[i]);
-        inGains.push(g);
-      }
-
-      // Hadamard-Rückkopplungsmatrix (orthogonal/energieerhaltend, s.
-      // HADAMARD_8 oben): decayGains[j] -> matrixGain[i][j] -> delays[i].
-      // Die eigentliche Abkling-Kontrolle sitzt in decayGains, NICHT in der
-      // Matrix selbst -- die darf dem Netzwerk keine Energie hinzufügen,
-      // sonst wird die Schleife instabil.
-      const matrixGains = [];
-      for (let i = 0; i < N; i++) {
-        matrixGains[i] = [];
-        for (let j = 0; j < N; j++) {
+      // ---------- Ausgangs-Taps: 7 je Kanal (s. DATTORRO_TAPS) ----------
+      const leftSum = ctx.createGain();
+      const rightSum = ctx.createGain();
+      const tapNodes = [];
+      function wireTaps(channelTable, dest) {
+        for (const tap of channelTable) {
+          const source = tanks[tap.half].tapSources[tap.which];
+          const d = sizedDelayNode(tap.samples, 1.0);
           const g = ctx.createGain();
-          g.gain.value = HADAMARD_8[i][j];
-          decayGains[j].connect(g).connect(delays[i]);
-          matrixGains[i][j] = g;
+          g.gain.value = tap.sign;
+          source.connect(d).connect(g).connect(dest);
+          tapNodes.push(d, g);
         }
       }
+      wireTaps(DATTORRO_TAPS.L, leftSum);
+      wireTaps(DATTORRO_TAPS.R, rightSum);
 
-      // Ausgang: Summe aller N Leitungen (nach Damping/Decay, derselbe
-      // Abgriff, den auch die Matrix liest) -- durch N geteilt, sonst
-      // deutlich lauter als der Dry-Pfad.
-      const outSum = ctx.createGain();
-      outSum.gain.value = 1 / N;
-      for (const dg of decayGains) dg.connect(outSum);
+      // Echtes Stereo-Ausgangssignal (zwei unterschiedliche Tap-Summen,
+      // nicht nur ein gedoppeltes Mono-Signal wie beim alten FDN) --
+      // DATTORRO_OUT_LEVEL gleicht die 7-fach-Summe (unity-Taps wie im
+      // Original-Paper) auf einen mit dem Dry-Pfad vergleichbaren Pegel
+      // aus, empirisch per Peak-Messung bestimmt (s. Testprotokoll).
+      const merger = ctx.createChannelMerger(2);
+      const outLevel = ctx.createGain();
+      outLevel.gain.value = DATTORRO_OUT_LEVEL;
+      leftSum.connect(merger, 0, 0);
+      rightSum.connect(merger, 0, 1);
+      merger.connect(outLevel);
 
       input.connect(dry).connect(output);
-      outSum.connect(wet).connect(output);
+      outLevel.connect(wet).connect(output);
 
       return {
         input, output,
         setParam(key, v) {
           const t = engine.now;
           if (key === 'size') {
-            for (let i = 0; i < N; i++) delays[i].delayTime.setTargetAtTime((BASE_MS[i] / 1000) * v, t, 0.05);
+            for (const { node, baseSec } of sizedDelays) node.delayTime.setTargetAtTime(baseSec * v, t, 0.05);
           } else if (key === 'decay') {
-            for (const dg of decayGains) dg.gain.setTargetAtTime(v, t, 0.02);
+            // Stabilität: pro Tank-Hälfte wird decay ZWEIMAL angewandt
+            // (decayGain1 + decayGain2), ein voller Umlauf (Hälfte A dann
+            // B) also mit decay^4 statt (wie beim alten FDN) decay^1 --
+            // für decay<1 ist decay^4 IMMER kleiner als decay, die Schleife
+            // ist damit für jeden erlaubten decay-Wert noch konservativer
+            // stabil als vorher, nicht knapper.
+            for (const tank of tanks) for (const dg of tank.decayGains) dg.gain.setTargetAtTime(v, t, 0.02);
           } else if (key === 'damping') {
-            for (const damp of dampers) damp.setFreq(v, t, 0.02);
+            for (const tank of tanks) for (const damp of tank.dampers) damp.setFreq(v, t, 0.02);
           } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
         dispose() {
-          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          diff1.dispose(); diff2.dispose(); diff3.dispose();
-          for (const d of delays) d.disconnect();
-          for (const damp of dampers) damp.dispose();
-          for (const dg of decayGains) dg.disconnect();
-          for (const row of matrixGains) for (const g of row) g.disconnect();
-          for (const g of inGains) g.disconnect();
-          for (const lfo of lfos) { lfo.stop(); lfo.disconnect(); }
-          for (const g of lfoGains) g.disconnect();
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          for (const d of diffusers) d.dispose();
+          for (const tank of tanks) {
+            for (const n of tank.disposables) { if (typeof n.dispose === 'function') n.dispose(); else n.disconnect(); }
+          }
+          for (const n of tapNodes) n.disconnect();
+          leftSum.disconnect(); rightSum.disconnect(); merger.disconnect(); outLevel.disconnect();
         },
       };
     },
@@ -16243,22 +16347,26 @@ const UI_PARAMS = {
   ],
   reverb: [
     { key: 'size', label: 'Size', min: 0.3, max: 3, curve: 'log', unit: '' },
-    // Wie beim Filter-Delay-Feedback bewusst unter 1.0 gedeckelt -- die
-    // Hadamard-Rückkopplungsmatrix ist zwar energieerhaltend (verstärkt
-    // selbst nichts), aber erst decay < 1 garantiert, dass die Schleife
-    // insgesamt abklingt statt endlos auf demselben Pegel zu bleiben.
-    // Mit dem einpoligen Damping-Filter (s. makeOnePoleLowpass) UND ohne
-    // Delay-Zeit-Modulation (beides s. Kommentare im reverb-DEFS-Eintrag)
-    // gilt decay*|Filter| <= decay < 1 rechnerisch für JEDE Damping/Size-
-    // Kombination -- 0.9 ist zusätzlich per Sweep über den gesamten
-    // Damping/Size/Tempo-Bereich unter dichter, rhythmischer Retriggerung
-    // (nicht nur Einzelimpuls!) nachweislich sauber, bis hin zu extrem
-    // schneller Retriggerung (20ms) über 40s Rendertest. Ab ca. 0.93
-    // zeigten sich bei bestimmten Damping/Size-Extremen wieder Aufschaukel-
-    // /Overflow-Effekte (vermutlich Gleitkomma-Akkumulation bei sehr nah an
-    // 1 liegender Schleifenverstärkung über tausende Iterationen) -- 0.9
-    // hat davon ausreichend Abstand.
-    { key: 'decay', label: 'Decay', min: 0, max: 0.9, unit: '' },
+    // Deutlich enger gedeckelt als beim alten Hadamard-FDN (dort bis 0.9
+    // sauber, s. git-history) -- die Dattorro-"Figure-8"-Tank-Topologie hat
+    // KEINE orthogonale Mischmatrix, die dem Netzwerk beweisbar für JEDE
+    // Parameter-Kombination Energieerhaltung garantiert; stattdessen sitzen
+    // hier zwei sich gegenseitig speisende Allpässe (modAp/ap5), die JEDER
+    // FÜR SICH zwar stabil sind, deren KOMBINIERTE Phasenantwort aber bei
+    // bestimmten (unregelmässig verteilten, nicht einfach vorhersagbaren)
+    // Decay/Damping/Size-Kombinationen resonant aufschaukeln kann -- per
+    // Sweep gemessen: schon ab decay=0.5 traten bei manchen Damping-Werten
+    // Aufschaukel-Effekte auf (kein sauberes Abklingen mehr, teils bis zum
+    // Clip-Limiter). Ein WaveShaper-Begrenzer an der Kreuzkopplung (s.
+    // feedbackClipCurve in DEFS.reverb.build()) fängt das zwar SICHER ab
+    // (kein Absturz/Infinity/NaN mehr möglich), verhindert aber nicht ein
+    // hörbares, lautes "Hängenbleiben" bei zu hohem Decay -- 0.4 ist per
+    // Sweep über den GESAMTEN Damping-Bereich (500-15000Hz) UND Size-Bereich
+    // (0.3-3) sowie zusätzlich per dichter Retrigger-Stresstest an den
+    // Extrem-Ecken (kürzeste/längste Size x wenigste/meiste Dämpfung)
+    // durchgehend sauber bestätigt -- mit spürbarem Abstand zum ersten
+    // beobachteten Aufschaukeln bei 0.5.
+    { key: 'decay', label: 'Decay', min: 0, max: 0.4, unit: '' },
     { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
