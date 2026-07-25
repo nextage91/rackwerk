@@ -945,9 +945,10 @@ button {
   gap: 5px;
   overflow-y: auto;
 }
-/* Proto-Clips: solange eine Spur noch keine echten Clips hat, die vier
-   A/B/C/D-Pattern-Slots direkt antippbar zeigen (s. jam-view.js
-   #renderProtoClips) statt nur auf den Halten-Chip im Rack zu verweisen. */
+/* Proto-Clips: die A/B/C/D-Pattern-Slots ohne eigenen Clip direkt antippbar
+   zeigen (s. jam-view.js #renderProtoClipsHtml) statt nur auf den
+   Halten-Chip im Rack zu verweisen -- bleibt auch nach dem ersten
+   hinzugefügten Clip sichtbar, nur um dessen Buchstaben verkürzt. */
 .proto-clips__hint {
   flex: 0 0 auto;
   margin: 0 0 6px;
@@ -955,6 +956,14 @@ button {
   line-height: 1.4;
   color: var(--ink-faint);
   text-align: center;
+}
+/* Folgt der Hinweis auf mindestens einen bereits vorhandenen Clip (Fall
+   "Add another:"), ein dünner Trenner + etwas Extra-Abstand -- sonst
+   klebt die Restauswahl optisch an der Clip-Liste darüber. */
+.clip + .proto-clips__hint {
+  margin-top: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--edge-dark);
 }
 .proto-clips {
   flex: 1 1 auto;
