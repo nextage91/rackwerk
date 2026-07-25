@@ -21201,22 +21201,24 @@ const { AnalogKit } = (() => {
  *
  * - BD/SD/Toms: kürzere, knackigere Hüllkurven als die BeatBox, SD mit
  *   Doppel-Ton-Body (zwei leicht verstimmte Oszillatoren, je eigener
- *   Decay) statt einem gemeinsamen. BD zusätzlich durch ein leicht
- *   resonantes Tiefpassfilter (das "Boing" einer echten VCF) plus eine
- *   sanfte Sättigungsstufe (Waveshaper) für den Punch, SD-Body ebenso
- *   leicht angesättigt statt komplett sauber.
- * - CH/OH/CC/RC: 6 verstimmte Oszillatoren durchs Hochpass/Bandpass für
- *   den metallischen Grundklang, plus eine hochpassgefilterte Rausch-
- *   schicht darunter für die Dichte, die das echte 909-PCM-Cymbal-Sample
- *   hat (ein reines Oszillatorbündel klingt sonst zu "sauber"/808-artig).
- *   Die 6 Oszillatoren pro Stimme laufen dabei KONTINUIERLICH (s.
- *   #buildAudio) statt bei jedem Anschlag frisch bei Phase 0 zu starten
- *   — wie beim echten 909, wo Trigger nur ein VCA-Gate auf dem gerade
- *   aktuellen (frei driftenden) Phasenverhältnis öffnen. Das ist der
- *   eigentliche Grund, warum zwei Anschläge derselben Hi-Hat am echten
- *   Gerät nie identisch klingen — mit frischen Oszillatoren pro Hit
- *   (frühere Version hier) ist jeder Anschlag dagegen bit-identisch, ein
- *   klassischer "das ist Software"-Verräter.
+ *   Decay) statt einem gemeinsamen. BD zusätzlich durch ein neutrales
+ *   (nicht resonantes -- dafür fehlt in der Original-Schaltung die Basis,
+ *   s. bd()) Tiefpassfilter plus eine sanfte Sättigungsstufe (Waveshaper)
+ *   für den Punch, SD-Body ebenso leicht angesättigt statt komplett sauber.
+ * - CH/OH/CC/RC: das echte 909 nutzt hier gar keine Oszillator-Synthese,
+ *   sondern 6-Bit-PCM-Samples echter Becken/Hi-Hats (per VCA/Filter
+ *   geformt) — mit reiner Synthese und ohne Sample-Material (keine
+ *   Lizenzklärung dafür) also grundsätzlich nicht hardware-identisch
+ *   nachbaubar. Statt der (zur falschen 808/606-Generation gehörenden)
+ *   6-Oszillatoren-Technik läuft hier eine Bank aus 6 resonanten
+ *   Bandpassfiltern an frei gewählten, unharmonischen Frequenzen, gespeist
+ *   aus einer einzigen LFSR-Rauschquelle, plus eine zusätzliche breitbandige
+ *   Rauschschicht für die "Zisch"-Dichte — architektonisch näher am
+ *   tatsächlichen dichten, nicht-tonalen Cymbal-Spektrum als ein
+ *   gestimmtes Oszillatorbündel. Rauschquelle UND Resonatoren laufen dabei
+ *   KONTINUIERLICH (s. #buildAudio) statt bei jedem Anschlag frisch zu
+ *   starten — wie beim echten 909, wo Trigger nur ein VCA-Gate auf dem
+ *   gerade aktuellen (frei laufenden) Rauschzustand öffnen.
  * - Jede Spur bekommt zusätzlich eine winzige, zufällige Tonhöhen-/Pegel-
  *   Abweichung pro Anschlag (Bauteiltoleranz-Simulation, s. jitter()) —
  *   ohne das klingt jeder Hit exakt gleich laut/hoch, was sich digital/
@@ -21290,16 +21292,20 @@ function bd(ctx, t, dest, p) {
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f1, t + 0.045);
 
-  // Leicht resonantes Tiefpassfilter statt eines direkten Oszillator→VCA-
-  // Pfads: das echte 909-Kick-VCF "boingt" hörbar mit, statt den Sinus
-  // unverändert durchzureichen -- reiner Sinus+Hüllkurve klingt sonst zu
-  // rund/synthetisch. Sättigung danach für den Punch (moderate 909-VCA-
-  // Übersteuerung bei lauten Trommeln).
+  // Tiefpassfilter statt eines direkten Oszillator→VCA-Pfads -- entfernt
+  // etwas vom oberen Sinus-Anteil, damit reiner Sinus+Hüllkurve nicht zu
+  // rund/synthetisch klingt. KEINE Resonanz (Q nahe Butterworth-neutral):
+  // die dokumentierte 909-Schaltung hat für den Kick-VCF keinen belegten
+  // Resonanz-Wert -- anders als beim 808 kommt das "Boing" hier laut
+  // Quellenlage primär aus der Pitch-Hüllkurve selbst, nicht aus einem
+  // resonanten Filter (vorheriger Wert Q=2.2 war eine unbelegte Annahme).
+  // Sättigung danach für den Punch (moderate 909-VCA-Übersteuerung bei
+  // lauten Trommeln).
   const lpf = ctx.createBiquadFilter();
   lpf.type = 'lowpass';
   lpf.frequency.setValueAtTime(f0 * 1.4, t);
   lpf.frequency.exponentialRampToValueAtTime(f1 * 1.8, t + 0.05);
-  lpf.Q.value = 2.2;
+  lpf.Q.value = 0.707;
   const sat = ctx.createWaveShaper();
   sat.curve = satCurveWarm();
   const g = env(ctx, t, jitter(1.0 * p.level, 0.05), 0.35 * p.decay, adr(p));
@@ -21396,7 +21402,10 @@ function rs(ctx, t, dest, p) {
   // summiert werden — kein Ton, der durch EIN Filter läuft, sondern drei
   // gleichzeitig "angeschlagene" Resonanzen. Das ergibt den mehrschichtigen
   // Klack statt eines einzelnen Buzz-Tons.
-  const RS_RESONANCES = [520, 1200, 2400];
+  // Frequenzen aus dokumentierter 909-Schaltungsanalyse (drei Bridged-T-
+  // Filter des Original-Rimshot-Kreises): f1≈500Hz, f2≈220Hz, f3≈1000Hz --
+  // vorher [520, 1200, 2400] war spekulativ zu hoch/zu weit gespreizt.
+  const RS_RESONANCES = [220, 500, 1000];
   // Etwas länger als das "reine" 909-Original klingen lassen (0.02 → 0.08s
   // Basisdauer) — kostet keinen zusätzlichen Peak (env() erreicht denselben
   // Spitzenwert unabhängig von der Ausklingzeit), gibt dem Rimshot im Kit
@@ -21413,15 +21422,21 @@ function rs(ctx, t, dest, p) {
   // erzeugt ein sehr enges Filter je nach Zufalls-Buffer teils extreme
   // Ausreisser (gemessen über 40 unabhängige Rausch-Seeds bei Q=12: Peak
   // schwankte zwischen 0.95 und 1.78 bei GLEICHEM Gain!). Q=6 dämpft diese
-  // Streuung; Gain=3 hält selbst den schlechtesten von 40 gemessenen Fällen
-  // sicher unter der etablierten Kick-Referenzobergrenze (~1.2).
+  // Streuung. Gain=5 (nach der Frequenzkorrektur auf [220, 500, 1000], s.
+  // oben, erneut über 40 Rausch-Seeds nachgemessen): tiefere Resonanzen
+  // liegen näher an der Rauschbuffer-Grundenergie als die alten, höheren
+  // Werte -- bei Gain=3 sank der Pegel dadurch spürbar (Peak ~0.19 im
+  // schlechtesten Fall statt vorher ~0.25), Gain=5 gleicht das auf
+  // vergleichbare wahrgenommene Lautheit wie vorher aus (Mittel ~0.23,
+  // Worst-Case ~0.34 über 40 Seeds) und bleibt damit weiterhin sicher
+  // unter der etablierten Kick-Referenzobergrenze (~1.2).
   let totalDur = dur;
   for (const f of RS_RESONANCES) {
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = jitter(f * p.tune, 0.02);
     bp.Q.value = 6;
-    const g = env(ctx, t, jitter(3 * p.level, 0.05), dur, adr(p));
+    const g = env(ctx, t, jitter(5 * p.level, 0.05), dur, adr(p));
     n.connect(bp).connect(g).connect(dest);
     nodes.push(bp, g);
     totalDur = g.totalDur;
@@ -21488,41 +21503,66 @@ const tomVoice = (baseFreq) => (ctx, t, dest, p) => {
   autoStop(o, t, g.totalDur, [g]);
 };
 
-/* ---------- Metallische Hats/Cymbals: 6 unharmonisch verstimmte
-   Rechteckwellen durch ein Hoch-/Bandpass — die klassische analoge
-   Cymbal-Synthese-Technik (statt gefiltertem Rauschen wie bei der
-   BeatBox). Die Verhältnisse sind bewusst nicht-ganzzahlig, damit die
-   Summe unharmonisch/metallisch statt tonal klingt.
-   Die 6 Oszillatoren pro Stimme sind FREI LAUFEND statt pro Anschlag neu
-   erzeugt (s. AnalogKit#buildAudio, das sie einmalig anlegt und in
-   tr.metalOscs/tr.metalBus ablegt): am echten 909 laufen diese
-   Oszillatoren kontinuierlich, ein Trigger öffnet nur ein VCA-Gate auf
-   dem gerade aktuellen (frei driftenden) Phasenverhältnis. Frische
-   Oszillatoren pro Hit (jeder startet bei Phase 0) klingen dagegen JEDES
-   Mal bit-identisch -- der klassische Software-Verräter bei Cymbal-
-   Emulationen. ---------- */
-// Verhältnisse nach der klassischen 6-Oszillatoren-Referenztechnik für
-// analoge Cymbal-/Hi-Hat-Synthese (s. Sound on Sound "Practical Cymbal
-// Synthesis", wie sie u.a. auch beim TR-808 verwendet wird): breiterer
-// Streubereich (2x bis 8.2x der Basisfrequenz) als die vorherige, enger
-// gruppierte Auswahl -- damit landen bei gleichem Hochpass/Bandpass mehr
-// Quadratwellen-Obertöne im hörbaren Band, was dichter/metallischer statt
-// "gestimmt akkordisch" klingt.
-const METAL_RATIOS = [2, 3, 4.16, 5.43, 6.79, 8.21];
+/* ---------- Metallische Hats/Cymbals: Rauschen durch eine Bank von 6
+   resonanten Bandpassfiltern statt (frühere Version) 6 unharmonischer
+   Rechteckwellen-Oszillatoren.
+   Grund für den Wechsel: das echte TR-909 nutzt für CH/OH/CC/RC KEINE
+   Oszillator-Synthese, sondern komprimierte 6-Bit-PCM-Samples echter
+   Becken/Hi-Hats (per VCA/Filter geformt, s. Roland-Service-Unterlagen/
+   Hoshiai-Interview) -- die "6 unharmonische Oszillatoren durchs Hoch-/
+   Bandpass"-Technik (s. Sound on Sound "Practical Cymbal Synthesis") ist
+   tatsächlich TR-808/606-Generation, nicht 909. Echtes Sample-Material
+   ist hier bewusst NICHT im Einsatz (keine Lizenzklärung dafür), aber
+   ein resonantes Rauschfilterbündel kommt der TATSÄCHLICHEN Charakteristik
+   (dichtes, breitbandiges, nicht-tonales Spektrum) architektonisch näher
+   als eine Oszillatorbank, die eher nach einem gestimmten Akkord klingt.
+   Das Ergebnis ist NICHT hardware-identisch (das wäre ohne echte Samples
+   nicht erreichbar), aber der richtigen Familie von Klangerzeugung näher.
+   Die 6 Resonatoren pro Stimme werden aus EINER persistenten, frei
+   laufenden LFSR-Rauschquelle gespeist (s. AnalogKit#buildAudio, tr.metalNoise/
+   tr.metalResonators/tr.metalBus) -- am echten 909 läuft der (digitale,
+   31-stufige LFSR-) Rauschgenerator ebenfalls kontinuierlich, ein Trigger
+   öffnet nur ein VCA-Gate auf dem gerade aktuellen Rauschzustand. Anders
+   als bei der alten Oszillatorbank gibt es hier keine periodische
+   Rückkehr zu einem "immer gleichen" Zustand (Rauschen ist nicht
+   periodisch) -- das war der eigentliche Grund für den permanenten
+   Detune-Jitter unten, der hier trotzdem beibehalten wird (jetzt einfach
+   als generische Bauteiltoleranz-Analogie statt Anti-Periodizitäts-Fix).
+   ---------- */
+// Verhältnisse relativ zur ÄUSSEREN Voice-Filterfrequenz (synth.filterFreq),
+// NICHT mehr zur alten, tiefen metalFreq-Basis (300-400Hz): ein resonantes
+// Bandpass erzeugt (anders als ein Rechteckton mit reichem Oberton-
+// spektrum) praktisch keine Energie oberhalb seiner eigenen Mittenfrequenz
+// -- Zentren weit unterhalb des äußeren Filters (wie bei der alten
+// Oszillator-Rechnung, dort über die Obertöne noch teilweise hörbar)
+// würden hier fast vollständig weggefiltert und wären STUMM statt nur
+// leiser. Die neue Spreizung liegt bewusst UM 1x (0.5x bis 2.75x) der
+// jeweiligen filterFreq: die tieferen Resonanzen werden von der äußeren
+// Filterflanke sanft beschnitten (jede Stimme hört dadurch einen anderen
+// Ausschnitt derselben Rausch-/Resonatorbank -- ähnlich wie beim echten
+// 909, wo CH/OH/CC vermutlich dieselbe/verwandte Sample-Quelle nur
+// unterschiedlich gefiltert nutzen), die höheren überleben nahezu
+// ungedämpft.
+const RESONATOR_RATIOS = [0.5, 0.75, 1.05, 1.45, 2.0, 2.75];
+// Moderates Q: hoch genug für hörbares "Klingeln"/Ringing pro Resonanz,
+// niedrig genug um extreme Zufalls-Ausreisser zu vermeiden (dieselbe
+// Abwägung wie bei RS oben, dort empirisch auf Q=6 bei Rauschanregung
+// gesetzt -- hier etwas niedriger, weil 6 PARALLELE Resonanzen sich
+// bereits gegenseitig zu einem dichteren Klangbild summieren, ein noch
+// höheres Q pro Band würde das zu sehr Richtung 6 einzelner Pfeiftöne
+// statt eines Cymbal-Charakters verschieben).
+const RESONATOR_Q = 5;
 
-// Durch die STIMMENZAHL geteilt, nicht durch Wurzel(Stimmenzahl): die 6
-// Oszillatoren laufen jetzt persistent/frei (s. buildAudio/metallic oben)
-// -- ihre Summe ist damit KEIN einmaliger Anschlag-Moment mehr, sondern
-// ein fortlaufendes Signal, das durch die exakten (rationalen) Verhältnisse
-// zwangsläufig irgendwann wieder nahezu perfekt phasengleich wird (LCM-
-// Periodizität; gemessen: Summenpeak bis 5.7 von theoretisch max. 6, bei
-// zufälligem Trigger-Zeitpunkt). Die alte Wurzel(6)-Kompensation ging vom
-// EINMALIGEN, immer gleich phasenstarren Anschlag frischer Oszillatoren
-// aus (dafür war sie korrekt kalibriert) -- hier muss der SCHLECHTESTE
-// Fall (alle 6 phasengleich) sicher im Rahmen bleiben, nicht nur der
-// durchschnittliche. `level` in TRACK_DEFS unten ist um Wurzel(6)
-// angehoben, um den dadurch leiseren Normalfall wieder auszugleichen.
-const METAL_HEADROOM = 1 / METAL_RATIOS.length;
+// Durch die STIMMENZAHL geteilt (nicht durch Wurzel(Stimmenzahl)): mit
+// einer gemeinsamen, aber frequenzmässig disjunkten Rauschquelle je
+// Resonanzband gibt es (anders als bei der alten Oszillatorbank mit
+// exakten rationalen Verhältnissen) keine garantierte periodische
+// Rückkehr zu einem perfekt korrelierten "Alle-6-gleichzeitig"-Zustand --
+// Rauschen ist nicht periodisch. Dennoch bewusst konservativ mit voller
+// STIMMENZAHL-Teilung kalkuliert (nicht Wurzel(Stimmenzahl), die von
+// vollständiger Dekorrelation ausginge) und zusätzlich per Sweep über
+// viele Rausch-Seeds verifiziert (s. *_RES_BOOST-Konstanten unten).
+const METAL_HEADROOM = 1 / RESONATOR_RATIOS.length;
 // Zusätzlicher Pegel-Nachschlag (empirisch, gegen BD gemessen): das
 // Schließen des Gates VOR dem Anschlag (s. metallic(), Fix fürs Bleed-
 // vor-dem-Hit) senkt den gemessenen Pegel gegenüber dem alten Verhalten
@@ -21530,31 +21570,26 @@ const METAL_HEADROOM = 1 / METAL_RATIOS.length;
 // Zielwerte (CH/OH/CC ~13/12/11dB unter BD) aus.
 const METAL_MAKEUP = 1.35;
 
-// Kompensiert den strukturellen Hoch-/Bandpass-Verlust der Oszillatorbank
-// (s. ausführliche Begründung bei `oscBoost` in metallic() weiter unten) --
-// je Stimme einzeln gemessen (Rauschschicht als Referenz verliert am
-// selben Filter nur ~0.3dB, egal welche Stimme):
-//   CH (8000Hz Hochpass): -9.0dB   OH (6500Hz Hochpass): -8.0dB
-//   CC (5000Hz Hochpass): -7.7dB   RC (4000Hz Bandpass): -6.8dB
-// Boost = ca. 75% des gemessenen Verlusts (nicht 100%: der Rest bleibt
-// bewusst Kopfraum/Streuung -- ein voller 1:1-Ausgleich würde die
-// Oszillatorbank in den durchschnittlichen Fällen zu dominant über die
-// Rauschschicht heben, die dem Klang bewusst Dichte gibt).
-const CH_OSC_BOOST = 2.2;
-const OH_OSC_BOOST = 2.0;
-const CC_OSC_BOOST = 1.95;
-const RC_OSC_BOOST = 1.8;
+// Kompensiert den strukturellen Hoch-/Bandpass-Verlust der Resonatorbank
+// (s. ausführliche Begründung bei `resBoost` in metallic() weiter unten) --
+// je Stimme einzeln nach dem Technikwechsel neu gemessen (Werte lösen die
+// alten CH/OH/CC/RC_OSC_BOOST-Konstanten ab, die für die Oszillatorbank
+// kalibriert waren):
+const CH_RES_BOOST = 1.3;
+const OH_RES_BOOST = 1.25;
+const CC_RES_BOOST = 1.2;
+const RC_RES_BOOST = 1.15;
 
 function metallic(ctx, t, dest, {
-  tr, dur, level, oscBoost = 1, oscMix = 1, noiseMix = 1, attack = 0, release = 0.05,
+  tr, dur, level, resBoost = 1, oscMix = 1, noiseMix = 1, attack = 0, release = 0.05,
 }) {
   const rel = Math.max(release, 0.005);
   // Live nach dem aktuellen TUNE-Regler nachführen -- hörbar erst beim
   // NÄCHSTEN Anschlag (zwischen Hits ist das Gate zu, eine Frequenz-
-  // änderung am laufenden, aber stummen Oszillator ist unhörbar).
-  for (let i = 0; i < tr.metalOscs.length; i++) {
-    tr.metalOscs[i].frequency.setValueAtTime(
-      jitter(tr.metalFreq * METAL_RATIOS[i] * tr.metalDetunes[i] * tr.tune, 0.004), t,
+  // änderung am laufenden, aber stummen Resonator ist unhörbar).
+  for (let i = 0; i < tr.metalResonators.length; i++) {
+    tr.metalResonators[i].frequency.setValueAtTime(
+      jitter(tr.synth.filterFreq * RESONATOR_RATIOS[i] * tr.metalDetunes[i] * tr.tune, 0.004), t,
     );
   }
   // tr.metalFilt ist PERSISTENT (s. AnalogKit#buildAudio) -- Typ/Frequenz/Q
@@ -21569,21 +21604,14 @@ function metallic(ctx, t, dest, {
   // persistenten Filter bleibt pro Anschlag nur noch EIN neuer Knoten (die
   // Hüllkurve `g`) übrig -- strukturell so einfach wie bei jeder anderen
   // Stimme in dieser Datei.
-  // oscBoost gleicht einen strukturellen Pegelverlust aus: alle 6
-  // Rechteckwellen-Grundtöne (2x bis 8.21x der Basisfrequenz, s.
-  // METAL_RATIOS) liegen UNTER dem Hoch-/Bandpass jeder Stimme -- nur
-  // ihre (bei Rechteckwellen mit 1/n abfallenden) Obertöne oberhalb des
-  // Cutoffs überleben. Gemessen: die Oszillatorbank verliert dadurch
-  // 6.8-9.0dB (je nach Stimme), während die parallele Breitband-
-  // Rauschschicht am selben Filter nur ~0.3dB verliert (Rauschen hat
-  // schon von Natur aus Energie im ganzen Spektrum, keine tiefen
-  // Grundtöne, die erst wegfallen könnten). Ohne diesen Ausgleich ist
-  // die Rauschschicht nach dem Filter TROTZ niedrigerem Nominalpegel
-  // (s. `* 0.45` unten) real lauter als die Oszillatorbank -- zusammen
-  // mit der ohnehin gewollten Anschlag-zu-Anschlag-Variation (s.
-  // METAL_RATIOS-Kommentar oben) kippt die Oszillatorbank dadurch bei
-  // manchen Anschlägen komplett unter die Rauschschicht: der Hit klingt
-  // dann nur noch nach Rauschen statt nach Metall/Ton.
+  // resBoost gleicht einen kleinen strukturellen Pegelverlust aus: die
+  // untersten Resonanzbänder (0.5x/0.75x der äußeren filterFreq, s.
+  // RESONATOR_RATIOS) liegen noch etwas unter dem Hoch-/Bandpass jeder
+  // Stimme und werden von dessen Flanke leicht gedämpft -- anders als bei
+  // der alten Oszillatorbank (6.8-9.0dB Verlust, weil dort NUR die
+  // schwachen Rechteckwellen-Obertöne oberhalb des Cutoffs überlebten)
+  // ist der Verlust hier gering, da die meisten der 6 Resonanzen bereits
+  // bei/über der Cutoff-Frequenz liegen.
   // Gate-Knoten kommt aus einem PERSISTENTEN Pool (s. AnalogKit#buildAudio,
   // tr.metalGatePool) statt bei jedem Hit frisch an tr.metalFilt an- und
   // wieder abzuklemmen. Grund (per Debug-Overlay am echten Gerät verifiziert,
@@ -21611,14 +21639,14 @@ function metallic(ctx, t, dest, {
   // Gate zuverlässig, bevor der Peak bei `t` einsetzt.
   g.gain.setValueAtTime(0, 0);
   // oscMix: Spur-Regler "Tone" (Default 1 = bisheriger fest eingemessener
-  // Pegel, 0 = Oszillatorbank komplett stumm -- z.B. um NUR den Rausch-
+  // Pegel, 0 = Resonatorbank komplett stumm -- z.B. um NUR den Rausch-
   // layer zu nutzen). Analog zu noiseMix beim Rauschlayer unten. Bei
   // oscMix=0 KEINE Rampe planen (nur die (0,0)-Schließung von oben steht) --
   // exponentialRampToValueAtTime verlangt einen von 0 verschiedenen
   // Startwert, echte Stille braucht daher einen eigenen Zweig statt nur
   // eines auf 0.001 gefloorten Peaks (der wäre technisch nie ganz stumm).
   if (oscMix > 0) {
-    const peakG = Math.max(jitter(level * METAL_HEADROOM * oscBoost * oscMix, 0.05), 0.001);
+    const peakG = Math.max(jitter(level * METAL_HEADROOM * resBoost * oscMix, 0.05), 0.001);
     if (attack > 0) {
       g.gain.setValueAtTime(0, t);
       g.gain.linearRampToValueAtTime(peakG, t + attack);
@@ -21630,12 +21658,13 @@ function metallic(ctx, t, dest, {
   }
   g.connect(dest); // wiederholtes connect() auf dieselbe Verbindung ist ein No-Op, kein Fehler
 
-  // Das Original nutzt für Hats/Cymbals kein Oszillatorbündel, sondern ein
-  // komprimiertes 6-Bit-PCM-Sample eines echten Beckens (per VCA/Filter
-  // geformt) — im Spektrum deutlich dichter/"kratziger", als 6 diskrete
-  // Rechteckwellen je erreichen (die klingen eher nach einem gestimmten
-  // Akkord, "808-artig"). Eine hochpassgefilterte Rauschschicht unter dem
-  // Oszillatorbündel nähert diese Dichte an, ohne selbst ein Sample zu sein.
+  // Zusätzliche, ungefilterte Breitband-Rauschschicht UNTER der Resonator-
+  // bank: reale Cymbal-/Hat-Samples haben neben den Resonanzspitzen auch
+  // durchgehende breitbandige Energie zwischen den Peaks ("Zischen"/
+  // "Kratzen") -- die 6 schmalen Resonanzbänder allein klingen sonst zu
+  // sortiert/"gestimmt". Diese Schicht bleibt bewusst eigenständig
+  // (eigene, bei `t` frisch startende Rausch-Quelle statt eines Abgriffs
+  // von tr.metalNoise) statt selbst resonant gefiltert zu sein.
   //
   // noiseMix: Spur-Regler "Noise" (Default 1 = bisher fest eingemessenes
   // Verhältnis Ton/Rauschen, 0 = reiner Ton -- Rauschlayer entfällt dann
@@ -21660,12 +21689,12 @@ function metallic(ctx, t, dest, {
  *  den übrigen Spuren. `freq`/`filterFreq`/`filterType`/`filterQ` stehen
  *  zusätzlich auf der zurückgegebenen Funktion (wie schon `.metalFreq`),
  *  damit AnalogKit#buildAudio weiss, mit welcher Basisfrequenz und
- *  welchem Filter es den persistenten Oszillatoren-Bus/Filter dieser
- *  Spur anlegen muss (einzige Quelle der Wahrheit, keine doppelt
+ *  welchem Filter es den persistenten Rausch-/Resonatoren-Bus/Filter
+ *  dieser Spur anlegen muss (einzige Quelle der Wahrheit, keine doppelt
  *  gepflegte Zahl in TRACK_DEFS). */
-const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, oscBoost }) => {
+const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, resBoost }) => {
   const fn = (ctx, t, dest, p) => metallic(ctx, t, dest, {
-    tr: p, dur: durMult * p.decay, level: level * p.level, oscBoost,
+    tr: p, dur: durMult * p.decay, level: level * p.level, resBoost,
     oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1, ...adr(p),
   });
   fn.metalFreq = freq;
@@ -21678,12 +21707,12 @@ const metallicVoice = ({ freq, filterFreq, filterType, filterQ, durMult, level, 
 function rc(ctx, t, dest, p) {
   // Ride: schmaleres Bandpass (mehr "Ping"-Charakter als die Crash) plus
   // ein kurzer Sinus-Ping für einen definierten Attack — sonst verwäscht
-  // die reine Oszillatorsumme zu einem unklaren Rauschband. Beide Pegel
+  // die reine Resonatorsumme zu einem unklaren Rauschband. Beide Pegel
   // (Metall-Anteil + Ping) moderat angehoben — Ride sass im Kit deutlich
   // zu weit hinten, viel Peak-Headroom war noch übrig.
   metallic(ctx, t, dest, {
     tr: p, dur: 1.0 * p.decay, level: 0.24 * Math.sqrt(6) * METAL_MAKEUP * p.level,
-    oscBoost: RC_OSC_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1, ...adr(p),
+    resBoost: RC_RES_BOOST, oscMix: p.oscMix ?? 1, noiseMix: p.noiseMix ?? 1, ...adr(p),
   });
   const o = ctx.createOscillator();
   o.type = 'sine';
@@ -21718,9 +21747,9 @@ const TRACK_DEFS = [
   // dem alten, unbeabsichtigt "vorglühenden" Verhalten leicht -- Makeup
   // gleicht das wieder auf die historisch eingemessenen Zielwerte
   // (CH/OH/CC ~13/12/11dB unter BD) aus.
-  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
-  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: OH_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
-  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, oscBoost: CC_OSC_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'CH', synth: metallicVoice({ freq: 400, filterFreq: 8000, durMult: 0.2, level: 0.32 * Math.sqrt(6) * METAL_MAKEUP, resBoost: CH_RES_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'OH', synth: metallicVoice({ freq: 400, filterFreq: 6500, durMult: 0.5, level: 0.31 * Math.sqrt(6) * METAL_MAKEUP, resBoost: OH_RES_BOOST }), oscMix: 1, noiseMix: 1 },
+  { name: 'CC', synth: metallicVoice({ freq: 300, filterFreq: 5000, durMult: 1.6, level: 0.26 * Math.sqrt(6) * METAL_MAKEUP, resBoost: CC_RES_BOOST }), oscMix: 1, noiseMix: 1 },
   { name: 'RC', synth: rc, oscMix: 1, noiseMix: 1 },
 ];
 
@@ -21737,34 +21766,38 @@ class AnalogKit extends TrackedDrumMachine {
 
   /** Legt für jede metallische Spur (CH/OH/CC/RC, erkennbar an
    *  synth.metalFreq, s. metallicVoice()/rc oben) einen persistenten,
-   *  frei laufenden 6-Oszillatoren-Bus an -- einmalig bei der
+   *  frei laufenden Rausch-/Resonatoren-Bus an -- einmalig bei der
    *  Konstruktion, nicht pro Anschlag (s. metallic() für das Warum). */
   buildAudio() {
     super.buildAudio();
     for (const tr of this.tracks) {
-      const metalFreq = tr.synth.metalFreq;
-      if (metalFreq == null) continue;
-      tr.metalFreq = metalFreq;
-      // Winziger, PERMANENTER Detune je Oszillator (±0.3%, einmalig
-      // gewürfelt, nicht bei jedem Anschlag neu) -- METAL_RATIOS sind
-      // exakte rationale Zahlen, das Summensignal daher rein periodisch
-      // (LCM der 6 Frequenzen). Ohne Detune läuft ein Anschlag irgendwann
-      // GARANTIERT wieder in einen fast perfekt phasengleichen Moment wie
-      // beim allerersten Start -- und klippt dann hart (gemessen: Summen-
-      // Peak bis 5.7 bei 6 unity-Rechtecken, statt der für sqrt(6)-
-      // Headroom angenommenen Dekorrelation). Echte Bauteiltoleranz macht
-      // die 6 Frequenzen NIE exakt rational zueinander -- das bilden wir
-      // hier nach, statt uns auf "läuft schon lang genug, um dekorreliert
-      // zu sein" zu verlassen (was bei exakten Verhältnissen nie zutrifft).
-      tr.metalDetunes = METAL_RATIOS.map(() => 1 + (Math.random() * 2 - 1) * 0.003);
+      if (tr.synth.metalFreq == null) continue;
+      // Winziger, PERMANENTER Detune je Resonanzband (±0.3%, einmalig
+      // gewürfelt, nicht bei jedem Anschlag neu) -- generische Bauteil-
+      // toleranz-Analogie (wie beim jitter()-Helfer oben), macht 6 sonst
+      // exakt gleich gestimmte Resonanzen minimal individuell.
+      tr.metalDetunes = RESONATOR_RATIOS.map(() => 1 + (Math.random() * 2 - 1) * 0.003);
       tr.metalBus = engine.ctx.createGain();
-      tr.metalOscs = METAL_RATIOS.map((ratio, i) => {
-        const o = engine.ctx.createOscillator();
-        o.type = 'square';
-        o.frequency.value = metalFreq * ratio * tr.metalDetunes[i];
-        o.connect(tr.metalBus);
-        o.start();
-        return o;
+      // EINE persistente, frei laufende Rauschquelle (LFSR statt Math.random()
+      // -- s. dsp.js#lfsrNoise, dieselbe Quelle wie die 909-Snare, echte
+      // Bauteil-Analogie zum tatsächlichen digitalen 909-Rauschgenerator)
+      // speist alle 6 Resonanzbänder parallel. `loop = true` + einmaliges
+      // start() statt pro-Hit-BufferSource: exakt dasselbe "kontinuierlich
+      // laufend, Trigger öffnet nur ein Gate"-Prinzip wie zuvor bei den
+      // Oszillatoren (s. metallic() oben) -- und beim echten 909 läuft der
+      // Rauschgenerator ebenfalls durchgehend, nicht neu pro Trigger.
+      tr.metalNoise = engine.ctx.createBufferSource();
+      tr.metalNoise.buffer = lfsrNoise(engine.ctx);
+      tr.metalNoise.loop = true;
+      tr.metalNoise.start();
+      tr.metalResonators = RESONATOR_RATIOS.map((ratio, i) => {
+        const bp = engine.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = tr.synth.filterFreq * ratio * tr.metalDetunes[i];
+        bp.Q.value = RESONATOR_Q;
+        tr.metalNoise.connect(bp);
+        bp.connect(tr.metalBus);
+        return bp;
       });
       // Ebenfalls persistent (s. metallic() für die Begründung): Typ/
       // Frequenz/Q sind pro Spur fest (aus synth.filterFreq/Type/Q, s.
@@ -21794,16 +21827,15 @@ class AnalogKit extends TrackedDrumMachine {
     }
   }
 
-  /** Basisklasse kennt die metallischen Oszillatoren-Busse/-Filter nicht --
-   *  selbst stoppen/trennen, sonst liefen sie nach dem Entfernen der
+  /** Basisklasse kennt die metallischen Rausch-/Resonatoren-Busse/-Filter
+   *  nicht -- selbst stoppen/trennen, sonst liefen sie nach dem Entfernen der
    *  Maschine unhörbar, aber unnötig weiter. */
   disposeAudio() {
     super.disposeAudio();
     for (const tr of this.tracks) {
-      for (const o of tr.metalOscs ?? []) {
-        try { o.stop(); } catch { /* schon gestoppt */ }
-        o.disconnect();
-      }
+      try { tr.metalNoise?.stop(); } catch { /* schon gestoppt */ }
+      tr.metalNoise?.disconnect();
+      for (const bp of tr.metalResonators ?? []) bp.disconnect();
       tr.metalFilt?.disconnect();
       tr.metalBus?.disconnect();
       for (const g of tr.metalGatePool ?? []) g.disconnect();
