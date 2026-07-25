@@ -1034,9 +1034,20 @@ button {
   font-size: 9px;
 }
 
+/* FEST statt flex:1 1 auto: die Clip-Liste konkurrierte sonst mit
+   .fader-row (ebenfalls flex:1 1 auto, s. dort) um denselben Rest-Platz --
+   ihre content-basierte Basisgrösse schwankt aber je nach Spalte (leere
+   Spur = grosses 2x2-Proto-Raster, 1-2 echte Clips + Rest-Buttons, 4 volle
+   Clip-Chips, …), seit die Proto-Buttons auch nach dem ersten Clip
+   sichtbar bleiben (s. jam-view.js #renderProtoClipsHtml) noch mehr
+   Zwischenstufen als vorher. Ergebnis war spaltenweise unterschiedlich
+   hohe Fader/X-Y-Pads (verschieden viel vom Rest-Platz ging an .clips vs.
+   .fader-row) -- mit fester Höhe hier bekommt JEDE Spalte exakt denselben
+   Rest-Platz für den Fader, unabhängig vom eigenen Clip-Stand. Reicht der
+   Inhalt (z. B. 4 volle Clip-Chips) nicht in die feste Höhe, übernimmt
+   overflow-y:auto (bewusst kein hartes Abschneiden). */
 .clips {
-  flex: 1 1 auto;
-  min-height: 84px;
+  flex: 0 0 150px;
   display: flex;
   flex-direction: column;
   gap: 5px;
