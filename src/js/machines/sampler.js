@@ -734,6 +734,11 @@ function formatElapsed(seconds) {
 
 function openRecordPopup(sampler, i) {
   closeRecordPopup(); // sollte nie parallel offen sein, sicherheitshalber
+  // Läuft der Transport gerade, mit ins Mikro bluten alle spielenden
+  // Instrumente hörbar in die Aufnahme -- Popup öffnen heisst also sofort
+  // stoppen (nicht erst beim Antippen von "Start"), nicht erst nach dem
+  // Auftreten des Symptoms von Hand pausieren müssen.
+  transport.stop();
   recPop = document.createElement('div');
   recPop.className = 'rec-pop';
   recPop.innerHTML = `
