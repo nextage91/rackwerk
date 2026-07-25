@@ -17770,8 +17770,9 @@ const { micRecorder } = (() => {
 /**
  * mic-recorder — nimmt das Mikrofon per MediaRecorder auf (für Sampler-
  * Aufnahmen, s. machines/sampler.js). Analog zu recorder.js (Master-
- * Aufnahme), aber Quelle ist getUserMedia({audio:true}) statt der Master-
- * Bus -- erster Ort im Code, der Mikrofon- (nicht Kamera-)Zugriff anfragt;
+ * Aufnahme), aber Quelle ist getUserMedia() (Rohsignal, Verarbeitungs-
+ * Constraints bewusst aus, s. start()) statt der Master-Bus -- erster Ort
+ * im Code, der Mikrofon- (nicht Kamera-)Zugriff anfragt;
  * der Berechtigungsdialog erscheint beim ersten Aufruf. Deshalb ist
  * start() hier (anders als recorder.js) async: die Freigabe muss erst
  * abgewartet werden, bevor der MediaRecorder überhaupt existiert.
@@ -17803,7 +17804,21 @@ class MicRecorder {
    *  verweigert wird — der Aufrufer zeigt dafür einen eigenen Hinweis). */
   async start() {
     if (this.active || !this.supported) return false;
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Alle drei Verarbeitungs-Constraints explizit AUS: ohne das fragt
+    // getUserMedia({audio:true}) mit den Browser-Defaults (meist alle drei
+    // AN) an. Auf iOS/WebKit schaltet genau das die geteilte Audio-Session
+    // in einen "Recording"-Modus, der die GESAMTE App-Wiedergabelautstärke
+    // drosselt -- und dieser Modus bleibt oft hängen, auch nachdem die
+    // Aufnahme längst gestoppt ist (Stoppen der MediaStreamTracks setzt die
+    // Audio-Session-Kategorie nicht zurück; s. Nutzer-Bugreport: alle
+    // Instrumente dauerhaft leiser nach einer Sample-Aufnahme). Nebenbei
+    // auch inhaltlich richtig fürs Sample-Recording: Auto-Gain/Noise-Gate/
+    // Echo-Cancellation verfälschen das aufgenommene Instrument (pumpender
+    // Pegel, gated Ausklang) -- für einen Sampler will man das unbearbeitete
+    // Rohsignal, nicht auf Sprachtelefonie optimiertes Audio.
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
     const mime = MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported?.(m));
     this.rec = new MediaRecorder(this.stream, mime ? { mimeType: mime } : undefined);
     this.chunks = [];
