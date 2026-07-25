@@ -16729,12 +16729,15 @@ const { masterFX } = (() => {
  *   folgt BPM-Änderungen automatisch — auch im Jam, wo der Host das Tempo
  *   stellt. Der Wechsel läuft über setTargetAtTime: kurzes „Tape-Wobbeln"
  *   statt Knacksen.
- * - Reverb per Faltung mit einem zur Laufzeit erzeugten Impuls (Null-Assets-
- *   Prinzip): deterministisches Pseudo-Rauschen (xorshift, feste Seeds pro
- *   Kanal → stereo, aber reproduzierbar) mit exponentiellem Ausklang;
- *   Dämpfung als One-Pole-Tiefpass direkt im Impuls. Der Impuls wird auf
- *   konstante Energie normiert, damit der Level-Regler bei jeder Größe
- *   vergleichbar laut ist. Neu rechnen ist teuer → entprellt (180 ms).
+ * - Reverb: derselbe Dattorro-Algorithmus (Figure-8-Tank, s. DEFS.reverb in
+ *   inserts.js) wie bei den Insert-Reverbs auf den einzelnen Maschinen --
+ *   vorher eine Faltung mit einem zur Laufzeit erzeugten Rausch-Impuls,
+ *   jetzt derselbe echte, algorithmische Hall über createInsert('reverb', ...).
+ *   Läuft hier komplett trocken-frei (mix fest auf 1 -- der Send/Return-Bus
+ *   IST bereits der reine Effektweg, das "Dry"-Signal geht separat direkt
+ *   zum Master), revLevel bleibt ein externer Ausgangspegel wie zuvor. Echt-
+ *   zeit-Regler statt der alten 180ms-IR-Neuberechnung -- ein AudioParam-
+ *   Ramp ist billig, eine Impulsantwort neu zu rechnen war es nicht.
  */
 
 /** Delay-Notenwerte: Anzahl 16tel-Steps ↔ Beschriftung. */
@@ -16746,13 +16749,23 @@ const DIVISIONS = [
   { steps: 8, label: '1/2' },
 ];
 
+// Decay/Damping teilen sich die exakt selben, per Stresstest ermittelten
+// sicheren Grenzen wie DEFS.reverb in inserts.js (s. UI_PARAMS.reverb dort
+// für die vollständige Herleitung) -- die Dattorro-Tank-Topologie hat KEINE
+// orthogonale Mischmatrix wie das alte FDN, ab decay>0.4 kann sich bei
+// manchen Damping-Werten ein hörbares Dröhnen aufbauen.
+const REV_DECAY_MAX = 0.4;
+const REV_DAMPING_MIN = 500;
+const REV_DAMPING_MAX = 15000;
+
 const FX_DEFAULTS = {
   delaySteps: 3,     // 16tel-Steps → 1/8 punktiert (klassisches Dub-Delay)
   feedback: 0.45,
   tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
   delayLevel: 0.5,
-  revDecay: 1.8,     // s — Länge des Impulses
-  revDamp: 0.5,      // 0..1 — Höhendämpfung im Impuls
+  revSize: 1.0,      // Dattorro "size" -- Raumgrösse/Echodichte
+  revDecay: 0.3,     // Dattorro "decay" (0..REV_DECAY_MAX), s. Grenzen oben
+  revDamp: 6000,     // Hz -- Dattorro "damping" (REV_DAMPING_MIN..MAX)
   revLevel: 0.4,
 };
 
@@ -16760,7 +16773,6 @@ class MasterFX {
   constructor() {
     this.params = { ...FX_DEFAULTS };
     this.el = null;
-    this.#irTimer = null;
     // Letzter von setReturnAudible() gesetzter Sollzustand -- flushTails()
     // muss NACH dem Neuaufbau genau dorthin zurückkehren, nicht blind auf
     // 1 (sonst hebelt ein Flush, der GENAU WEIL "niemand mehr hörbar"
@@ -16773,7 +16785,6 @@ class MasterFX {
     this.deserialize({ ...FX_DEFAULTS });
   }
 
-  #irTimer;
   #audible;
 
   /** Nach engine.unlock() aufrufen — baut die Effekt-Ketten an die Busse. */
@@ -16817,29 +16828,34 @@ class MasterFX {
     this.#applyDelayTime();
   }
 
-  /** Reverb: Bus → Convolver → Level → Return */
+  /** Reverb: Bus → Dattorro-Insert (mix fest 1, reiner Effektweg) → Level → Return */
   #buildReverbChain(ctx) {
-    this.convolver = ctx.createConvolver();
+    this.reverbInsert = createInsert('reverb', {
+      params: {
+        size: this.params.revSize,
+        decay: Math.min(REV_DECAY_MAX, Math.max(0, this.params.revDecay)),
+        damping: Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, this.params.revDamp)),
+        mix: 1,
+      },
+    });
     this.revOut = ctx.createGain();
     this.revOut.gain.value = this.params.revLevel;
-    engine.reverbBus.connect(this.convolver);
-    this.convolver.connect(this.revOut);
+    engine.reverbBus.connect(this.reverbInsert.input);
+    this.reverbInsert.output.connect(this.revOut);
     this.revOut.connect(this.returnGate);
-    this.#buildIR();
   }
 
   #flushTimer = null;
 
   /**
    * Baut Delay- und Reverb-Kette komplett neu — der einzige Weg, einen
-   * bereits angeregten Feedback-/Convolution-Schwanz über die Web-Audio-
-   * API wirklich zu löschen (ein Gate stoppt nur NEUE Energie, der
-   * gespeicherte Zustand in DelayNode/ConvolverNode bleibt sonst
-   * unberührt). Ein kurzes Ducken übers returnGate maskiert den
-   * Node-Wechsel klickfrei. clearTimeout() am Anfang macht schnelles
-   * Hintereinander-Toggeln sicher: nur der jeweils letzte Aufruf baut
-   * tatsächlich neu, kein doppeltes disconnect() auf bereits ersetzten
-   * Knoten.
+   * bereits angeregten Feedback-/Hall-Schwanz über die Web-Audio-API
+   * wirklich zu löschen (ein Gate stoppt nur NEUE Energie, der gespeicherte
+   * Zustand in DelayNode/dem Reverb-Tank bleibt sonst unberührt). Ein
+   * kurzes Ducken übers returnGate maskiert den Node-Wechsel klickfrei.
+   * clearTimeout() am Anfang macht schnelles Hintereinander-Toggeln sicher:
+   * nur der jeweils letzte Aufruf baut tatsächlich neu, kein doppeltes
+   * disconnect() auf bereits ersetzten Knoten.
    */
   flushTails() {
     if (!this.delay) return; // init() noch nicht gelaufen
@@ -16852,8 +16868,8 @@ class MasterFX {
       this.delay.disconnect(); this.toneFilter.disconnect();
       this.fb.disconnect(); this.delayOut.disconnect();
       engine.delayBus.disconnect(this.delay);
-      this.convolver.disconnect(); this.revOut.disconnect();
-      engine.reverbBus.disconnect(this.convolver);
+      engine.reverbBus.disconnect(this.reverbInsert.input);
+      this.reverbInsert.dispose(); this.revOut.disconnect();
       this.#buildDelayChain(ctx);
       this.#buildReverbChain(ctx);
       // Zurück auf den AKTUELLEN Sollzustand, nicht blind auf 1 -- sonst
@@ -16867,43 +16883,6 @@ class MasterFX {
     if (!this.delay) return;
     const t = transport.stepDuration * this.params.delaySteps;
     this.delay.delayTime.setTargetAtTime(Math.min(4, t), engine.now, 0.03);
-  }
-
-  /** Impulsantwort neu erzeugen (deterministisch, energie-normiert). */
-  #buildIR() {
-    const ctx = engine.ctx;
-    if (!ctx) return;
-    const sr = ctx.sampleRate;
-    const len = Math.max(sr / 10, Math.floor(sr * this.params.revDecay));
-    const buf = ctx.createBuffer(2, len, sr);
-
-    // Dämpfung 0..1 → One-Pole-Koeffizient (höher = dunkler)
-    const a = 0.05 + this.params.revDamp * 0.85;
-    let energy = 0;
-
-    for (let ch = 0; ch < 2; ch++) {
-      const data = buf.getChannelData(ch);
-      let seed = ch === 0 ? 0x9e3779b9 : 0x71c67a3d; // feste Seeds → stereo, reproduzierbar
-      let lp = 0;
-      for (let i = 0; i < len; i++) {
-        // xorshift32 → Rauschen in [-1, 1)
-        seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
-        const noise = ((seed >>> 0) / 0x80000000) - 1;
-        lp += (noise - lp) * (1 - a);
-        const env = Math.pow(10, (-3 * i) / len); // −60 dB am Ende
-        const v = lp * env;
-        data[i] = v;
-        energy += v * v;
-      }
-    }
-
-    // Energie normieren: Level-Regler klingt bei jeder Raumgröße gleich laut
-    const scale = 2.4 / Math.sqrt(Math.max(1e-9, energy));
-    for (let ch = 0; ch < 2; ch++) {
-      const data = buf.getChannelData(ch);
-      for (let i = 0; i < len; i++) data[i] *= scale;
-    }
-    this.convolver.buffer = buf;
   }
 
   /** Von machine.js' refreshGates() bei jeder Mute/Solo-Änderung aufgerufen
@@ -16922,12 +16901,9 @@ class MasterFX {
       case 'tone':       this.toneFilter?.frequency.setTargetAtTime(val, t, 0.02); break;
       case 'delayLevel': this.delayOut?.gain.setTargetAtTime(val, t, 0.02); break;
       case 'revLevel':   this.revOut?.gain.setTargetAtTime(val, t, 0.02); break;
-      case 'revDecay':
-      case 'revDamp':
-        // Impuls neu rechnen ist teuer → erst wenn der Regler kurz ruht
-        clearTimeout(this.#irTimer);
-        this.#irTimer = setTimeout(() => this.#buildIR(), 180);
-        break;
+      case 'revSize':    this.reverbInsert?.setParam('size', val); break;
+      case 'revDecay':   this.reverbInsert?.setParam('decay', Math.min(REV_DECAY_MAX, Math.max(0, val))); break;
+      case 'revDamp':    this.reverbInsert?.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, val))); break;
     }
   }
 
@@ -16942,7 +16918,13 @@ class MasterFX {
       this.toneFilter.frequency.value = this.params.tone;
       this.delayOut.gain.value = this.params.delayLevel;
       this.revOut.gain.value = this.params.revLevel;
-      this.#buildIR();
+      // Geklemmt statt direkt übernommen -- ein VOR diesem Umbau gespeichertes
+      // Projekt kennt revDecay/revDamp noch in der alten Bedeutung (Sekunden/
+      // 0..1) und könnte sonst weit ausserhalb der für den Dattorro-Tank
+      // sicheren Bereiche landen (s. REV_DECAY_MAX/REV_DAMPING_* oben).
+      this.reverbInsert.setParam('size', this.params.revSize);
+      this.reverbInsert.setParam('decay', Math.min(REV_DECAY_MAX, Math.max(0, this.params.revDecay)));
+      this.reverbInsert.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, this.params.revDamp)));
     }
     this.#syncUI();
   }
@@ -16982,8 +16964,9 @@ class MasterFX {
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Reverb</span>
-          <x-knob label="Size" min="0.3" max="6" value="1.8" curve="log" unit="s" data-p="revDecay"></x-knob>
-          <x-knob label="Damp." min="0" max="1" value="0.5" data-p="revDamp"></x-knob>
+          <x-knob label="Size" min="0.3" max="3" value="1.0" curve="log" data-p="revSize"></x-knob>
+          <x-knob label="Decay" min="0" max="0.4" value="0.3" data-p="revDecay"></x-knob>
+          <x-knob label="Damp." min="500" max="15000" value="6000" curve="log" unit="Hz" data-p="revDamp"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.4" data-p="revLevel"></x-knob>
         </div>
       </div>
