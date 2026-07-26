@@ -279,11 +279,18 @@ export class Sampler extends Machine {
 
   /* ---------- Sample laden/aufnehmen/leeren ---------- */
 
-  /** Datei-Auswahl (Dateisystem des Telefons) → dekodieren + ablegen. */
+  /** Datei-Auswahl (Dateisystem des Telefons) → dekodieren + ablegen.
+   *  accept kombiniert den MIME-Wildcard MIT expliziten Dateiendungen --
+   *  "audio/*" allein reicht auf vielen mobilen Datei-Pickern (v. a. iOS)
+   *  nicht: .wav-Dateien werden dort je nach gemeldetem MIME-Typ
+   *  (audio/x-wav, audio/wave, teils sogar application/octet-stream) nicht
+   *  zuverlässig als "audio/*" erkannt und erscheinen dann ausgegraut oder
+   *  gar nicht in der Auswahl. Explizite Endungen matchen unabhängig vom
+   *  gemeldeten MIME-Typ. */
   loadPadFromFile(i) {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'audio/*';
+    input.accept = 'audio/*,.wav,.wave,.mp3,.m4a,.aac,.ogg,.flac,.aiff,.aif';
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
