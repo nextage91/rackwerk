@@ -184,6 +184,30 @@
   color: var(--m-color, var(--ink-dim));
 }
 
+/* AcidBass: Devil-Fish-Zusatzregler optisch von den 303-Grundreglern
+   absetzen -- gleiches Muster wie die Spur-Reihe oben (getönter
+   Hintergrund + Akzentstreifen), damit auf einen Blick klar ist: das
+   sind die Mod-Regler, nicht der Original-303-Regelsatz. */
+.acidbass__devilfish {
+  padding: 8px 8px 10px;
+  margin: 4px -8px 0;
+  border-radius: 8px;
+  background: var(--m-color-tint, rgba(255,255,255,.03));
+  box-shadow: -3px 0 0 var(--m-color, transparent) inset;
+}
+.acidbass__devilfish-label {
+  flex: 1 0 100%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--m-color, var(--ink-dim));
+}
+.acidbass__hires.is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+
 /* ===================== Knob (x-knob) ===================== */
 x-knob {
   display: grid;
@@ -636,6 +660,40 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   box-shadow: 0 0 10px var(--lcd-glow), 0 2px 4px rgba(0,0,0,.4);
 }
 .cell.is-play::after { display: none; } /* 808-Farbmarkierung würde unter der Amber-Füllung verwaschen */
+
+/* Accent-/Slide-Zonen (nur AcidBass, s. step-seq.js#accentSlide): zwei
+   eigene Tippstreifen ober-/unterhalb der Note statt winziger Ecken-
+   Icons -- auf einem 52px-Step sonst kaum treffsicher bedienbar. Die
+   808-Viertelmarkierung (::before/::after) tritt hier zurück, sie würde
+   mit dem Slide-Streifen am unteren Rand kollidieren. */
+.stepseq--accent-slide .cell {
+  display: flex;
+  flex-direction: column;
+  min-height: 68px;
+  padding: 0;
+  overflow: hidden; /* Streifen sollen den runden Zellrand respektieren */
+}
+.stepseq--accent-slide .cell::before,
+.stepseq--accent-slide .cell::after {
+  display: none;
+}
+.stepseq--accent-slide .cell__label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cell__accent, .cell__slide {
+  appearance: none;
+  border: none;
+  padding: 0;
+  height: 13px;
+  width: 100%;
+  background: rgba(255,255,255,.07);
+  flex-shrink: 0;
+}
+.cell__accent.is-active { background: var(--g-red, #e15b5b); }
+.cell__slide.is-active { background: var(--g-orange, #f0a840); }
 
 /* ===================== BeatBox-Pads ===================== */
 .pads {

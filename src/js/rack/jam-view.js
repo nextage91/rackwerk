@@ -46,6 +46,7 @@ const MACRO_PARAMS = {
   percsynth: ['ratio', 'fmAmt', 'sweep', 'decay'],
   sampler: ['tune', 'level', 'trackSendDelay', 'trackSendReverb'],
   fmsynth: ['ratio', 'fmAmount', 'feedback', 'cutoff'],
+  acidbass: ['cutoff', 'resonance', 'envMod', 'accent'],
 };
 const TRACK_SCOPED_TYPES = new Set(['beatbox', 'analogkit', 'sampler']);
 
