@@ -25329,13 +25329,19 @@ const { AcidBass } = (() => {
  *  angesetzt. */
 const VOICE_HEADROOM = 0.3;
 const AMP_ATTACK = 0.003;
-const AMP_RELEASE = 0.03;
 
 /** Wie stark Accent zusätzlich zur Grund-Filterhüllkurve/-Lautstärke
  *  draufgibt, skaliert vom globalen Accent-Regler (0..1). Werte per
  *  Ohr/Messung gegen Clipping abgeglichen (s. Chat-Verifikation). */
 const ACCENT_ENV_BOOST = 0.6;
 const ACCENT_AMP_BOOST = 0.7;
+
+/** Sehr kurze Zeitkonstante statt eines Momentan-Sprungs beim Auflegen der
+ *  Filterhüllkurve (s. trigger() unten) -- 4ms ist klanglich weiterhin ein
+ *  "Pluck" (nicht als Rampe wahrnehmbar), aber lang genug, um bei einer
+ *  stark resonanten Rückkopplungsschleife (s. Dateikopf) den harten
+ *  Cutoff-Sprung als Klick-Quelle zu entschärfen. */
+const FILTER_ENV_ATTACK = 0.004;
 
 /** Maximaler Rückkopplungs-Gain je Resonanz-Reglerstellung (0..1) --
  *  per OfflineAudioContext-Sweep ermittelt (s. Chat-Verifikation): die
@@ -25528,26 +25534,72 @@ class AcidBass extends StepSequencedSynth {
     const p = this.params;
     const freq = midiToHz(midi + p.tune);
     const isSlide = slide && this.lastMidi != null;
+    const decayTime = accent ? p.accentDecay : p.decay;
+    const ampPeak = Math.min(1, VOICE_HEADROOM * (1 + (accent ? p.accent * ACCENT_AMP_BOOST : 0)));
+    // Slide: sanfterer, längerer Anstieg (kein Pluck-Sprung beim Gleiten),
+    // normaler Trigger: kurzer knackiger Attack wie gehabt.
+    const attackTime = isSlide ? AMP_ATTACK * 4 : AMP_ATTACK;
 
-    this.osc.frequency.cancelScheduledValues(time);
+    // Amp-Hüllkurve ausschliesslich über verkettete setTargetAtTime()-Aufrufe
+    // -- KEIN cancelScheduledValues, KEIN manuelles Abholen/Pinnen eines
+    // "aktuellen" Wertes. Grund (per OfflineAudioContext-DC-Probe verifiziert,
+    // s. Chat): exponentialRampToValueAtTime/linearRampToValueAtTime tragen
+    // ihr Automations-Event mit ihrer END-Zeit ein, nicht der Start-Zeit.
+    // cancelScheduledValues(t) verwirft JEDES Event mit Zeit >= t -- bei
+    // einem Cancel MITTEN in einer laufenden Rampe wird also die GANZE
+    // Rampe verworfen und der Parameter friert auf dem Wert des VORHERIGEN
+    // (schon vergangenen) Events ein, nicht auf dem tatsächlich interpolierten
+    // "aktuellen" Wert. Das erzeugte genau den gemeldeten Klick am Ende
+    // (fast) jeder Note bei schnellen Pattern-Läufen. setTargetAtTime()
+    // trägt sein Event dagegen mit seiner eigenen START-Zeit ein (immer in
+    // der Vergangenheit ggü. einem künftigen Retrigger) UND berechnet seinen
+    // eigenen Startwert selbst live aus der Kurve, die zu diesem Zeitpunkt
+    // tatsächlich läuft (inkl. einer noch laufenden vorherigen
+    // setTargetAtTime-Kurve) -- verkettete Aufrufe komponieren dadurch
+    // automatisch korrekt, ganz ohne manuelles Nachrechnen.
+    this.ampEnv.gain.setTargetAtTime(ampPeak, time, Math.max(0.001, attackTime) / 3);
+    this.ampEnv.gain.setTargetAtTime(0, time + attackTime, Math.max(0.01, decayTime) / 3);
+    // Slide UND normaler Trigger bekommen jetzt beide eine vollständige
+    // Amp-Hüllkurve -- vorher liess Slide sie komplett unangetastet, in der
+    // Annahme die vorherige Note klinge noch. Tat sie aber oft nicht mehr,
+    // die geglittene Tonhöhe war dann STUMM -- genau der gemeldete Bug
+    // ("Note spielt nicht, wenn der Slide-Tippbereich gesetzt ist"). Jetzt
+    // garantiert hörbar (asymptotischer Attack auf den Ziel-Pegel, egal wo
+    // die Hüllkurve gerade steht) und klingt trotzdem irgendwann natürlich
+    // gegen 0 aus -- ein separates lineares Release-Segment auf exakt 0 ist
+    // dadurch unnötig (asymptotisch schon deutlich vor der echten 0 praktisch
+    // lautlos), was nebenbei genau dem reinen Attack-Decay-Hüllkurvenverlauf
+    // der echten 303 entspricht (s. Open303-Recherche, Dateikopf).
+
     if (isSlide) {
-      // Nur die Tonhöhe gleitet -- Amp-/Filterhüllkurve bleiben unangetastet,
-      // die klingende Note "rutscht" einfach zur neuen Tonhöhe (Legato).
-      this.osc.frequency.setTargetAtTime(freq, time, Math.max(0.005, p.slideTime) / 3);
+      // Glide: Oszillator-Frequenz geht per setTargetAtTime aufs neue Ziel
+      // -- exakt dieselbe Verkettungs-Logik wie oben, kein cancel/pin nötig.
+      const tau = Math.max(0.005, p.slideTime) / 3;
+      this.osc.frequency.setTargetAtTime(freq, time, tau);
+      // Filterhüllkurve bleibt bei Slide unangetastet -- kein Pluck-
+      // Neuanschlag beim Gleiten, nur die Tonhöhe bewegt sich.
     } else {
+      // Harter Trigger: setValueAtTime() trägt sein Event mit seiner EIGENEN
+      // Zeit (= "time", nicht irgendeine künftige End-Zeit) ein -- keine
+      // Cancel-Mehrdeutigkeit möglich, ein direkter Sprung ist hier also
+      // unproblematisch (und klanglich korrekt: ein harter Trigger SOLL
+      // sofort auf der neuen Tonhöhe stehen, kein Glide).
       this.osc.frequency.setValueAtTime(freq, time);
 
-      const decayTime = accent ? p.accentDecay : p.decay;
-      const ampPeak = Math.min(1, VOICE_HEADROOM * (1 + (accent ? p.accent * ACCENT_AMP_BOOST : 0)));
-      this.ampEnv.gain.cancelScheduledValues(time);
-      this.ampEnv.gain.setValueAtTime(0, time);
-      this.ampEnv.gain.linearRampToValueAtTime(ampPeak, time + AMP_ATTACK);
-      this.ampEnv.gain.exponentialRampToValueAtTime(0.001, time + AMP_ATTACK + decayTime);
-      this.ampEnv.gain.linearRampToValueAtTime(0, time + AMP_ATTACK + decayTime + AMP_RELEASE);
-
+      // Filter-Cutoff-Hüllkurve: derselbe Pluck-Charakter wie applyFilterEnv()
+      // in dsp.js (Sprung auf envAmt Oktaven über den Cutoff, exponentieller
+      // Rückfall) -- HIER aber lokal statt über die gemeinsame Hilfsfunktion
+      // und über verkettete setTargetAtTime()-Aufrufe (s. Begründung oben bei
+      // der Amp-Hüllkurve; dieselbe Cancel-Mehrdeutigkeit hätte hier sonst
+      // denselben Klick erzeugt, sobald die vorherige Note ihre eigene
+      // Cutoff-Rampe noch nicht fertig hatte). dsp.js#applyFilterEnv bleibt
+      // für SubSynth/PolySynth unverändert (deren undramatisch resonanter
+      // Einzelfilter braucht diese Behandlung nicht, s. Dateikopf).
       const envAmt = Math.min(1, p.envMod + (accent ? p.accent * ACCENT_ENV_BOOST : 0));
+      const peakCutoff = Math.min(16000, p.cutoff * Math.pow(2, envAmt * 4));
       for (const stage of this.stages) {
-        applyFilterEnv(stage, time, { cutoff: p.cutoff, envAmt, fDecay: decayTime });
+        stage.frequency.setTargetAtTime(peakCutoff, time, Math.max(0.001, FILTER_ENV_ATTACK) / 3);
+        stage.frequency.setTargetAtTime(p.cutoff, time + FILTER_ENV_ATTACK, Math.max(0.01, decayTime) / 3);
       }
     }
     this.lastMidi = midi;
