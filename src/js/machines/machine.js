@@ -14,7 +14,7 @@
 import { engine } from '../core/audio-engine.js';
 import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
-import { createInsert } from '../core/inserts.js';
+import { createInsert, insertChainLatencySec } from '../core/inserts.js';
 import { renderInsertChain, openInsertPicker, INSERT_DISPLAY } from '../ui/insert-chain.js';
 import { createModulator, MOD_DISPLAY } from '../core/modulators.js';
 import { renderModulationChain, openModulatorPicker } from '../ui/modulation-chain.js';
@@ -139,6 +139,34 @@ function refreshGates() {
   lastAudible = audibleNow;
 }
 
+/**
+ * Latenz-Ausgleich (Plugin Delay Compensation) über alle Maschinen: manche
+ * Insert-Effekte bringen eine kleine, aber feste Zusatzlatenz mit (Kompressor/
+ * Opto/Limiter/Resonator ~6ms, Drive ~4ms, Tape Machine ~11ms -- s. inserts.js#
+ * insertChainLatencySec), weil sie intern einen DynamicsCompressorNode- oder
+ * WaveShaperNode(oversample:'4x')-Lookahead nutzen. Ohne Ausgleich läuft eine
+ * Maschine mit z. B. Tape Machine in der Kette hörbar HINTER dem Rest des
+ * Racks her, sobald der Effekt eingesetzt wird -- gemeldet als "der Groove
+ * fällt auseinander". Fix: jede Maschine bekommt permanent ein `pdcDelay`
+ * hinter ihrem Gate (s. Konstruktor); dessen Zeit wird hier auf die Differenz
+ * zwischen der eigenen Insert-Latenz und der grössten aktuell im Rack
+ * vorkommenden gesetzt, sodass alle Maschinen wieder synchron am Master-Bus
+ * (und den Sends, die ebenfalls hinter `pdcDelay` abzweigen) ankommen. Muss
+ * bei jeder Änderung der Insert-Zusammensetzung/des Bypass-Status irgendeiner
+ * Maschine sowie beim Hinzufügen/Entfernen einer ganzen Maschine neu
+ * berechnet werden (s. Aufrufstellen). Master-FX-eigene Insert-Latenz bleibt
+ * bewusst aussen vor -- sie liegt für JEDE Maschine gleichermassen an,
+ * verschiebt also nichts relativ zueinander (kein Groove-Problem).
+ */
+function refreshLatencyCompensation() {
+  const t = engine.now;
+  let maxLatency = 0;
+  for (const m of machines) maxLatency = Math.max(maxLatency, insertChainLatencySec(m.inserts));
+  for (const m of machines) {
+    m.pdcDelay.delayTime.setTargetAtTime(maxLatency - insertChainLatencySec(m.inserts), t, 0.01);
+  }
+}
+
 export class Machine {
   static meta = { type: 'machine', name: 'Machine', desc: '', color: '#888' };
 
@@ -164,7 +192,17 @@ export class Machine {
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
     this.panner.connect(this.gate);
-    this.gate.connect(engine.masterBus);
+    /** @type {DelayNode} Latenz-Ausgleich (PDC) gegenüber dem Rest des Racks
+     *  — sitzt hinterm Gate, VOR Master-Bus UND Sends (beide zweigen erst
+     *  danach ab, s. unten), gleicht also beide Pfade gemeinsam aus. Zeit
+     *  wird ausschliesslich von refreshLatencyCompensation() gepflegt (s.
+     *  dortigen Kommentar) -- hier nur mit 0 initialisiert (frisch erzeugte
+     *  Maschine hat noch keine Inserts). 0.5s Maximalpuffer ist grosszügig
+     *  bemessen (selbst mehrere gestapelte Tape-Machine/Kompressor-Inserts
+     *  blieben weit darunter), kostet aber nur einen einzelnen kleinen Node. */
+    this.pdcDelay = engine.ctx.createDelay(0.5);
+    this.gate.connect(this.pdcDelay);
+    this.pdcDelay.connect(engine.masterBus);
 
     /** @type {Array<ReturnType<typeof createInsert>>} Insert-FX-Kette
      *  zwischen Output und Panner — frei bestückbar (0..n Instanzen,
@@ -194,19 +232,22 @@ export class Machine {
      *  Default zurückzufallen. */
     this.xySpring = false;
 
-    /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
-     *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
+    /** Post-Fader-Sends zu den Master-Effekten — hinter Gate UND pdcDelay,
+     *  damit Mute/Solo UND der Latenz-Ausgleich die Effekt-Fahnen mitnehmen
+     *  (sonst käme der Reverb-/Delay-Anteil einer Maschine mit latenten
+     *  Inserts wie Tape Machine zeitlich vor ihrem eigenen Trockensignal an). */
     this.sends = { delay: 0, reverb: 0 };
     this.sendDelay = engine.ctx.createGain();
     this.sendDelay.gain.value = 0;
     this.sendReverb = engine.ctx.createGain();
     this.sendReverb.gain.value = 0;
-    this.gate.connect(this.sendDelay);
+    this.pdcDelay.connect(this.sendDelay);
     this.sendDelay.connect(engine.delayBus);
-    this.gate.connect(this.sendReverb);
+    this.pdcDelay.connect(this.sendReverb);
     this.sendReverb.connect(engine.reverbBus);
 
     machines.add(this);
+    refreshLatencyCompensation();
     // Reicht die neue Maschine die hörbare Menge wieder von "niemand" auf
     // "jemand" (z. B. New Session direkt nach dem letzten dispose(), das
     // die Master-FX-Rückführung geschlossen hat) -- sonst bliebe sie ohne
@@ -328,6 +369,7 @@ export class Machine {
     this.inserts.push(insert);
     this.#rewireInsertChain();
     this.#renderInserts();
+    refreshLatencyCompensation();
     return insert;
   }
 
@@ -358,6 +400,7 @@ export class Machine {
     // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
     automation.clearLanesWithPrefix(lanePrefix);
     this.#renderInserts();
+    refreshLatencyCompensation();
 
     const label = INSERT_DISPLAY[insert.type]?.name ?? insert.name;
     undo.offer(`${label} removed`, () => {
@@ -366,6 +409,7 @@ export class Machine {
       this.#rewireInsertChain();
       automation.importLanesWithPrefix(lanePrefix, savedLanes);
       this.#renderInserts();
+      refreshLatencyCompensation();
     });
   }
 
@@ -381,6 +425,7 @@ export class Machine {
 
   setInsertBypass(id, bypassed) {
     this.inserts.find((i) => i.id === id)?.setBypass(bypassed);
+    refreshLatencyCompensation();
   }
 
   setInsertParam(id, key, value) {
@@ -398,6 +443,7 @@ export class Machine {
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
     this.#renderInserts();
+    refreshLatencyCompensation();
   }
 
   /** Nach dem Laden eines Projekts (project.js#loadProject/importMachines):
@@ -826,6 +872,7 @@ export class Machine {
     automation.unregisterMachine(this.id);
     machines.delete(this);
     refreshGates(); // falls die einzige Solo-Maschine entfernt wurde
+    refreshLatencyCompensation(); // falls die Maschine mit der grössten Insert-Latenz entfernt wurde
     this.disposeAudio();
     // Fade-out, dann trennen — vermeidet Klicks beim Entfernen
     const t = engine.now;
@@ -834,6 +881,7 @@ export class Machine {
       this.output.disconnect();
       this.panner.disconnect();
       this.gate.disconnect();
+      this.pdcDelay.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
       this.#meterAnalyser?.disconnect();
