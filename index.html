@@ -15511,7 +15511,7 @@ return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } = (() => {
+const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -15941,6 +15941,11 @@ const HISS_MAX_GAIN = 0.014;
 const DEFS = {
   comp: {
     name: 'Compressor',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads (s.
+    // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- von insertChainLatencySec()
+    // gelesen, damit machine.js jede Maschine gegenüber dem Rest des Racks
+    // zeitlich ausgleichen kann (s. dortigen PDC-Kommentar).
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // 1176-Style: Input (treibt in die feste Schwelle), Attack, Release,
     // Ratio-Modus (Taster statt Regler), Output (Makeup) — kein Threshold.
     // mix: Parallelkompression ("New-York-Style", wie Abletons Compressor-
@@ -16107,6 +16112,9 @@ const DEFS = {
   },
   drive: {
     name: 'Drive',
+    // Feste Zusatzlatenz des 4x-Oversampling-Interpolationsfilters (s.
+    // WAVESHAPER_4X_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
+    latencySec: WAVESHAPER_4X_LATENCY_SEC,
     // base: Pre-Shaper-Filter (wie Abletons Saturator-"Color"-Sektion) --
     // VOR der Sättigung, entscheidet WELCHE Frequenzen überhaupt in den
     // Shaper laufen, nicht nur wie das Ergebnis klingt (das macht `tone`
@@ -16554,6 +16562,9 @@ const DEFS = {
   },
   resonator: {
     name: 'Resonator',
+    // Feste Zusatzlatenz des Sicherheits-Limiters im Wet-Pfad (s.
+    // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // Bewusst KEIN Delay-Feedback-Design wie Filter Delay/Reverb (beide
     // haben uns schon eine Instabilität eingebrockt) -- stattdessen eine
     // Bank paralleler resonanter Bandpass-Filter (BiquadFilterNode), auf
@@ -16697,6 +16708,9 @@ const DEFS = {
   },
   opto: {
     name: 'Opto Compressor',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
+    // Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // LA-2A-Tribut: EIN Hauptregler ("Peak Reduction", wie am echten Gerät)
     // statt eines Attack/Release/Knee-Vierersatzes -- Attack/Release/Knee
     // stehen FEST auf für optische Kompressoren typische, deutlich trägere/
@@ -16768,6 +16782,11 @@ const DEFS = {
   },
   tape: {
     name: 'Tape Machine',
+    // Feste Zusatzlatenz aus Sättigungs-Oversampling PLUS Wow/Flutter-
+    // Grunddelay (s. WAVESHAPER_4X_LATENCY_SEC/TAPE_WOWFLUTTER_BASE_DELAY_SEC
+    // oben) -- mit ~11ms der mit Abstand latenteste Insert-Typ, s. Kommentar
+    // bei DEFS.comp.latencySec.
+    latencySec: WAVESHAPER_4X_LATENCY_SEC + TAPE_WOWFLUTTER_BASE_DELAY_SEC,
     // Vierteilige Kette wie ein echtes Bandgerät: Sättigung (Kopf-
     // Übersteuerung, s. makeTapeCurve oben) -> DC-Sperrfilter (die bewusst
     // asymmetrische Sättigungskurve könnte sonst einen Gleichspannungsanteil
@@ -16926,6 +16945,9 @@ const DEFS = {
   },
   limiter: {
     name: 'Limiter',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
+    // Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // Bewusst NICHT dieselbe Rolle wie engine.limiter (audio-engine.js) --
     // jener ist ein unsichtbares App-weites Sicherheitsnetz direkt vor
     // ctx.destination, nie eingestellt/gesehen. Dieser Insert ist ein
@@ -17164,6 +17186,21 @@ const RESONATOR_INTERVALS = [
 let nextInsertId = 1;
 
 /**
+ * Summierte feste Zusatzlatenz einer Insert-Kette (nur die tatsächlich
+ * aktiven, nicht bypassten Inserts zählen -- ein bypasster Insert läuft
+ * beim Ausgang komplett am Effekt vorbei, s. createInsert()#dryGain/wetGain
+ * oben, hat also keine hörbare Zusatzlatenz). Für machine.js#refreshLatency-
+ * Compensation: jede Maschine gleicht ihre eigene Summe gegen das
+ * Rack-Maximum aus, damit z. B. eine Tape Machine (~11ms) ihre Maschine
+ * nicht hörbar aus dem Groove der anderen schiebt.
+ */
+function insertChainLatencySec(inserts) {
+  return inserts.reduce((sum, insert) => (
+    insert.bypassed ? sum : sum + (DEFS[insert.type]?.latencySec ?? 0)
+  ), 0);
+}
+
+/**
  * Baut einen Insert. `saved` (optional) = { id, params, bypassed } aus
  * einem vorher gespeicherten Projekt — fehlende Parameter fallen auf die
  * Effekt-Defaults zurück (z. B. wenn ein neuer Parameter dazukommt).
@@ -17248,7 +17285,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, insertMeta, createInsert, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS };
+return { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS };
 })();
 
 /* ===== js/core/transport.js ===== */
@@ -20741,6 +20778,34 @@ function refreshGates() {
   lastAudible = audibleNow;
 }
 
+/**
+ * Latenz-Ausgleich (Plugin Delay Compensation) über alle Maschinen: manche
+ * Insert-Effekte bringen eine kleine, aber feste Zusatzlatenz mit (Kompressor/
+ * Opto/Limiter/Resonator ~6ms, Drive ~4ms, Tape Machine ~11ms -- s. inserts.js#
+ * insertChainLatencySec), weil sie intern einen DynamicsCompressorNode- oder
+ * WaveShaperNode(oversample:'4x')-Lookahead nutzen. Ohne Ausgleich läuft eine
+ * Maschine mit z. B. Tape Machine in der Kette hörbar HINTER dem Rest des
+ * Racks her, sobald der Effekt eingesetzt wird -- gemeldet als "der Groove
+ * fällt auseinander". Fix: jede Maschine bekommt permanent ein `pdcDelay`
+ * hinter ihrem Gate (s. Konstruktor); dessen Zeit wird hier auf die Differenz
+ * zwischen der eigenen Insert-Latenz und der grössten aktuell im Rack
+ * vorkommenden gesetzt, sodass alle Maschinen wieder synchron am Master-Bus
+ * (und den Sends, die ebenfalls hinter `pdcDelay` abzweigen) ankommen. Muss
+ * bei jeder Änderung der Insert-Zusammensetzung/des Bypass-Status irgendeiner
+ * Maschine sowie beim Hinzufügen/Entfernen einer ganzen Maschine neu
+ * berechnet werden (s. Aufrufstellen). Master-FX-eigene Insert-Latenz bleibt
+ * bewusst aussen vor -- sie liegt für JEDE Maschine gleichermassen an,
+ * verschiebt also nichts relativ zueinander (kein Groove-Problem).
+ */
+function refreshLatencyCompensation() {
+  const t = engine.now;
+  let maxLatency = 0;
+  for (const m of machines) maxLatency = Math.max(maxLatency, insertChainLatencySec(m.inserts));
+  for (const m of machines) {
+    m.pdcDelay.delayTime.setTargetAtTime(maxLatency - insertChainLatencySec(m.inserts), t, 0.01);
+  }
+}
+
 class Machine {
   static meta = { type: 'machine', name: 'Machine', desc: '', color: '#888' };
 
@@ -20766,7 +20831,17 @@ class Machine {
      *  Entmuten nicht die Reglerstellung überschreibt. */
     this.gate = engine.ctx.createGain();
     this.panner.connect(this.gate);
-    this.gate.connect(engine.masterBus);
+    /** @type {DelayNode} Latenz-Ausgleich (PDC) gegenüber dem Rest des Racks
+     *  — sitzt hinterm Gate, VOR Master-Bus UND Sends (beide zweigen erst
+     *  danach ab, s. unten), gleicht also beide Pfade gemeinsam aus. Zeit
+     *  wird ausschliesslich von refreshLatencyCompensation() gepflegt (s.
+     *  dortigen Kommentar) -- hier nur mit 0 initialisiert (frisch erzeugte
+     *  Maschine hat noch keine Inserts). 0.5s Maximalpuffer ist grosszügig
+     *  bemessen (selbst mehrere gestapelte Tape-Machine/Kompressor-Inserts
+     *  blieben weit darunter), kostet aber nur einen einzelnen kleinen Node. */
+    this.pdcDelay = engine.ctx.createDelay(0.5);
+    this.gate.connect(this.pdcDelay);
+    this.pdcDelay.connect(engine.masterBus);
 
     /** @type {Array<ReturnType<typeof createInsert>>} Insert-FX-Kette
      *  zwischen Output und Panner — frei bestückbar (0..n Instanzen,
@@ -20796,19 +20871,22 @@ class Machine {
      *  Default zurückzufallen. */
     this.xySpring = false;
 
-    /** Post-Fader-Sends zu den Master-Effekten — hinter dem Gate,
-     *  damit Mute/Solo die Effekt-Fahnen mitnimmt. */
+    /** Post-Fader-Sends zu den Master-Effekten — hinter Gate UND pdcDelay,
+     *  damit Mute/Solo UND der Latenz-Ausgleich die Effekt-Fahnen mitnehmen
+     *  (sonst käme der Reverb-/Delay-Anteil einer Maschine mit latenten
+     *  Inserts wie Tape Machine zeitlich vor ihrem eigenen Trockensignal an). */
     this.sends = { delay: 0, reverb: 0 };
     this.sendDelay = engine.ctx.createGain();
     this.sendDelay.gain.value = 0;
     this.sendReverb = engine.ctx.createGain();
     this.sendReverb.gain.value = 0;
-    this.gate.connect(this.sendDelay);
+    this.pdcDelay.connect(this.sendDelay);
     this.sendDelay.connect(engine.delayBus);
-    this.gate.connect(this.sendReverb);
+    this.pdcDelay.connect(this.sendReverb);
     this.sendReverb.connect(engine.reverbBus);
 
     machines.add(this);
+    refreshLatencyCompensation();
     // Reicht die neue Maschine die hörbare Menge wieder von "niemand" auf
     // "jemand" (z. B. New Session direkt nach dem letzten dispose(), das
     // die Master-FX-Rückführung geschlossen hat) -- sonst bliebe sie ohne
@@ -20930,6 +21008,7 @@ class Machine {
     this.inserts.push(insert);
     this.#rewireInsertChain();
     this.#renderInserts();
+    refreshLatencyCompensation();
     return insert;
   }
 
@@ -20960,6 +21039,7 @@ class Machine {
     // also auch kein Kollisionsrisiko, nur unnötiger Ballast).
     automation.clearLanesWithPrefix(lanePrefix);
     this.#renderInserts();
+    refreshLatencyCompensation();
 
     const label = INSERT_DISPLAY[insert.type]?.name ?? insert.name;
     undo.offer(`${label} removed`, () => {
@@ -20968,6 +21048,7 @@ class Machine {
       this.#rewireInsertChain();
       automation.importLanesWithPrefix(lanePrefix, savedLanes);
       this.#renderInserts();
+      refreshLatencyCompensation();
     });
   }
 
@@ -20983,6 +21064,7 @@ class Machine {
 
   setInsertBypass(id, bypassed) {
     this.inserts.find((i) => i.id === id)?.setBypass(bypassed);
+    refreshLatencyCompensation();
   }
 
   setInsertParam(id, key, value) {
@@ -21000,6 +21082,7 @@ class Machine {
     this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
     this.#rewireInsertChain();
     this.#renderInserts();
+    refreshLatencyCompensation();
   }
 
   /** Nach dem Laden eines Projekts (project.js#loadProject/importMachines):
@@ -21428,6 +21511,7 @@ class Machine {
     automation.unregisterMachine(this.id);
     machines.delete(this);
     refreshGates(); // falls die einzige Solo-Maschine entfernt wurde
+    refreshLatencyCompensation(); // falls die Maschine mit der grössten Insert-Latenz entfernt wurde
     this.disposeAudio();
     // Fade-out, dann trennen — vermeidet Klicks beim Entfernen
     const t = engine.now;
@@ -21436,6 +21520,7 @@ class Machine {
       this.output.disconnect();
       this.panner.disconnect();
       this.gate.disconnect();
+      this.pdcDelay.disconnect();
       this.sendDelay.disconnect();
       this.sendReverb.disconnect();
       this.#meterAnalyser?.disconnect();

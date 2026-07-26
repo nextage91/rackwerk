@@ -430,6 +430,11 @@ const HISS_MAX_GAIN = 0.014;
 const DEFS = {
   comp: {
     name: 'Compressor',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads (s.
+    // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- von insertChainLatencySec()
+    // gelesen, damit machine.js jede Maschine gegenüber dem Rest des Racks
+    // zeitlich ausgleichen kann (s. dortigen PDC-Kommentar).
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // 1176-Style: Input (treibt in die feste Schwelle), Attack, Release,
     // Ratio-Modus (Taster statt Regler), Output (Makeup) — kein Threshold.
     // mix: Parallelkompression ("New-York-Style", wie Abletons Compressor-
@@ -596,6 +601,9 @@ const DEFS = {
   },
   drive: {
     name: 'Drive',
+    // Feste Zusatzlatenz des 4x-Oversampling-Interpolationsfilters (s.
+    // WAVESHAPER_4X_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
+    latencySec: WAVESHAPER_4X_LATENCY_SEC,
     // base: Pre-Shaper-Filter (wie Abletons Saturator-"Color"-Sektion) --
     // VOR der Sättigung, entscheidet WELCHE Frequenzen überhaupt in den
     // Shaper laufen, nicht nur wie das Ergebnis klingt (das macht `tone`
@@ -1043,6 +1051,9 @@ const DEFS = {
   },
   resonator: {
     name: 'Resonator',
+    // Feste Zusatzlatenz des Sicherheits-Limiters im Wet-Pfad (s.
+    // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // Bewusst KEIN Delay-Feedback-Design wie Filter Delay/Reverb (beide
     // haben uns schon eine Instabilität eingebrockt) -- stattdessen eine
     // Bank paralleler resonanter Bandpass-Filter (BiquadFilterNode), auf
@@ -1186,6 +1197,9 @@ const DEFS = {
   },
   opto: {
     name: 'Opto Compressor',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
+    // Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // LA-2A-Tribut: EIN Hauptregler ("Peak Reduction", wie am echten Gerät)
     // statt eines Attack/Release/Knee-Vierersatzes -- Attack/Release/Knee
     // stehen FEST auf für optische Kompressoren typische, deutlich trägere/
@@ -1257,6 +1271,11 @@ const DEFS = {
   },
   tape: {
     name: 'Tape Machine',
+    // Feste Zusatzlatenz aus Sättigungs-Oversampling PLUS Wow/Flutter-
+    // Grunddelay (s. WAVESHAPER_4X_LATENCY_SEC/TAPE_WOWFLUTTER_BASE_DELAY_SEC
+    // oben) -- mit ~11ms der mit Abstand latenteste Insert-Typ, s. Kommentar
+    // bei DEFS.comp.latencySec.
+    latencySec: WAVESHAPER_4X_LATENCY_SEC + TAPE_WOWFLUTTER_BASE_DELAY_SEC,
     // Vierteilige Kette wie ein echtes Bandgerät: Sättigung (Kopf-
     // Übersteuerung, s. makeTapeCurve oben) -> DC-Sperrfilter (die bewusst
     // asymmetrische Sättigungskurve könnte sonst einen Gleichspannungsanteil
@@ -1415,6 +1434,9 @@ const DEFS = {
   },
   limiter: {
     name: 'Limiter',
+    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
+    // Kommentar bei DEFS.comp.latencySec.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
     // Bewusst NICHT dieselbe Rolle wie engine.limiter (audio-engine.js) --
     // jener ist ein unsichtbares App-weites Sicherheitsnetz direkt vor
     // ctx.destination, nie eingestellt/gesehen. Dieser Insert ist ein
@@ -1651,6 +1673,21 @@ export const RESONATOR_INTERVALS = [
 ];
 
 let nextInsertId = 1;
+
+/**
+ * Summierte feste Zusatzlatenz einer Insert-Kette (nur die tatsächlich
+ * aktiven, nicht bypassten Inserts zählen -- ein bypasster Insert läuft
+ * beim Ausgang komplett am Effekt vorbei, s. createInsert()#dryGain/wetGain
+ * oben, hat also keine hörbare Zusatzlatenz). Für machine.js#refreshLatency-
+ * Compensation: jede Maschine gleicht ihre eigene Summe gegen das
+ * Rack-Maximum aus, damit z. B. eine Tape Machine (~11ms) ihre Maschine
+ * nicht hörbar aus dem Groove der anderen schiebt.
+ */
+export function insertChainLatencySec(inserts) {
+  return inserts.reduce((sum, insert) => (
+    insert.bypassed ? sum : sum + (DEFS[insert.type]?.latencySec ?? 0)
+  ), 0);
+}
 
 /**
  * Baut einen Insert. `saved` (optional) = { id, params, bypassed } aus
