@@ -18,7 +18,7 @@
  */
 import { Machine } from './machine.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
+import { transport, shuffleTime } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
@@ -76,14 +76,18 @@ export class StepSequencedSynth extends Machine {
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
     const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
-    const delayMs = (time - engine.now) * 1000;
+    // Shuffle/Groove: verschiebt jeden zweiten 16tel (s. transport.js#
+    // shuffleTime) -- pro Maschine einstellbar (this.params.shuffle,
+    // Regler in buildPatternControls() unten), Default 50 = kein Effekt.
+    const t = shuffleTime(step, time, this.params.shuffle, transport.stepDuration);
+    const delayMs = (t - engine.now) * 1000;
     this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
 
     const st = this.pattern[idx];
     // dur-Argument wird von playNote()-Implementierungen ohne Halte-Dauer
     // (z. B. PercSynth, deren Hüllkurve rein aus params.decay kommt) einfach
     // ignoriert — kein Sonderfall pro Unterklasse nötig.
-    if (st.on) this.playNote(st.midi, time, transport.stepDuration * 0.8);
+    if (st.on) this.playNote(st.midi, t, transport.stepDuration * 0.8);
   }
 
   onTransport(event) {
@@ -125,6 +129,20 @@ export class StepSequencedSynth extends Machine {
    *  durch (s. step-seq.js) -- bislang nur vom AcidBass genutzt, Default
    *  false lässt alle anderen Unterklassen unverändert. */
   buildPatternControls(container, { accentSlide = false } = {}) {
+    // Shuffle/Groove -- pro Maschine (s. transport.js#shuffleTime/Chat),
+    // deshalb hier im Pattern-Teil statt im Transport verankert. Lazy-
+    // Default direkt hier statt in jeder Unterklassen-buildAudio(): diese
+    // Methode ist der EINE gemeinsame Ort, den alle Unterklassen sowieso
+    // aufrufen, ein Default-Eintrag pro Unterklasse wäre nur Wiederholung.
+    if (this.params.shuffle === undefined) this.params.shuffle = 50;
+    const shuffleRow = document.createElement('div');
+    shuffleRow.className = 'machine__row';
+    shuffleRow.innerHTML = `<x-knob label="Shuffle" min="50" max="75" value="${this.params.shuffle}" unit="%" data-p="shuffle" data-auto></x-knob>`;
+    shuffleRow.addEventListener('input', (e) => {
+      if (e.target.dataset?.p === 'shuffle') this.params.shuffle = e.detail.value;
+    });
+    container.appendChild(shuffleRow);
+
     this.patternBank = createPatternBank({
       index: this.patternIndex,
       shape: 'notes',

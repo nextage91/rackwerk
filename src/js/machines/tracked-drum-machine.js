@@ -14,7 +14,7 @@
  */
 import { Machine } from './machine.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
+import { transport, shuffleTime } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
@@ -22,15 +22,21 @@ import { song } from '../core/song.js';
 
 export class TrackedDrumMachine extends Machine {
   getParamForKnob(key) {
-    // volume liegt hier nicht in params — alles andere (z. B. die
-    // FX-Sends) beantwortet die Basisklasse
-    return key === 'volume' ? this.volume : super.getParamForKnob(key);
+    // volume/shuffle liegen hier nicht in params — alles andere (z. B.
+    // die FX-Sends) beantwortet die Basisklasse
+    if (key === 'volume') return this.volume;
+    if (key === 'shuffle') return this.shuffle;
+    return super.getParamForKnob(key);
   }
 
   buildAudio() {
     this.volume = 0.8;
     this.output.gain.value = this.volume;
     this.selected = 0;
+    /** Shuffle/Groove (Prozent, 50 = kein Effekt), s. transport.js#
+     *  shuffleTime -- ganzes Kit statt pro Spur (wie bei echten Drum-
+     *  Machines, s. Chat). */
+    this.shuffle = 50;
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
 
@@ -138,19 +144,23 @@ export class TrackedDrumMachine extends Machine {
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.tracks[0].steps.length; // alle Spuren gleich lang
-    const delayMs = (time - engine.now) * 1000;
+    // Shuffle/Groove -- ganzes Kit auf einmal (s. buildAudio()/Chat), nicht
+    // pro Spur, s. transport.js#shuffleTime.
+    const t = shuffleTime(step, time, this.shuffle, transport.stepDuration);
+    const delayMs = (t - engine.now) * 1000;
     this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
 
     for (let i = 0; i < this.tracks.length; i++) {
       if (this.soloTrack != null && i !== this.soloTrack) continue;
       const tr = this.tracks[i];
-      if (tr.steps[idx].on) this.#trigger(tr, time);
+      if (tr.steps[idx].on) this.#trigger(tr, t);
     }
   }
 
   serialize() {
     return {
       volume: this.volume,
+      shuffle: this.shuffle,
       // Spur-Parameter (pattern-übergreifend)
       tracks: this.tracks.map((tr) => ({
         tune: tr.tune, decay: tr.decay, level: tr.level, attack: tr.attack, release: tr.release,
@@ -167,6 +177,7 @@ export class TrackedDrumMachine extends Machine {
   deserialize(state) {
     this.volume = state.volume ?? 0.8;
     this.output.gain.value = this.volume;
+    this.shuffle = state.shuffle ?? 50;
     state.tracks?.forEach((saved, i) => {
       const tr = this.tracks[i];
       if (!tr) return;
@@ -344,13 +355,19 @@ export class TrackedDrumMachine extends Machine {
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
 
-    // Maschinen-weite Lautstärke — eigene Reihe, damit sie nicht mit den
-    // Spur-Reglern oben verwechselt wird.
+    // Maschinen-weite Lautstärke + Shuffle — eigene Reihe, damit sie nicht
+    // mit den Spur-Reglern oben verwechselt werden (beide gelten fürs
+    // ganze Kit, nicht pro Spur).
     const volRow = document.createElement('div');
     volRow.className = 'machine__row';
-    volRow.innerHTML = `<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>`;
+    volRow.innerHTML = `
+      <x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>
+      <x-knob label="Shuffle" min="50" max="75" value="${this.shuffle}" unit="%" data-p="shuffle" data-auto></x-knob>
+    `;
     volRow.addEventListener('input', (e) => {
-      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value); // eine Quelle der Wahrheit, auch für den Mixer
+      const key = e.target.dataset?.p;
+      if (key === 'volume') this.setLevel(e.detail.value); // eine Quelle der Wahrheit, auch für den Mixer
+      else if (key === 'shuffle') this.shuffle = e.detail.value;
     });
     container.appendChild(volRow);
 

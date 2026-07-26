@@ -23,7 +23,7 @@
  */
 import { Machine } from './machine.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
+import { transport, shuffleTime } from '../core/transport.js';
 import { StepSeq, resizePattern } from '../ui/step-seq.js';
 import { createPatternBank } from '../ui/pattern-bank.js';
 import { automation } from '../core/automation.js';
@@ -54,6 +54,9 @@ export class Sampler extends Machine {
     this.selected = 0;
     /** Index der solo geschalteten Spur, oder null */
     this.soloTrack = null;
+    /** Shuffle/Groove (Prozent, 50 = kein Effekt), s. transport.js#
+     *  shuffleTime -- ganzer Sampler statt pro Pad. */
+    this.shuffle = 50;
 
     this.tracks = Array.from({ length: PAD_COUNT }, (_, i) => this.buildPad(`Pad ${i + 1}`));
 
@@ -108,9 +111,11 @@ export class Sampler extends Machine {
   }
 
   getParamForKnob(key) {
-    // volume liegt hier nicht in params (wie TrackedDrumMachine) — alles
-    // andere (z. B. FX-Sends) beantwortet die Basisklasse
-    return key === 'volume' ? this.volume : super.getParamForKnob(key);
+    // volume/shuffle liegen hier nicht in params (wie TrackedDrumMachine)
+    // — alles andere (z. B. FX-Sends) beantwortet die Basisklasse
+    if (key === 'volume') return this.volume;
+    if (key === 'shuffle') return this.shuffle;
+    return super.getParamForKnob(key);
   }
 
   /* ---------- Mixer: Pegel (Volume separat, nicht in params) ---------- */
@@ -227,12 +232,15 @@ export class Sampler extends Machine {
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
     const idx = step % this.tracks[0].steps.length;
-    const delayMs = (time - engine.now) * 1000;
+    // Shuffle/Groove -- ganzer Sampler auf einmal (s. buildAudio()/Chat),
+    // nicht pro Pad, s. transport.js#shuffleTime.
+    const t = shuffleTime(step, time, this.shuffle, transport.stepDuration);
+    const delayMs = (t - engine.now) * 1000;
     this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
     for (let i = 0; i < this.tracks.length; i++) {
       if (this.soloTrack != null && i !== this.soloTrack) continue;
       const tr = this.tracks[i];
-      if (tr.steps[idx].on) this.#trigger(tr, time);
+      if (tr.steps[idx].on) this.#trigger(tr, t);
     }
   }
 
@@ -469,6 +477,7 @@ export class Sampler extends Machine {
   serialize() {
     return {
       volume: this.volume,
+      shuffle: this.shuffle,
       tracks: this.tracks.map((tr) => this.#serializeTrack(tr)),
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
@@ -479,6 +488,7 @@ export class Sampler extends Machine {
   deserialize(state) {
     this.volume = state.volume ?? 0.8;
     this.output.gain.value = this.volume;
+    this.shuffle = state.shuffle ?? 50;
     state.tracks?.forEach((saved, i) => this.#applyTrackState(i, saved));
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
@@ -586,9 +596,14 @@ export class Sampler extends Machine {
 
     const volRow = document.createElement('div');
     volRow.className = 'machine__row';
-    volRow.innerHTML = '<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>';
+    volRow.innerHTML = `
+      <x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>
+      <x-knob label="Shuffle" min="50" max="75" value="${this.shuffle}" unit="%" data-p="shuffle" data-auto></x-knob>
+    `;
     volRow.addEventListener('input', (e) => {
-      if (e.target.dataset?.p === 'volume') this.setLevel(e.detail.value);
+      const key = e.target.dataset?.p;
+      if (key === 'volume') this.setLevel(e.detail.value);
+      else if (key === 'shuffle') this.shuffle = e.detail.value;
     });
     container.appendChild(volRow);
 
