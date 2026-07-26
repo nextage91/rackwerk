@@ -495,7 +495,10 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   position: fixed;
   z-index: 60;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: calc(100vw - 16px);
+  justify-content: center;
   animation: chip-in .15s ease-out;
 }
 .pat-chip__btn {
@@ -1068,6 +1071,8 @@ x-knob.has-auto .knob__dial::after {
 /* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
    (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */
 .sheet--insert-picker { z-index: 60; }
+/* Sampler-Kit-Sheet: gleicher Grund/gleicher Wert wie oben. */
+.sheet--kit { z-index: 60; }
 
 /* ===================== VU-Meter (LED-Kette im Master-Header) ===================== */
 .vu {
