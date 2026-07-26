@@ -288,11 +288,29 @@ x-fader {
   grid-column: 2;
   grid-row: 1;
   position: relative;
-  width: 30px;
+  width: var(--fader-track-w, 30px);
   height: 100%;
   border-radius: 5px;
   background: linear-gradient(90deg, #1c1811, #100d09 45%, #1c1811);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
+}
+/* Linear-Modus (min/max gesetzt, s. fader.js) -- eigenständiger Bereich
+   statt Kanalzug-Gain, deshalb ohne die dB-Skalen-Legende (die ist
+   spezifisch fürs Gain-Mapping): einspaltiges Layout mit optionalem Label
+   (z. B. Frequenz-Beschriftung eines Graphic-EQ-Bandes) über dem Track. */
+x-fader.is-linear {
+  grid-template-columns: auto;
+  grid-template-rows: auto 1fr auto;
+}
+x-fader.is-linear .fader__track { grid-column: 1; grid-row: 2; }
+x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
+.fader__label {
+  grid-column: 1;
+  grid-row: 1;
+  font-family: var(--font-lcd);
+  font-size: 9px;
+  color: var(--ink-faint);
+  text-align: center;
 }
 /* Unsichtbares, vergrössertes Tippraster rund um den (nur 30px schmalen)
    Track -- Finger treffen selten pixelgenau. Asymmetrisch, weil die Lücken
@@ -301,7 +319,7 @@ x-fader {
    grosszügigere 10px (>20px Luft zur VU-Anzeige). */
 .fader__hitzone {
   position: absolute;
-  inset: -4px -10px;
+  inset: -4px calc(-1 * var(--fader-hit-x, 10px));
   pointer-events: auto;
   touch-action: none;
 }
@@ -329,8 +347,8 @@ x-fader {
 .fader__cap {
   position: absolute;
   left: 50%;
-  width: 40px; height: 18px;
-  margin-left: -20px;
+  width: var(--fader-cap-w, 40px); height: 18px;
+  margin-left: calc(var(--fader-cap-w, 40px) / -2);
   margin-bottom: -9px;
   border-radius: 4px;
   background: linear-gradient(180deg, #6a6254, #3a352b 45%, #221e18);
@@ -898,13 +916,27 @@ x-knob.has-auto .knob__dial::after {
    inserts.js) -- gleiches Muster wie .resonator-tune oben (Array-Parameter
    statt regulärer knobsHtml), nur ohne den dunklen Hintergrund-Container
    (hier IST die ganze Reihe der Insert-Body, kein Zusatz über den Knobs). */
+/* Festes 5er-Raster statt flex-wrap -- zwei übersichtliche Reihen zu je 5
+   Bändern (Low/Mid-Bässe oben, Mitten/Höhen unten), unabhängig von der
+   tatsächlichen Handybreite (flex-wrap liess je nach Breite mal 8+2, mal
+   7+3 Bänder pro Reihe entstehen, was der klaren "erste/zweite Oktavgruppe"-
+   Aufteilung eines echten Graphic-EQs widersprach). */
 .geq-bands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 4px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px 4px;
   justify-content: center;
 }
-.geq-bands x-knob { --knob-size: 34px; gap: 3px; }
+/* Miniatur-Schieberegler statt Drehregler, wie an klassischer Graphic-EQ-
+   Hardware -- x-fader im Linear-Modus (s. fader.js), schmaler als der
+   Kanalzug-Fader im Mixer, damit 5 Bänder je Reihe auf Handybreite passen. */
+.geq-bands x-fader {
+  height: 96px;
+  --fader-track-w: 12px;
+  --fader-cap-w: 22px;
+  --fader-hit-x: 5px;
+}
+.geq-bands x-fader .fader__value { font-size: 9px; }
 
 /* ---- Compressor: 1176-Style GR-Meter + Ratio-Taster statt -Regler ---- */
 .comp-meter {

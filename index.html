@@ -1948,11 +1948,29 @@ x-fader {
   grid-column: 2;
   grid-row: 1;
   position: relative;
-  width: 30px;
+  width: var(--fader-track-w, 30px);
   height: 100%;
   border-radius: 5px;
   background: linear-gradient(90deg, #1c1811, #100d09 45%, #1c1811);
   box-shadow: 0 2px 6px rgba(0,0,0,.6) inset;
+}
+/* Linear-Modus (min/max gesetzt, s. fader.js) -- eigenständiger Bereich
+   statt Kanalzug-Gain, deshalb ohne die dB-Skalen-Legende (die ist
+   spezifisch fürs Gain-Mapping): einspaltiges Layout mit optionalem Label
+   (z. B. Frequenz-Beschriftung eines Graphic-EQ-Bandes) über dem Track. */
+x-fader.is-linear {
+  grid-template-columns: auto;
+  grid-template-rows: auto 1fr auto;
+}
+x-fader.is-linear .fader__track { grid-column: 1; grid-row: 2; }
+x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
+.fader__label {
+  grid-column: 1;
+  grid-row: 1;
+  font-family: var(--font-lcd);
+  font-size: 9px;
+  color: var(--ink-faint);
+  text-align: center;
 }
 /* Unsichtbares, vergrössertes Tippraster rund um den (nur 30px schmalen)
    Track -- Finger treffen selten pixelgenau. Asymmetrisch, weil die Lücken
@@ -1961,7 +1979,7 @@ x-fader {
    grosszügigere 10px (>20px Luft zur VU-Anzeige). */
 .fader__hitzone {
   position: absolute;
-  inset: -4px -10px;
+  inset: -4px calc(-1 * var(--fader-hit-x, 10px));
   pointer-events: auto;
   touch-action: none;
 }
@@ -1989,8 +2007,8 @@ x-fader {
 .fader__cap {
   position: absolute;
   left: 50%;
-  width: 40px; height: 18px;
-  margin-left: -20px;
+  width: var(--fader-cap-w, 40px); height: 18px;
+  margin-left: calc(var(--fader-cap-w, 40px) / -2);
   margin-bottom: -9px;
   border-radius: 4px;
   background: linear-gradient(180deg, #6a6254, #3a352b 45%, #221e18);
@@ -2558,13 +2576,27 @@ x-knob.has-auto .knob__dial::after {
    inserts.js) -- gleiches Muster wie .resonator-tune oben (Array-Parameter
    statt regulärer knobsHtml), nur ohne den dunklen Hintergrund-Container
    (hier IST die ganze Reihe der Insert-Body, kein Zusatz über den Knobs). */
+/* Festes 5er-Raster statt flex-wrap -- zwei übersichtliche Reihen zu je 5
+   Bändern (Low/Mid-Bässe oben, Mitten/Höhen unten), unabhängig von der
+   tatsächlichen Handybreite (flex-wrap liess je nach Breite mal 8+2, mal
+   7+3 Bänder pro Reihe entstehen, was der klaren "erste/zweite Oktavgruppe"-
+   Aufteilung eines echten Graphic-EQs widersprach). */
 .geq-bands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 4px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px 4px;
   justify-content: center;
 }
-.geq-bands x-knob { --knob-size: 34px; gap: 3px; }
+/* Miniatur-Schieberegler statt Drehregler, wie an klassischer Graphic-EQ-
+   Hardware -- x-fader im Linear-Modus (s. fader.js), schmaler als der
+   Kanalzug-Fader im Mixer, damit 5 Bänder je Reihe auf Handybreite passen. */
+.geq-bands x-fader {
+  height: 96px;
+  --fader-track-w: 12px;
+  --fader-cap-w: 22px;
+  --fader-hit-x: 5px;
+}
+.geq-bands x-fader .fader__value { font-size: 9px; }
 
 /* ---- Compressor: 1176-Style GR-Meter + Ratio-Taster statt -Regler ---- */
 .comp-meter {
@@ -3313,15 +3345,25 @@ return { XKnob };
 /* ===== js/ui/fader.js ===== */
 const { XFader } = (() => {
 /**
- * <x-fader> — vertical channel-strip fader (linear gain 0..1, dB scale).
+ * <x-fader> — vertical touch fader. Zwei Betriebsarten:
+ *
+ * - Standard (kein min/max-Attribut): Kanalzug-Pegel-Fader wie bisher --
+ *   linearer Gain 0..1, Zug über eine dB-Skala (FLOOR_DB..0) statt eines
+ *   linearen Gain-Reglers, feste Skalen-Legende (0/-6/-12/-24/-60).
+ * - Linear (min/max-Attribute gesetzt): frei bespielbarer Bereich wie
+ *   x-knob, z. B. für die Bänder eines Graphic EQ (min="-12" max="12") --
+ *   optional mit label/unit wie x-knob, ohne die Skalen-Legende (die ist
+ *   spezifisch fürs Kanalzug-Gain-Mapping). Liegt min<0<max (symmetrischer
+ *   Bereich, z. B. ±12dB), füllt der Fill-Balken nur die ABWEICHUNG vom
+ *   Nullpunkt (wächst nach oben bei Boost, nach unten bei Cut) statt immer
+ *   von ganz unten -- wie am echten Hardware-Graphic-EQ, wo der Schieber
+ *   in Ruhestellung MITTIG steht statt ganz unten.
  *
  * Touching the track jumps the cap to the finger position (like a real
  * fader, not a relative drag) and follows the finger 1:1 afterwards.
- * Double-tap resets to the default value. Drag axis is mapped through a
- * dB scale (FLOOR_DB..0) so the throw feels like a console fader instead
- * of a linear gain slider.
+ * Double-tap resets to the default value.
  *
- * Attributes: default, value (linear gain 0..1)
+ * Attributes: default, value, min, max, label, unit
  * Event: "input" (detail.value) on every change.
  */
 const FLOOR_DB = -60;
@@ -3333,20 +3375,40 @@ class XFader extends HTMLElement {
     if (this.#built) return;
     this.#built = true;
 
-    this.defaultValue = parseFloat(this.getAttribute('default') ?? this.getAttribute('value') ?? '1');
-    this.#value = parseFloat(this.getAttribute('value') ?? '1');
+    this.hasRange = this.hasAttribute('min') || this.hasAttribute('max');
+    this.min = parseFloat(this.getAttribute('min') ?? '0');
+    this.max = parseFloat(this.getAttribute('max') ?? '1');
+    this.unit = this.getAttribute('unit') ?? '';
+    const label = this.getAttribute('label') ?? '';
+    this.defaultValue = parseFloat(
+      this.getAttribute('default') ?? this.getAttribute('value') ?? (this.hasRange ? `${this.min}` : '1')
+    );
+    this.#value = parseFloat(this.getAttribute('value') ?? (this.hasRange ? `${this.min}` : '1'));
 
-    this.innerHTML = `
-      <div class="fader__scale">
-        <span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−60</span>
-      </div>
-      <div class="fader__track">
-        <div class="fader__hitzone"></div>
-        <div class="fader__fill"></div>
-        <div class="fader__cap"></div>
-      </div>
-      <span class="fader__value"></span>
-    `;
+    if (this.hasRange) {
+      this.classList.add('is-linear');
+      this.innerHTML = `
+        ${label ? `<span class="fader__label">${label}</span>` : ''}
+        <div class="fader__track">
+          <div class="fader__hitzone"></div>
+          <div class="fader__fill"></div>
+          <div class="fader__cap"></div>
+        </div>
+        <span class="fader__value"></span>
+      `;
+    } else {
+      this.innerHTML = `
+        <div class="fader__scale">
+          <span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−60</span>
+        </div>
+        <div class="fader__track">
+          <div class="fader__hitzone"></div>
+          <div class="fader__fill"></div>
+          <div class="fader__cap"></div>
+        </div>
+        <span class="fader__value"></span>
+      `;
+    }
     this.#track = this.querySelector('.fader__track');
     this.#cap = this.querySelector('.fader__cap');
     this.#fill = this.querySelector('.fader__fill');
@@ -3388,7 +3450,7 @@ class XFader extends HTMLElement {
       this.setAttribute('value', v);
       return;
     }
-    this.#value = Math.min(1, Math.max(0, v));
+    this.#value = this.hasRange ? Math.min(this.max, Math.max(this.min, v)) : Math.min(1, Math.max(0, v));
     this.#render();
   }
 
@@ -3396,14 +3458,18 @@ class XFader extends HTMLElement {
     if (name === 'value' && this.#built) this.value = parseFloat(val);
   }
 
-  /* ---------- linear gain (0..1) <-> fader travel (0..1), through dB ---------- */
+  /* ---------- Wert <-> Fader-Weg (0..1) -----------
+   * Standard: linearer Gain (0..1) durch eine dB-Skala gezogen (Kanalzug-
+   * Feeling). Linear-Modus (hasRange): schlichtes min..max wie x-knob. */
   #toNorm(v) {
+    if (this.hasRange) return (v - this.min) / (this.max - this.min);
     if (v <= 0) return 0;
     const db = Math.max(FLOOR_DB, Math.min(0, 20 * Math.log10(v)));
     return (db - FLOOR_DB) / -FLOOR_DB;
   }
   #fromNorm(n) {
     n = Math.min(1, Math.max(0, n));
+    if (this.hasRange) return this.min + n * (this.max - this.min);
     if (n <= 0) return 0;
     const db = FLOOR_DB + n * -FLOOR_DB;
     return Math.pow(10, db / 20);
@@ -3488,8 +3554,27 @@ class XFader extends HTMLElement {
   #render() {
     const norm = this.#toNorm(this.#value);
     this.#cap.style.bottom = `${norm * 100}%`;
-    this.#fill.style.height = `${norm * 100}%`;
-    if (this.#value <= 0) {
+
+    if (this.hasRange && this.min < 0 && this.max > 0) {
+      // Symmetrischer Bereich (z. B. ±12dB): der Fill-Balken zeigt nur die
+      // ABWEICHUNG vom Nullpunkt (wächst nach oben bei Boost, nach unten
+      // bei Cut), nicht immer von ganz unten -- sonst läse ein kleiner Cut
+      // visuell wie "viel Pegel", genau wie an einem echten Graphic-EQ-
+      // Schieber, der in Ruhestellung MITTIG steht.
+      const zeroNorm = this.#toNorm(0);
+      const top = Math.min(zeroNorm, norm);
+      const bottom = Math.max(zeroNorm, norm);
+      this.#fill.style.bottom = `${top * 100}%`;
+      this.#fill.style.height = `${(bottom - top) * 100}%`;
+    } else {
+      this.#fill.style.bottom = '';
+      this.#fill.style.height = `${norm * 100}%`;
+    }
+
+    if (this.hasRange) {
+      const sign = this.min < 0 && this.#value > 0 ? '+' : '';
+      this.#readout.textContent = `${sign}${this.#value.toFixed(1)}${this.unit}`;
+    } else if (this.#value <= 0) {
       this.#readout.textContent = '−∞';
     } else {
       const db = 20 * Math.log10(this.#value);
@@ -18249,13 +18334,15 @@ function renderInsertChain(listEl, owner) {
       `;
     } else if (insert.type === 'geq') {
       // Kein knobsHtml (UI_PARAMS.geq gibt es bewusst nicht, wie bei eq8) --
-      // ein x-knob pro festem Band, gleiches Muster wie resonators
-      // Tune-Regler (Array-Parameter statt Einzelwert).
+      // ein Mini-Schieberegler pro festem Band (x-fader im Linear-Modus,
+      // s. fader.js), wie an klassischer Graphic-EQ-Hardware, statt Dreh-
+      // reglern. Gleiches Grundmuster wie resonators Tune-Regler (Array-
+      // Parameter statt Einzelwert).
       bodyHtml = `
         <div class="geq-bands">
           ${GEQ_FREQS.map((freq, i) => `
-            <x-knob label="${freq >= 1000 ? `${freq / 1000}k` : freq}" min="-12" max="12" value="${insert.params.bands[i]}" unit="dB"
-              data-geq-band="${i}"></x-knob>
+            <x-fader label="${freq >= 1000 ? `${freq / 1000}k` : freq}" min="-12" max="12" value="${insert.params.bands[i]}" default="0" unit="dB"
+              data-geq-band="${i}"></x-fader>
           `).join('')}
         </div>
       `;
