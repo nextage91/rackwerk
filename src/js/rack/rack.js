@@ -70,6 +70,7 @@ export class Rack {
         if (state?.state) restored.deserialize(state.state);
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
+        if (state?.modulators) restored.deserializeModulators(state.modulators);
         if (state?.clips) restored.deserializeClips(state.clips);
         if (state?.xySpring) restored.xySpring = true;
         if (state?.label) restored.label = state.label;

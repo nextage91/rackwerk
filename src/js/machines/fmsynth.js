@@ -308,8 +308,17 @@ export class FMSynth extends StepSequencedSynth {
     this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
+      // s. subsynth.js für die ausführliche Begründung des Arp-Umleitungspunkts.
+      onNoteOn: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOn(midi); else this.noteOn(midi);
+      },
+      onNoteOff: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOff(midi); else this.noteOff(midi);
+      },
     }));
   }
+
+  get modulatorTypes() { return ['lfo', 'arp']; }
 }

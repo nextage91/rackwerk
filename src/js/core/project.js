@@ -10,6 +10,9 @@
  *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
  *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
  *     Teil des unterklassen-eigenen state)
+ *   - modulators: Modulations-Kette der Maschine (LFO/Arpeggiator,
+ *     Basisklasse), gleiches Sibling-Muster wie inserts — fehlt in
+ *     alten Projekten → keine Modulatoren
  *   - clips: Jam-Clips der Maschine (Basisklasse), gleiches Sibling-
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
  *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
@@ -44,6 +47,7 @@ export function serializeProject(rack) {
       state: m.serialize(),
       sends: { ...m.sends },
       inserts: m.serializeInserts(),
+      modulators: m.serializeModulators(),
       clips: m.serializeClips(),
       xySpring: m.xySpring,
       lanes: automation.exportLanes(m.id),
@@ -92,6 +96,7 @@ export function loadProject(rack, data) {
       const machine = rack.addMachine(MachineClass, md.state);
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
@@ -132,6 +137,7 @@ export function importMachines(rack, data) {
       const machine = rack.addMachine(MachineClass, md.state);
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);

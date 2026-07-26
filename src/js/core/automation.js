@@ -51,6 +51,12 @@ class Automation {
     this.lanes = new Map();
     /** @type {Map<string,{lastIdx:number|null}>} aktuell angefasste Knobs */
     this.grabbed = new Map();
+    /** @type {Set<string>} Ziele mit aktivem LFO-Modulator (s. modulators.js)
+     *  -- deren aufgenommene Lane wird währenddessen pausiert (nicht
+     *  gelöscht), sonst würden Lane-Wiedergabe und LFO um denselben Knob
+     *  konkurrieren. Analog zu `grabbed` (Hand schlägt Automation), nur
+     *  dauerhaft statt nur während des Anfassens. */
+    this.lfoActive = new Set();
     /** @type {Map<number,number>} machineId → Länge in Takten (Pattern-Länge).
      *  Bestimmt, wie lang NEU aufgenommene Lanes werden. */
     this.bars = new Map();
@@ -219,6 +225,31 @@ class Automation {
   /** Existiert für diesen Schlüssel eine aufgezeichnete Lane? */
   hasLane(key) {
     return this.lanes.has(key);
+  }
+
+  /* ---------- LFO-Modulatoren (s. modulators.js) ----------
+   * Ein LFO schreibt genau wie eine Lane über apply() auf denselben Knob,
+   * nur algorithmisch statt aus einem aufgezeichneten Array -- deshalb hier
+   * angesiedelt statt in modulators.js dupliziert. */
+
+  /** Direkter Zugriff aufs registrierte Ziel eines Schlüssels -- für den
+   *  LFO-Tick (s. modulators.js), der denselben Knob wie Automation
+   *  schreibt, ohne selbst eine Lane zu sein. */
+  getTarget(key) {
+    return this.targets.get(key);
+  }
+
+  /** Markiert/entfernt einen Schlüssel als von einem aktiven LFO belegt --
+   *  pausiert dessen evtl. aufgenommene Lane (s. #tick()) und dimmt den
+   *  Knob per CSS, OHNE die Lane selbst zu löschen (Ausschalten des LFOs
+   *  gibt sie unverändert zurück). */
+  setLfoActive(key, active) {
+    if (active) this.lfoActive.add(key); else this.lfoActive.delete(key);
+    this.targets.get(key)?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+  }
+
+  isLfoActive(key) {
+    return this.lfoActive.has(key);
   }
 
   /** Applier vorregistrieren, ohne Events zu binden (z. B. damit geladene
@@ -457,9 +488,9 @@ class Automation {
       }
     }
 
-    // ---- Playback: interpoliert, angefasste Knobs auslassen ----
+    // ---- Playback: interpoliert, angefasste ODER LFO-belegte Knobs auslassen ----
     for (const [key, lane] of this.lanes) {
-      if (this.grabbed.has(key)) continue;
+      if (this.grabbed.has(key) || this.lfoActive.has(key)) continue;
       const target = this.targets.get(key);
       if (!target) continue;
       const len = lane.length;

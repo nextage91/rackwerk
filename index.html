@@ -2534,10 +2534,10 @@ x-knob.has-auto .knob__dial::after {
 .inserts:empty { display: none; }
 .inserts__add { min-height: 52px; margin-top: 4px; font-size: 13px; }
 
-.insert-module { margin: 0; }
-.insert-module.is-bypassed { opacity: .5; }
-.insert-module .machine__title { cursor: default; }
-.insert-module .machine__head {
+.insert-module, .mod-module { margin: 0; }
+.insert-module.is-bypassed, .mod-module.is-bypassed { opacity: .5; }
+.insert-module .machine__title, .mod-module .machine__title { cursor: default; }
+.insert-module .machine__head, .mod-module .machine__head {
   padding: 8px 22px;
   /* Titel + 4 Aktions-Buttons passen auf sehr schmalen Screens nicht in
      eine Zeile — die Aktionen rutschen dann rechtsbündig in eine zweite
@@ -2545,7 +2545,7 @@ x-knob.has-auto .knob__dial::after {
   flex-wrap: wrap;
   row-gap: 6px;
 }
-.insert-module .machine__head-actions .m-btn {
+.insert-module .machine__head-actions .m-btn, .mod-module .machine__head-actions .m-btn {
   min-width: 28px;
   padding: 4px 5px;
   font-size: 11px;
@@ -2558,6 +2558,57 @@ x-knob.has-auto .knob__dial::after {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 6px;
+}
+
+/* ===================== Modulations-FX (LFO/Arpeggiator) =====================
+   Eigenständige Kette, sitzt im Panel OBERHALB der maschinen-eigenen Regler
+   (s. machine.js#render()) statt darunter wie die Insert-Kette -- deshalb
+   KEIN border-top (die Trennlinie zu den darunterliegenden Reglern kommt
+   optisch von deren eigenem margin/Kartenrahmen). Modul-Kacheln selbst
+   nutzen dieselbe .machine-Fassade wie Inserts (s. dortigen Kommentar),
+   Kopf-/Aktions-/Params-Klassen werden 1:1 mitgenutzt (s. Regeln oben). */
+.machine__row--modulators {
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(255,255,255,.08);
+}
+.modulators { display: flex; flex-direction: column; gap: 14px; }
+.modulators:empty { display: none; }
+.modulators__add { min-height: 52px; margin-top: 4px; font-size: 13px; }
+
+.mod-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mod-target__label {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-dim, rgba(255,255,255,.55));
+}
+.mod-target__select {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0,0,0,.35);
+  color: inherit;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* Ein Ziel-Knob, den gerade ein aktiver LFO belegt (s. automation.js#
+   setLfoActive) -- die vorhandene has-auto-Anzeige (gefüllter Ring, s.
+   oben) bleibt sichtbar (die Lane existiert weiter, nur pausiert), wird
+   aber gedimmt statt aktiv zu leuchten, damit sofort klar ist: gerade
+   schreibt der LFO, nicht die aufgenommene Fahrt. */
+x-knob.lane-lfo-muted.has-auto .knob__dial::after {
+  opacity: .35;
 }
 
 /* Resonator: 5 einzeln bespielbare Tune-Regler (Halbton je Band) -- eigene,
@@ -2730,6 +2781,8 @@ x-knob.has-auto .knob__dial::after {
 /* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
    (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */
 .sheet--insert-picker { z-index: 60; }
+/* Modulator-Picker: gleicher Grund/gleicher Wert wie oben. */
+.sheet--modulator-picker { z-index: 60; }
 /* Sampler-Kit-Sheet: gleicher Grund/gleicher Wert wie oben. */
 .sheet--kit { z-index: 60; }
 
@@ -17319,6 +17372,12 @@ class Automation {
     this.lanes = new Map();
     /** @type {Map<string,{lastIdx:number|null}>} aktuell angefasste Knobs */
     this.grabbed = new Map();
+    /** @type {Set<string>} Ziele mit aktivem LFO-Modulator (s. modulators.js)
+     *  -- deren aufgenommene Lane wird währenddessen pausiert (nicht
+     *  gelöscht), sonst würden Lane-Wiedergabe und LFO um denselben Knob
+     *  konkurrieren. Analog zu `grabbed` (Hand schlägt Automation), nur
+     *  dauerhaft statt nur während des Anfassens. */
+    this.lfoActive = new Set();
     /** @type {Map<number,number>} machineId → Länge in Takten (Pattern-Länge).
      *  Bestimmt, wie lang NEU aufgenommene Lanes werden. */
     this.bars = new Map();
@@ -17487,6 +17546,31 @@ class Automation {
   /** Existiert für diesen Schlüssel eine aufgezeichnete Lane? */
   hasLane(key) {
     return this.lanes.has(key);
+  }
+
+  /* ---------- LFO-Modulatoren (s. modulators.js) ----------
+   * Ein LFO schreibt genau wie eine Lane über apply() auf denselben Knob,
+   * nur algorithmisch statt aus einem aufgezeichneten Array -- deshalb hier
+   * angesiedelt statt in modulators.js dupliziert. */
+
+  /** Direkter Zugriff aufs registrierte Ziel eines Schlüssels -- für den
+   *  LFO-Tick (s. modulators.js), der denselben Knob wie Automation
+   *  schreibt, ohne selbst eine Lane zu sein. */
+  getTarget(key) {
+    return this.targets.get(key);
+  }
+
+  /** Markiert/entfernt einen Schlüssel als von einem aktiven LFO belegt --
+   *  pausiert dessen evtl. aufgenommene Lane (s. #tick()) und dimmt den
+   *  Knob per CSS, OHNE die Lane selbst zu löschen (Ausschalten des LFOs
+   *  gibt sie unverändert zurück). */
+  setLfoActive(key, active) {
+    if (active) this.lfoActive.add(key); else this.lfoActive.delete(key);
+    this.targets.get(key)?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+  }
+
+  isLfoActive(key) {
+    return this.lfoActive.has(key);
   }
 
   /** Applier vorregistrieren, ohne Events zu binden (z. B. damit geladene
@@ -17725,9 +17809,9 @@ class Automation {
       }
     }
 
-    // ---- Playback: interpoliert, angefasste Knobs auslassen ----
+    // ---- Playback: interpoliert, angefasste ODER LFO-belegte Knobs auslassen ----
     for (const [key, lane] of this.lanes) {
-      if (this.grabbed.has(key)) continue;
+      if (this.grabbed.has(key) || this.lfoActive.has(key)) continue;
       const target = this.targets.get(key);
       if (!target) continue;
       const len = lane.length;
@@ -17743,6 +17827,287 @@ class Automation {
 const automation = new Automation();
 
 return { automation };
+})();
+
+/* ===== js/core/modulators.js ===== */
+const { LFO_WAVES, LFO_SYNC_BUTTONS, ARP_MODES, ARP_SYNC_BUTTONS, MODULATOR_TYPES, MOD_DISPLAY, MOD_COLORS, createModulator } = (() => {
+/**
+ * modulators.js — die Modulations-Kette: LFO und Arpeggiator.
+ *
+ * Anders als die Insert-Kette (inserts.js, verändert das Audiosignal) sitzt
+ * diese Kette VOR den maschinen-eigenen Reglern (s. machine.js#render()) und
+ * steuert stattdessen PARAMETER (LFO) oder NOTEN (Arpeggiator) -- deshalb
+ * ein eigenes, kleineres Geschwistermodul statt eine Erweiterung von
+ * inserts.js. Ein Modulator braucht (anders als ein Insert) Zugriff auf
+ * seine Maschine (`owner`), nicht nur auf den AudioContext:
+ *   - LFO schreibt über automation.js auf einen der automatisierbaren
+ *     Knobs der Maschine (owner.laneKeyPrefix + Zielname).
+ *   - Arpeggiator ruft owner.noteOn(midi)/owner.noteOff(midi) direkt auf --
+ *     dieselben Methoden, die sonst das Keybed aufruft (s. subsynth.js/
+ *     polysynth.js/fmsynth.js, die bei aktivem Arp ihr Keybed stattdessen
+ *     hierher umleiten).
+ *
+ * createModulator(type, saved, owner) baut EIN Objekt, das Daten (params,
+ * bypassed, serialize) UND Verhalten (Ticker/Notenlogik) vereint -- gleiches
+ * Muster wie inserts.js#createInsert, nur mit `owner` statt `ctx`.
+ */
+
+const TICK_MS = 30;
+
+/** Modulierte Waveforms (0..1, unipolar -- LFO-Tiefe skaliert davon
+ *  ausgehend den tatsächlich bestrichenen Reglerbereich, s. paramValueAt). */
+function waveValue(wave, phase, sh) {
+  if (wave === 'triangle') return phase < 0.5 ? phase * 2 : (1 - phase) * 2;
+  if (wave === 'square') return phase < 0.5 ? 0 : 1;
+  if (wave === 'random') return sh.value;
+  return (1 - Math.cos(phase * Math.PI * 2)) / 2; // sine
+}
+
+/** Reglerwert für einen 0..1-Fortschritt -- respektiert die log-Kurve
+ *  mancher Knobs (Cutoff, Zeiten, …) genau wie automation.js' Trim-Modus
+ *  (s. dort, gleiche Idee: curve="log" heisst multiplikativ statt additiv
+ *  interpolieren, sonst verbringt eine LFO-Fahrt fast ihre ganze Zeit im
+ *  oberen Bereich eines log-Reglers). */
+function paramValueAt(knob, t01) {
+  const lo = Number(knob.min), hi = Number(knob.max);
+  if (knob.getAttribute('curve') === 'log' && lo > 0) return lo * (hi / lo) ** t01;
+  return lo + t01 * (hi - lo);
+}
+
+const LFO_WAVES = [
+  { value: 'sine', label: 'Sine' },
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'square', label: 'Square' },
+  { value: 'random', label: 'Random' },
+];
+
+/** Tempo-Sync-Buttons für den LFO -- 'free' schaltet auf den Rate-Knob
+ *  (Hz) um, alle anderen Werte sind Takt-Bruchteile/-Vielfache und werden
+ *  direkt an transport.phaseOver() durchgereicht (0..1 Phase pro Zyklus,
+ *  braucht anders als der Filter Delay keine Sekunden-Umrechnung). Reicht
+ *  bewusst von schnell (Vibrato-Tempo) bis langsam (mehrtaktige Sweeps) --
+ *  ein LFO wird typischerweise langsamer eingesetzt als ein Delay. */
+const LFO_SYNC_BUTTONS = [
+  { value: 'free', label: 'Free' },
+  { value: '0.0625', label: '1/16' },
+  { value: '0.125', label: '1/8' },
+  { value: '0.25', label: '1/4' },
+  { value: '0.5', label: '1/2' },
+  { value: '1', label: '1 Bar' },
+  { value: '2', label: '2 Bars' },
+  { value: '4', label: '4 Bars' },
+  { value: '8', label: '8 Bars' },
+];
+
+const ARP_MODES = [
+  { value: 'up', label: 'Up' },
+  { value: 'down', label: 'Down' },
+  { value: 'updown', label: 'Up-Down' },
+  { value: 'random', label: 'Random' },
+];
+
+/** Tempo-Sync-Buttons des Arpeggiators -- dieselben Notenwerte/Faktoren wie
+ *  der Filter Delay (DELAY_SYNC_DIVISIONS, relativ zu einer Viertelnote),
+ *  bewusst OHNE 'free': ein Arp ohne Songtempo-Bezug ergibt musikalisch
+ *  keinen Sinn (anders als ein LFO, der auch als freie Hz-Modulation
+ *  Sinn ergibt, z. B. Vibrato unabhängig vom Sequencer-Tempo). */
+const ARP_SYNC_BUTTONS = [
+  { value: '1/16', label: '1/16' },
+  { value: '1/8t', label: '1/8t' },
+  { value: '1/8', label: '1/8' },
+  { value: '1/8d', label: '1/8.' },
+  { value: '1/4t', label: '1/4t' },
+  { value: '1/4', label: '1/4' },
+  { value: '1/4d', label: '1/4.' },
+  { value: '1/2', label: '1/2' },
+];
+
+const MOD_DEFS = {
+  lfo: {
+    name: 'LFO',
+    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1 },
+    build(owner, p) {
+      let timer = null;
+      let phaseAcc = 0;
+      let lastT = engine.now;
+      let lastPhase = 0;
+      const sh = { value: Math.random() };
+      let trackedTarget = p.target;
+      let bypassedFlag = false;
+
+      const muteKey = (target) => (target ? `${owner.laneKeyPrefix}:${target}` : null);
+      const setMute = (target, active) => {
+        const k = muteKey(target);
+        if (k) automation.setLfoActive(k, active);
+      };
+
+      const tick = () => {
+        const k = muteKey(p.target);
+        if (!k) return;
+        const target = automation.getTarget(k);
+        if (!target) return;
+
+        let phase;
+        if (p.division === 'free') {
+          const now = engine.now;
+          phaseAcc = (phaseAcc + (now - lastT) * p.rateHz) % 1;
+          lastT = now;
+          phase = phaseAcc;
+        } else {
+          phase = transport.phaseOver(Number(p.division));
+        }
+        if (p.wave === 'random' && phase < lastPhase) sh.value = Math.random();
+        lastPhase = phase;
+
+        const t01 = waveValue(p.wave, phase, sh) * Math.min(1, Math.max(0, p.depth));
+        target.apply(paramValueAt(target.knob, t01));
+      };
+
+      return {
+        onParam(key) {
+          if (key === 'target') {
+            setMute(trackedTarget, false);
+            trackedTarget = p.target;
+            if (!bypassedFlag) setMute(trackedTarget, true);
+          }
+        },
+        onBypass(v) {
+          bypassedFlag = v;
+          if (v) { clearInterval(timer); timer = null; setMute(trackedTarget, false); }
+          else { setMute(trackedTarget, true); if (!timer) timer = setInterval(tick, TICK_MS); }
+        },
+        dispose() {
+          clearInterval(timer);
+          setMute(trackedTarget, false);
+        },
+      };
+    },
+  },
+
+  arp: {
+    name: 'Arpeggiator',
+    defaults: { mode: 'up', octaves: 1, division: '1/16' },
+    build(owner, p) {
+      let held = [];
+      let stepTimer = null;
+      let stepIdx = 0;
+      let sounding = null;
+      let bypassedFlag = false;
+
+      const sequence = () => {
+        if (!held.length) return [];
+        const base = [...held].sort((a, b) => a - b);
+        const stack = [];
+        for (let o = 0; o < p.octaves; o++) for (const n of base) stack.push(n + o * 12);
+        if (p.mode === 'down') return stack.reverse();
+        if (p.mode === 'updown' && stack.length > 2) return stack.concat(stack.slice(1, -1).reverse());
+        return stack;
+      };
+
+      const stepMs = () => transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 0.25) * 1000;
+
+      const advance = () => {
+        if (sounding != null) { owner.noteOff(sounding); sounding = null; }
+        const seq = sequence();
+        if (!seq.length) return;
+        sounding = p.mode === 'random' ? seq[Math.floor(Math.random() * seq.length)] : seq[stepIdx++ % seq.length];
+        owner.noteOn(sounding);
+      };
+
+      const restart = () => {
+        clearInterval(stepTimer);
+        stepTimer = setInterval(advance, stepMs());
+      };
+      const stop = () => {
+        clearInterval(stepTimer);
+        stepTimer = null;
+        if (sounding != null) { owner.noteOff(sounding); sounding = null; }
+        stepIdx = 0;
+      };
+
+      return {
+        // Vom Keybed der 3 Maschinen mit gehaltenen Stimmen aufgerufen
+        // (s. subsynth.js/polysynth.js/fmsynth.js), solange dieser Arp
+        // aktiv (nicht bypassed) ist -- ersetzt für diese Noten direkt
+        // owner.noteOn/noteOff.
+        noteOn(midi) {
+          if (!held.includes(midi)) held.push(midi);
+          if (!bypassedFlag && !stepTimer) { restart(); advance(); }
+        },
+        noteOff(midi) {
+          held = held.filter((m) => m !== midi);
+          if (!held.length) stop();
+        },
+        onParam(key) {
+          if (key === 'division' && stepTimer) restart();
+        },
+        onBypass(v) {
+          bypassedFlag = v;
+          if (v) stop();
+          else if (held.length) { restart(); advance(); }
+        },
+        dispose() { stop(); },
+      };
+    },
+  },
+};
+
+const MODULATOR_TYPES = Object.keys(MOD_DEFS);
+
+const MOD_DISPLAY = {
+  lfo: { name: 'LFO', badge: 'MOD-LFO' },
+  arp: { name: 'Arpeggiator', badge: 'MOD-ARP' },
+};
+
+const MOD_COLORS = {
+  lfo: '#c98fe0',
+  arp: '#e0a24a',
+};
+
+let nextModId = 1;
+
+/**
+ * Baut einen Modulator. `saved` (optional) = { id, params, bypassed } aus
+ * einem gespeicherten Projekt. `owner` ist die Maschine, auf der er sitzt
+ * (Automations-Präfix bzw. Noten-Ziel, s. Dateikopf-Kommentar).
+ */
+function createModulator(type, saved, owner) {
+  const def = MOD_DEFS[type];
+  if (!def) throw new Error(`Unbekannter Modulator-Typ: ${type}`);
+  const params = structuredClone({ ...def.defaults, ...saved?.params });
+  const id = saved?.id ?? nextModId++;
+  if (saved?.id != null) nextModId = Math.max(nextModId, saved.id + 1);
+
+  const runtime = def.build(owner, params);
+  const mod = {
+    id,
+    type,
+    name: def.name,
+    params,
+    bypassed: saved?.bypassed ?? false,
+    setParam(key, v) {
+      params[key] = v;
+      runtime.onParam?.(key, v);
+    },
+    setBypass(v) {
+      mod.bypassed = v;
+      runtime.onBypass?.(v);
+    },
+    serialize() {
+      return { id, type, params: { ...params }, bypassed: mod.bypassed };
+    },
+    dispose() {
+      runtime.dispose?.();
+    },
+    // Nur vom Arpeggiator belegt -- s. subsynth.js/polysynth.js/fmsynth.js
+    noteOn: runtime.noteOn,
+    noteOff: runtime.noteOff,
+  };
+  runtime.onBypass?.(mod.bypassed);
+  return mod;
+}
+
+return { LFO_WAVES, LFO_SYNC_BUTTONS, ARP_MODES, ARP_SYNC_BUTTONS, MODULATOR_TYPES, MOD_DISPLAY, MOD_COLORS, createModulator };
 })();
 
 /* ===== js/ui/insert-chain.js ===== */
@@ -18566,6 +18931,224 @@ function renderInsertChain(listEl, owner) {
 }
 
 return { openInsertPicker, renderInsertChain, INSERT_DISPLAY };
+})();
+
+/* ===== js/ui/modulation-chain.js ===== */
+const { openModulatorPicker, renderModulationChain } = (() => {
+/**
+ * modulation-chain.js — UI für die Modulations-Kette (LFO/Arpeggiator),
+ * das Gegenstück zu insert-chain.js für modulators.js. Gleiches generisches
+ * Owner-Interface wie dort, nur mit anderen Methodennamen:
+ *   owner.modulators              — Array der aktuellen Modulator-Objekte
+ *   owner.laneKeyPrefix           — s. insert-chain.js
+ *   owner.setModulatorParam(id, key, value)
+ *   owner.setModulatorBypass(id, bool)
+ *   owner.moveModulator(id, dir)
+ *   owner.removeModulator(id)
+ *   owner.el                      — gerendertes Maschinen-Element, liefert
+ *                                    die LFO-Ziel-Auswahl (alle eigenen
+ *                                    data-auto-Knobs der Maschine)
+ */
+
+function modColorVars(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `--m-color:${hex}; --m-color-dim:rgba(${r},${g},${b},.22); `
+    + `--m-color-glow:rgba(${r},${g},${b},.45); --m-color-tint:rgba(${r},${g},${b},.08);`;
+}
+
+/** Alle eigenen automatisierbaren Regler der Maschine als LFO-Zielauswahl --
+ *  dieselben Knobs, die man auch von Hand als Automations-Lane aufnehmen
+ *  kann (data-auto, s. machine.js#render()). Insert- und Modulator-Ketten-
+ *  Knobs tragen bewusst KEIN data-auto (eigener Registrierungsweg, s. dort),
+ *  tauchen hier also nie versehentlich als Ziel auf. */
+function targetOptions(owner) {
+  if (!owner.el) return [];
+  const seen = new Set();
+  const out = [];
+  for (const knob of owner.el.querySelectorAll('x-knob[data-auto]')) {
+    const key = knob.dataset.p;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label: knob.getAttribute('label') || key });
+  }
+  return out;
+}
+
+let pickerEl = null;
+
+/** `allowedTypes` filtert das Sheet (z. B. Arpeggiator nur bei Maschinen mit
+ *  gehaltenen Keybed-Stimmen, s. subsynth.js/polysynth.js/fmsynth.js). */
+function openModulatorPicker(onPick, allowedTypes = MODULATOR_TYPES) {
+  if (!pickerEl) {
+    pickerEl = document.createElement('div');
+    pickerEl.className = 'sheet sheet--modulator-picker';
+    pickerEl.hidden = true;
+    document.body.appendChild(pickerEl);
+    pickerEl.addEventListener('click', (e) => {
+      if (e.target.closest('[data-close]')) { pickerEl.hidden = true; return; }
+      const btn = e.target.closest('[data-type]');
+      if (!btn) return;
+      pickerEl.hidden = true;
+      pickerEl._onPick?.(btn.dataset.type);
+    });
+  }
+  pickerEl.innerHTML = `
+    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__panel" role="dialog" aria-label="Modulator">
+      <div class="sheet__grip"></div>
+      <h2 class="sheet__title">Modulator</h2>
+      <div class="sheet__list">
+        ${allowedTypes.map((type) => `
+          <button type="button" class="sheet__item" data-type="${type}">
+            <span class="sheet__name">${MOD_DISPLAY[type]?.name ?? type}</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  pickerEl._onPick = onPick;
+  pickerEl.hidden = false;
+}
+
+/** Rendert die komplette Modulations-Kette von `owner` in `listEl`. */
+function renderModulationChain(listEl, owner) {
+  if (!listEl) return;
+  const options = targetOptions(owner);
+
+  listEl.innerHTML = owner.modulators.map((mod, idx) => {
+    const knobHtml = (label, key, min, max, extra = {}) => `
+      <x-knob label="${label}" min="${min}" max="${max}" value="${mod.params[key]}"
+        ${extra.curve ? `curve="${extra.curve}"` : ''} ${extra.unit ? `unit="${extra.unit}"` : ''}
+        ${extra.step ? `step="${extra.step}"` : ''}
+        data-mod-id="${mod.id}" data-mod-param="${key}"></x-knob>
+    `;
+
+    let bodyHtml;
+    if (mod.type === 'lfo') {
+      bodyHtml = `
+        <div class="mod-target">
+          <span class="mod-target__label">Target</span>
+          <select class="mod-target__select" data-mod-target>
+            <option value=""${mod.params.target ? '' : ' selected'}>— none —</option>
+            ${options.map((o) => `<option value="${o.key}"${o.key === mod.params.target ? ' selected' : ''}>${o.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="seg">
+          ${LFO_WAVES.map((w) => `
+            <button type="button" class="seg__btn${mod.params.wave === w.value ? ' is-active' : ''}" data-lfo-wave="${w.value}">${w.label}</button>
+          `).join('')}
+        </div>
+        <div class="seg">
+          ${LFO_SYNC_BUTTONS.map((s) => `
+            <button type="button" class="seg__btn${mod.params.division === s.value ? ' is-active' : ''}" data-lfo-sync="${s.value}">${s.label}</button>
+          `).join('')}
+        </div>
+        <div class="insert-row__params">
+          ${mod.params.division === 'free' ? knobHtml('Rate', 'rateHz', 0.05, 20, { curve: 'log', unit: 'Hz' }) : ''}
+          ${knobHtml('Depth', 'depth', 0, 1)}
+        </div>
+      `;
+    } else {
+      bodyHtml = `
+        <div class="seg">
+          ${ARP_MODES.map((m) => `
+            <button type="button" class="seg__btn${mod.params.mode === m.value ? ' is-active' : ''}" data-arp-mode="${m.value}">${m.label}</button>
+          `).join('')}
+        </div>
+        <div class="seg">
+          ${ARP_SYNC_BUTTONS.map((s) => `
+            <button type="button" class="seg__btn${mod.params.division === s.value ? ' is-active' : ''}" data-arp-sync="${s.value}">${s.label}</button>
+          `).join('')}
+        </div>
+        <div class="insert-row__params">
+          ${knobHtml('Octaves', 'octaves', 1, 4, { step: 1 })}
+        </div>
+      `;
+    }
+
+    const { name, badge } = MOD_DISPLAY[mod.type];
+    return `
+      <section class="machine mod-module${mod.bypassed ? ' is-bypassed' : ''}"
+        data-mod-id="${mod.id}" style="${modColorVars(MOD_COLORS[mod.type])}">
+        <header class="machine__head">
+          <span class="machine__stripe"></span>
+          <div class="machine__title">
+            <span>
+              <div class="machine__name">${name}</div>
+              <div class="machine__type">${badge} · #${mod.id}</div>
+            </span>
+          </div>
+          <div class="machine__head-actions">
+            <button type="button" class="m-btn insert-row__move" data-move="-1" aria-label="Move up" ${idx === 0 ? 'disabled' : ''}>▲</button>
+            <button type="button" class="m-btn insert-row__move" data-move="1" aria-label="Move down" ${idx === owner.modulators.length - 1 ? 'disabled' : ''}>▼</button>
+            <button type="button" class="m-btn insert-row__bypass${mod.bypassed ? ' is-active' : ''}" data-bypass>BYP</button>
+            <button type="button" class="m-btn insert-row__remove" data-remove aria-label="Remove modulator">✕</button>
+          </div>
+        </header>
+        <div class="machine__body">${bodyHtml}</div>
+      </section>
+    `;
+  }).join('');
+
+  for (const row of listEl.querySelectorAll('.mod-module')) {
+    const id = parseInt(row.dataset.modId, 10);
+    const mod = owner.modulators.find((m) => m.id === id);
+    row.querySelector('[data-move="-1"]')?.addEventListener('click', () => owner.moveModulator(id, -1));
+    row.querySelector('[data-move="1"]')?.addEventListener('click', () => owner.moveModulator(id, 1));
+    row.querySelector('[data-bypass]').addEventListener('click', () => {
+      owner.setModulatorBypass(id, !mod.bypassed);
+      renderModulationChain(listEl, owner);
+    });
+    row.querySelector('[data-remove]').addEventListener('click', () => owner.removeModulator(id));
+
+    row.querySelector('[data-mod-target]')?.addEventListener('change', (e) => {
+      owner.setModulatorParam(id, 'target', e.target.value);
+      renderModulationChain(listEl, owner);
+    });
+    for (const btn of row.querySelectorAll('[data-lfo-wave]')) {
+      btn.addEventListener('click', () => {
+        owner.setModulatorParam(id, 'wave', btn.dataset.lfoWave);
+        renderModulationChain(listEl, owner);
+      });
+    }
+    for (const btn of row.querySelectorAll('[data-lfo-sync]')) {
+      btn.addEventListener('click', () => {
+        owner.setModulatorParam(id, 'division', btn.dataset.lfoSync);
+        renderModulationChain(listEl, owner); // Rate-Knob muss ggf. ein-/ausgeblendet werden
+      });
+    }
+    for (const btn of row.querySelectorAll('[data-arp-mode]')) {
+      btn.addEventListener('click', () => {
+        owner.setModulatorParam(id, 'mode', btn.dataset.arpMode);
+        renderModulationChain(listEl, owner);
+      });
+    }
+    for (const btn of row.querySelectorAll('[data-arp-sync]')) {
+      btn.addEventListener('click', () => {
+        owner.setModulatorParam(id, 'division', btn.dataset.arpSync);
+        renderModulationChain(listEl, owner);
+      });
+    }
+
+    for (const knob of row.querySelectorAll('x-knob[data-mod-param]')) {
+      knob.addEventListener('input', (e) => {
+        owner.setModulatorParam(id, knob.dataset.modParam, e.detail.value);
+      });
+      // Automatisierbar wie ein Insert-Regler (s. insert-chain.js für die
+      // ausführliche Begründung: die Zeile wird bei jedem Umbau komplett
+      // neu gerendert, register() muss deshalb bei jedem Rendern erneut
+      // auf das jeweils aktuelle Element gebunden werden).
+      const autoKey = `${owner.laneKeyPrefix}:mod:${id}:${knob.dataset.modParam}`;
+      automation.register(autoKey, knob, (v) => {
+        knob.value = v;
+        knob.dispatchEvent(new CustomEvent('input', { detail: { value: v }, bubbles: true }));
+      });
+      knob.classList.toggle('has-auto', automation.hasLane(autoKey));
+    }
+  }
+}
+
+return { openModulatorPicker, renderModulationChain };
 })();
 
 /* ===== js/core/fx.js ===== */
@@ -20008,6 +20591,15 @@ class Machine {
     this.inserts = [];
     this.#rewireInsertChain();
 
+    /** @type {Array<ReturnType<typeof createModulator>>} Modulations-Kette
+     *  (LFO/Arpeggiator) — anders als die Insert-Kette kein Teil des
+     *  Audiographen, sondern steuert Parameter/Noten dieser Maschine. Sitzt
+     *  im Panel bewusst OBERHALB der eigenen Regler (s. render()), während
+     *  Inserts unterhalb sitzen — macht "wirkt auf die Maschine, bevor sie
+     *  klingt" vs. "wirkt aufs bereits erzeugte Signal" auch im Layout
+     *  sichtbar. */
+    this.modulators = [];
+
     /** @type {Array<{id:number, name:string, shape:string, data:*}>}
      *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
     this.clips = [];
@@ -20235,6 +20827,92 @@ class Machine {
    *  Spur-Knobs) überschreiben das und rufen super.onLanesImported() mit. */
   onLanesImported() {
     this.#renderInserts();
+    this.#rerenderModulators();
+  }
+
+  /* ---------- Modulations-FX (LFO/Arpeggiator) ----------
+   * Eigene, kleinere Geschwister-Kette zur Insert-Kette oben (s. deren
+   * Kommentare für die generellen Add/Move/Remove/Undo-Muster, hier 1:1
+   * übernommen) -- Details/Owner-Interface s. modulation-chain.js. */
+
+  /** Welche Modulator-Typen diese Maschine anbietet -- Default: nur LFO
+   *  (funktioniert auf jedem automatisierbaren Regler jeder Maschine).
+   *  SubSynth/PolySynth/FMSynth (gehaltene Keybed-Stimmen) überschreiben
+   *  das um 'arp': ein Arpeggiator ohne gehaltene Noten (Drum-/Sampler-
+   *  Maschinen, PercSynths reines Fire-and-Forget) hätte nichts zum
+   *  Arpeggieren. */
+  get modulatorTypes() { return ['lfo']; }
+
+  #rerenderModulators() {
+    renderModulationChain(this.modulatorsListEl, this);
+  }
+
+  addModulator(type) {
+    const mod = createModulator(type, null, this);
+    this.modulators.push(mod);
+    this.#rerenderModulators();
+    return mod;
+  }
+
+  /** Entfernen mit Undo-Angebot, gleiches Muster wie removeInsert() oben
+   *  (Params/Bypass UND aufgenommene Automations-Fahrten der Modulator-
+   *  eigenen Regler werden gesichert und unter derselben id wiederhergestellt). */
+  removeModulator(id) {
+    const idx = this.modulators.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+    const [mod] = this.modulators.splice(idx, 1);
+
+    const savedMod = mod.serialize();
+    const lanePrefix = `${this.id}:mod:${id}:`;
+    const savedLanes = automation.exportLanesWithPrefix(lanePrefix);
+    const modIndex = idx;
+
+    mod.dispose();
+    automation.clearLanesWithPrefix(lanePrefix);
+    this.#rerenderModulators();
+
+    const label = MOD_DISPLAY[mod.type]?.name ?? mod.name;
+    undo.offer(`${label} removed`, () => {
+      const restored = createModulator(savedMod.type, savedMod, this);
+      this.modulators.splice(modIndex, 0, restored);
+      automation.importLanesWithPrefix(lanePrefix, savedLanes);
+      this.#rerenderModulators();
+    });
+  }
+
+  moveModulator(id, dir) {
+    const idx = this.modulators.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+    const j = idx + dir;
+    if (j < 0 || j >= this.modulators.length) return;
+    [this.modulators[idx], this.modulators[j]] = [this.modulators[j], this.modulators[idx]];
+    this.#rerenderModulators();
+  }
+
+  setModulatorBypass(id, bypassed) {
+    this.modulators.find((m) => m.id === id)?.setBypass(bypassed);
+  }
+
+  setModulatorParam(id, key, value) {
+    this.modulators.find((m) => m.id === id)?.setParam(key, value);
+  }
+
+  /** Erster nicht-bypasste Modulator eines Typs -- vom Keybed der Synths
+   *  mit gehaltenen Stimmen abgefragt (s. subsynth.js/polysynth.js/
+   *  fmsynth.js), um noteOn/noteOff bei aktivem Arp dorthin statt an die
+   *  eigene Stimmenverwaltung umzuleiten. */
+  getActiveModulator(type) {
+    return this.modulators.find((m) => m.type === type && !m.bypassed);
+  }
+
+  serializeModulators() {
+    return this.modulators.map((m) => m.serialize());
+  }
+
+  deserializeModulators(list) {
+    for (const m of this.modulators) m.dispose();
+    this.modulators = (list ?? []).map((saved) => createModulator(saved.type, saved, this));
+    this.#rerenderModulators();
   }
 
   /* ---------- Jam-Clips ----------
@@ -20299,6 +20977,11 @@ class Machine {
       </header>
       <div class="machine__body"></div>
     `;
+    // Früh setzen (nicht erst am Ende von render()) -- die Modulations-
+    // Kette braucht this.el schon MITTEN in render(), um beim Befüllen
+    // ihrer LFO-Zielauswahl die inzwischen von buildControls() angelegten
+    // data-auto-Knobs zu finden (s. modulation-chain.js#targetOptions).
+    this.el = el;
 
     // Panel einklappen (nur Header sichtbar) — reduziert Scroll-Distanz bei
     // mehreren Maschinen im Rack. Rein visuell, kein Datenzustand, deshalb
@@ -20351,6 +21034,7 @@ class Machine {
           state: this.serialize(),
           sends: { ...this.sends },
           inserts: this.serializeInserts(),
+          modulators: this.serializeModulators(),
           clips: this.serializeClips(),
           xySpring: this.xySpring,
           lanes: automation.exportLanes(this.id),
@@ -20369,6 +21053,27 @@ class Machine {
     removeBtn.addEventListener('pointerup', cancelRemoveHold);
     removeBtn.addEventListener('pointerleave', cancelRemoveHold);
     removeBtn.addEventListener('pointercancel', cancelRemoveHold);
+
+    // Modulations-Kette (LFO/Arpeggiator) -- VOR buildControls() angehängt,
+    // damit sie im Panel OBERHALB der maschinen-eigenen Regler sitzt
+    // (Insert-FX sitzen unterhalb, s. weiter unten): "wirkt, bevor die
+    // Maschine klingt" vs. "wirkt aufs bereits erzeugte Signal" wird so
+    // auch im Layout sichtbar, wie gewünscht.
+    const modSection = document.createElement('div');
+    modSection.className = 'machine__row machine__row--modulators';
+    modSection.innerHTML = `
+      <div class="modulators" data-modulators></div>
+      <button type="button" class="rack__add modulators__add" data-add-modulator>+  Add Modulator</button>
+    `;
+    modSection.querySelector('[data-add-modulator]').addEventListener('click', () => {
+      openModulatorPicker((type) => { this.addModulator(type); }, this.modulatorTypes);
+    });
+    el.querySelector('.machine__body').appendChild(modSection);
+    this.modulatorsListEl = modSection.querySelector('[data-modulators]');
+    // Erst NACH buildControls() befüllen (s. unten) -- die LFO-Zielauswahl
+    // liest die data-auto-Knobs der Maschine aus dem DOM (s. modulation-
+    // chain.js#targetOptions), die buildControls() erst gleich anlegt.
+    // Nur die Platzierung im Baum (oberhalb) muss schon jetzt feststehen.
 
     this.buildControls(el.querySelector('.machine__body'));
 
@@ -20404,6 +21109,11 @@ class Machine {
     this.insertsListEl = insertsSection.querySelector('[data-inserts]');
     this.#renderInserts();
 
+    // Jetzt erst befüllen (s. Kommentar bei modSection oben) -- alle
+    // data-auto-Knobs (eigene Regler UND die beiden Sends) stehen jetzt
+    // im DOM, die LFO-Zielauswahl sieht die vollständige Liste.
+    this.#rerenderModulators();
+
     // Knob-Stellungen mit dem (ggf. geladenen) Zustand synchronisieren —
     // die value-Attribute im Markup sind nur die Werks-Defaults
     for (const knob of el.querySelectorAll('x-knob[data-p]')) {
@@ -20425,7 +21135,6 @@ class Machine {
       });
     }
 
-    this.el = el;
     this.ledEl = el.querySelector('[data-led]');
     return el;
   }
@@ -21415,11 +22124,25 @@ class SubSynth extends StepSequencedSynth {
     this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
+      // Bei aktivem Arpeggiator-Modulator übernimmt der die gehaltenen
+      // Noten (s. modulators.js) statt sie direkt an die eigene Stimmen-
+      // verwaltung zu geben -- derselbe Umleitungspunkt bei PolySynth/
+      // FMSynth (s. dort für die ausführliche Begründung).
+      onNoteOn: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOn(midi); else this.noteOn(midi);
+      },
+      onNoteOff: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOff(midi); else this.noteOff(midi);
+      },
     }));
   }
 
+  /** SubSynth hält Stimmen (this.voices) -- ein Arpeggiator hat hier
+   *  wirklich gehaltene Noten zum Arbeiten (anders als PercSynths reines
+   *  Fire-and-Forget, s. machine.js#modulatorTypes). */
+  get modulatorTypes() { return ['lfo', 'arp']; }
 }
 
 return { SubSynth };
@@ -22066,10 +22789,19 @@ class PolySynth extends StepSequencedSynth {
     this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
+      // s. subsynth.js für die ausführliche Begründung des Arp-Umleitungspunkts.
+      onNoteOn: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOn(midi); else this.noteOn(midi);
+      },
+      onNoteOff: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOff(midi); else this.noteOff(midi);
+      },
     }));
   }
+
+  get modulatorTypes() { return ['lfo', 'arp']; }
 }
 
 return { PolySynth };
@@ -24374,10 +25106,19 @@ class FMSynth extends StepSequencedSynth {
     this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
+      // s. subsynth.js für die ausführliche Begründung des Arp-Umleitungspunkts.
+      onNoteOn: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOn(midi); else this.noteOn(midi);
+      },
+      onNoteOff: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOff(midi); else this.noteOff(midi);
+      },
     }));
   }
+
+  get modulatorTypes() { return ['lfo', 'arp']; }
 }
 
 return { FMSynth };
@@ -24447,6 +25188,7 @@ class Rack {
         if (state?.state) restored.deserialize(state.state);
         if (state?.sends) restored.setSends(state.sends);
         if (state?.inserts) restored.deserializeInserts(state.inserts);
+        if (state?.modulators) restored.deserializeModulators(state.modulators);
         if (state?.clips) restored.deserializeClips(state.clips);
         if (state?.xySpring) restored.xySpring = true;
         if (state?.label) restored.label = state.label;
@@ -25800,6 +26542,9 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  *   - inserts: Insert-FX-Kette der Maschine (Basisklasse), fehlt in
  *     alten Projekten → leere Kette (wie sends: Sibling-Feld, nicht
  *     Teil des unterklassen-eigenen state)
+ *   - modulators: Modulations-Kette der Maschine (LFO/Arpeggiator,
+ *     Basisklasse), gleiches Sibling-Muster wie inserts — fehlt in
+ *     alten Projekten → keine Modulatoren
  *   - clips: Jam-Clips der Maschine (Basisklasse), gleiches Sibling-
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
  *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
@@ -25829,6 +26574,7 @@ function serializeProject(rack) {
       state: m.serialize(),
       sends: { ...m.sends },
       inserts: m.serializeInserts(),
+      modulators: m.serializeModulators(),
       clips: m.serializeClips(),
       xySpring: m.xySpring,
       lanes: automation.exportLanes(m.id),
@@ -25877,6 +26623,7 @@ function loadProject(rack, data) {
       const machine = rack.addMachine(MachineClass, md.state);
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
@@ -25917,6 +26664,7 @@ function importMachines(rack, data) {
       const machine = rack.addMachine(MachineClass, md.state);
       if (md.sends) machine.setSends(md.sends);
       if (md.inserts) machine.deserializeInserts(md.inserts);
+      if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
       if (md.label) machine.setLabel(md.label);
