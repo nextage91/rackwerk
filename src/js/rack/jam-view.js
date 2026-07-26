@@ -752,17 +752,24 @@ function makeReorderable(clipsEl, machine) {
     }
     dragEl.style.transform = `translateY(${dy}px)`;
 
+    // Nachbarn NUR unter echten .clip-Geschwistern suchen -- .clips kann
+    // seit den immer sichtbaren Proto-Clip-Buttons (s. renderProtoClipsHtml)
+    // zusätzlich eine .proto-clips__hint/.proto-clips-Sektion als weiteres
+    // Geschwister enthalten. Ohne diese Einschränkung tauschte ein nach
+    // unten gezogener letzter Clip fälschlich mit dieser Sektion statt mit
+    // einem anderen Clip (oder gar nicht erst zu erkennen: reines Text-/
+    // Grid-Element ohne data-clip-id).
     const h = dragEl.offsetHeight + 5; // Höhe + Lückenabstand (s. .clips gap)
     if (dy > h / 2) {
       const next = dragEl.nextElementSibling;
-      if (next) {
+      if (next?.classList.contains('clip')) {
         clipsEl.insertBefore(next, dragEl);
         startY += h;
         dragEl.style.transform = `translateY(${dy - h}px)`;
       }
     } else if (dy < -h / 2) {
       const prev = dragEl.previousElementSibling;
-      if (prev) {
+      if (prev?.classList.contains('clip')) {
         clipsEl.insertBefore(dragEl, prev);
         startY -= h;
         dragEl.style.transform = `translateY(${dy + h}px)`;
@@ -777,12 +784,31 @@ function makeReorderable(clipsEl, machine) {
     dragEl.classList.remove('is-dragging');
     dragEl.style.transform = '';
     if (wasDragging) {
-      const order = [...clipsEl.children].map((el) => Number(el.dataset.clipId));
+      // NUR echte .clip-Kinder zählen (s. Kommentar oben) -- clipsEl.children
+      // kann jetzt auch die Proto-Clip-Sektion enthalten, deren Elemente
+      // kein data-clip-id tragen (Number(undefined) = NaN, .find() liefert
+      // dafür undefined zurück -- machine.clips bekäme dadurch ungültige
+      // undefined-Einträge, die jeden späteren .find()/.map() auf den Clips
+      // zum Absturz bringen, s. Nutzer-Bugreport "Clip startet nicht mehr").
+      const order = [...clipsEl.querySelectorAll(':scope > .clip')].map((el) => Number(el.dataset.clipId));
       machine.clips = order.map((id) => machine.clips.find((c) => c.id === id));
     }
     if (wasDragging || heldForDelete) {
-      dragEl.dataset.suppressClick = '1';
-      setTimeout(() => { if (dragEl) delete dragEl.dataset.suppressClick; }, 80);
+      // Eigene lokale Referenz auf DIESES Element -- `dragEl` selbst wird
+      // gleich unten auf null gesetzt (Ende jeder Geste), und zum Zeitpunkt,
+      // an dem dieser Timeout 80ms später feuert, ist diese Zuweisung
+      // (synchron, noch in diesem Aufruf) immer schon passiert. Der Check
+      // `if (dragEl)` im Callback prüfte bisher fälschlich die ÄUSSERE,
+      // längst genullte Variable statt des konkreten Chips -- das Flag
+      // wurde dadurch NIE wieder entfernt, und der betroffene Clip blieb
+      // dauerhaft unklickbar (bis die Liste neu gerendert wird), obwohl
+      // gar nicht mehr gezogen/gehalten wurde. Reales Symptom (Nutzer-
+      // Bugreport): "ich tippe auf einen Clip und nichts passiert" --
+      // reproduzierbar mit jedem Clip, der auch nur kurz gehalten (Löschen-
+      // Menü geöffnet, aber NICHT gelöscht) oder gezogen wurde.
+      const el = dragEl;
+      el.dataset.suppressClick = '1';
+      setTimeout(() => { delete el.dataset.suppressClick; }, 80);
     }
     dragEl = null; pointerId = null;
   };
