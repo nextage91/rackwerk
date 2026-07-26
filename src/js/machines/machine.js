@@ -16,6 +16,8 @@ import { transport } from '../core/transport.js';
 import { automation } from '../core/automation.js';
 import { createInsert } from '../core/inserts.js';
 import { renderInsertChain, openInsertPicker, INSERT_DISPLAY } from '../ui/insert-chain.js';
+import { createModulator, MOD_DISPLAY } from '../core/modulators.js';
+import { renderModulationChain, openModulatorPicker } from '../ui/modulation-chain.js';
 import { masterFX } from '../core/fx.js';
 import { undo } from '../core/undo.js';
 
@@ -170,6 +172,15 @@ export class Machine {
      *  Output direkt an den Panner. */
     this.inserts = [];
     this.#rewireInsertChain();
+
+    /** @type {Array<ReturnType<typeof createModulator>>} Modulations-Kette
+     *  (LFO/Arpeggiator) — anders als die Insert-Kette kein Teil des
+     *  Audiographen, sondern steuert Parameter/Noten dieser Maschine. Sitzt
+     *  im Panel bewusst OBERHALB der eigenen Regler (s. render()), während
+     *  Inserts unterhalb sitzen — macht "wirkt auf die Maschine, bevor sie
+     *  klingt" vs. "wirkt aufs bereits erzeugte Signal" auch im Layout
+     *  sichtbar. */
+    this.modulators = [];
 
     /** @type {Array<{id:number, name:string, shape:string, data:*}>}
      *  Jam-Clips — benannte Pattern-Schnappschüsse, s. addClip(). */
@@ -398,6 +409,92 @@ export class Machine {
    *  Spur-Knobs) überschreiben das und rufen super.onLanesImported() mit. */
   onLanesImported() {
     this.#renderInserts();
+    this.#rerenderModulators();
+  }
+
+  /* ---------- Modulations-FX (LFO/Arpeggiator) ----------
+   * Eigene, kleinere Geschwister-Kette zur Insert-Kette oben (s. deren
+   * Kommentare für die generellen Add/Move/Remove/Undo-Muster, hier 1:1
+   * übernommen) -- Details/Owner-Interface s. modulation-chain.js. */
+
+  /** Welche Modulator-Typen diese Maschine anbietet -- Default: nur LFO
+   *  (funktioniert auf jedem automatisierbaren Regler jeder Maschine).
+   *  SubSynth/PolySynth/FMSynth (gehaltene Keybed-Stimmen) überschreiben
+   *  das um 'arp': ein Arpeggiator ohne gehaltene Noten (Drum-/Sampler-
+   *  Maschinen, PercSynths reines Fire-and-Forget) hätte nichts zum
+   *  Arpeggieren. */
+  get modulatorTypes() { return ['lfo']; }
+
+  #rerenderModulators() {
+    renderModulationChain(this.modulatorsListEl, this);
+  }
+
+  addModulator(type) {
+    const mod = createModulator(type, null, this);
+    this.modulators.push(mod);
+    this.#rerenderModulators();
+    return mod;
+  }
+
+  /** Entfernen mit Undo-Angebot, gleiches Muster wie removeInsert() oben
+   *  (Params/Bypass UND aufgenommene Automations-Fahrten der Modulator-
+   *  eigenen Regler werden gesichert und unter derselben id wiederhergestellt). */
+  removeModulator(id) {
+    const idx = this.modulators.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+    const [mod] = this.modulators.splice(idx, 1);
+
+    const savedMod = mod.serialize();
+    const lanePrefix = `${this.id}:mod:${id}:`;
+    const savedLanes = automation.exportLanesWithPrefix(lanePrefix);
+    const modIndex = idx;
+
+    mod.dispose();
+    automation.clearLanesWithPrefix(lanePrefix);
+    this.#rerenderModulators();
+
+    const label = MOD_DISPLAY[mod.type]?.name ?? mod.name;
+    undo.offer(`${label} removed`, () => {
+      const restored = createModulator(savedMod.type, savedMod, this);
+      this.modulators.splice(modIndex, 0, restored);
+      automation.importLanesWithPrefix(lanePrefix, savedLanes);
+      this.#rerenderModulators();
+    });
+  }
+
+  moveModulator(id, dir) {
+    const idx = this.modulators.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+    const j = idx + dir;
+    if (j < 0 || j >= this.modulators.length) return;
+    [this.modulators[idx], this.modulators[j]] = [this.modulators[j], this.modulators[idx]];
+    this.#rerenderModulators();
+  }
+
+  setModulatorBypass(id, bypassed) {
+    this.modulators.find((m) => m.id === id)?.setBypass(bypassed);
+  }
+
+  setModulatorParam(id, key, value) {
+    this.modulators.find((m) => m.id === id)?.setParam(key, value);
+  }
+
+  /** Erster nicht-bypasste Modulator eines Typs -- vom Keybed der Synths
+   *  mit gehaltenen Stimmen abgefragt (s. subsynth.js/polysynth.js/
+   *  fmsynth.js), um noteOn/noteOff bei aktivem Arp dorthin statt an die
+   *  eigene Stimmenverwaltung umzuleiten. */
+  getActiveModulator(type) {
+    return this.modulators.find((m) => m.type === type && !m.bypassed);
+  }
+
+  serializeModulators() {
+    return this.modulators.map((m) => m.serialize());
+  }
+
+  deserializeModulators(list) {
+    for (const m of this.modulators) m.dispose();
+    this.modulators = (list ?? []).map((saved) => createModulator(saved.type, saved, this));
+    this.#rerenderModulators();
   }
 
   /* ---------- Jam-Clips ----------
@@ -462,6 +559,11 @@ export class Machine {
       </header>
       <div class="machine__body"></div>
     `;
+    // Früh setzen (nicht erst am Ende von render()) -- die Modulations-
+    // Kette braucht this.el schon MITTEN in render(), um beim Befüllen
+    // ihrer LFO-Zielauswahl die inzwischen von buildControls() angelegten
+    // data-auto-Knobs zu finden (s. modulation-chain.js#targetOptions).
+    this.el = el;
 
     // Panel einklappen (nur Header sichtbar) — reduziert Scroll-Distanz bei
     // mehreren Maschinen im Rack. Rein visuell, kein Datenzustand, deshalb
@@ -514,6 +616,7 @@ export class Machine {
           state: this.serialize(),
           sends: { ...this.sends },
           inserts: this.serializeInserts(),
+          modulators: this.serializeModulators(),
           clips: this.serializeClips(),
           xySpring: this.xySpring,
           lanes: automation.exportLanes(this.id),
@@ -532,6 +635,27 @@ export class Machine {
     removeBtn.addEventListener('pointerup', cancelRemoveHold);
     removeBtn.addEventListener('pointerleave', cancelRemoveHold);
     removeBtn.addEventListener('pointercancel', cancelRemoveHold);
+
+    // Modulations-Kette (LFO/Arpeggiator) -- VOR buildControls() angehängt,
+    // damit sie im Panel OBERHALB der maschinen-eigenen Regler sitzt
+    // (Insert-FX sitzen unterhalb, s. weiter unten): "wirkt, bevor die
+    // Maschine klingt" vs. "wirkt aufs bereits erzeugte Signal" wird so
+    // auch im Layout sichtbar, wie gewünscht.
+    const modSection = document.createElement('div');
+    modSection.className = 'machine__row machine__row--modulators';
+    modSection.innerHTML = `
+      <div class="modulators" data-modulators></div>
+      <button type="button" class="rack__add modulators__add" data-add-modulator>+  Add Modulator</button>
+    `;
+    modSection.querySelector('[data-add-modulator]').addEventListener('click', () => {
+      openModulatorPicker((type) => { this.addModulator(type); }, this.modulatorTypes);
+    });
+    el.querySelector('.machine__body').appendChild(modSection);
+    this.modulatorsListEl = modSection.querySelector('[data-modulators]');
+    // Erst NACH buildControls() befüllen (s. unten) -- die LFO-Zielauswahl
+    // liest die data-auto-Knobs der Maschine aus dem DOM (s. modulation-
+    // chain.js#targetOptions), die buildControls() erst gleich anlegt.
+    // Nur die Platzierung im Baum (oberhalb) muss schon jetzt feststehen.
 
     this.buildControls(el.querySelector('.machine__body'));
 
@@ -567,6 +691,11 @@ export class Machine {
     this.insertsListEl = insertsSection.querySelector('[data-inserts]');
     this.#renderInserts();
 
+    // Jetzt erst befüllen (s. Kommentar bei modSection oben) -- alle
+    // data-auto-Knobs (eigene Regler UND die beiden Sends) stehen jetzt
+    // im DOM, die LFO-Zielauswahl sieht die vollständige Liste.
+    this.#rerenderModulators();
+
     // Knob-Stellungen mit dem (ggf. geladenen) Zustand synchronisieren —
     // die value-Attribute im Markup sind nur die Werks-Defaults
     for (const knob of el.querySelectorAll('x-knob[data-p]')) {
@@ -588,7 +717,6 @@ export class Machine {
       });
     }
 
-    this.el = el;
     this.ledEl = el.querySelector('[data-led]');
     return el;
   }

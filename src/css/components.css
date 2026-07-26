@@ -875,10 +875,10 @@ x-knob.has-auto .knob__dial::after {
 .inserts:empty { display: none; }
 .inserts__add { min-height: 52px; margin-top: 4px; font-size: 13px; }
 
-.insert-module { margin: 0; }
-.insert-module.is-bypassed { opacity: .5; }
-.insert-module .machine__title { cursor: default; }
-.insert-module .machine__head {
+.insert-module, .mod-module { margin: 0; }
+.insert-module.is-bypassed, .mod-module.is-bypassed { opacity: .5; }
+.insert-module .machine__title, .mod-module .machine__title { cursor: default; }
+.insert-module .machine__head, .mod-module .machine__head {
   padding: 8px 22px;
   /* Titel + 4 Aktions-Buttons passen auf sehr schmalen Screens nicht in
      eine Zeile — die Aktionen rutschen dann rechtsbündig in eine zweite
@@ -886,7 +886,7 @@ x-knob.has-auto .knob__dial::after {
   flex-wrap: wrap;
   row-gap: 6px;
 }
-.insert-module .machine__head-actions .m-btn {
+.insert-module .machine__head-actions .m-btn, .mod-module .machine__head-actions .m-btn {
   min-width: 28px;
   padding: 4px 5px;
   font-size: 11px;
@@ -899,6 +899,57 @@ x-knob.has-auto .knob__dial::after {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 6px;
+}
+
+/* ===================== Modulations-FX (LFO/Arpeggiator) =====================
+   Eigenständige Kette, sitzt im Panel OBERHALB der maschinen-eigenen Regler
+   (s. machine.js#render()) statt darunter wie die Insert-Kette -- deshalb
+   KEIN border-top (die Trennlinie zu den darunterliegenden Reglern kommt
+   optisch von deren eigenem margin/Kartenrahmen). Modul-Kacheln selbst
+   nutzen dieselbe .machine-Fassade wie Inserts (s. dortigen Kommentar),
+   Kopf-/Aktions-/Params-Klassen werden 1:1 mitgenutzt (s. Regeln oben). */
+.machine__row--modulators {
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(255,255,255,.08);
+}
+.modulators { display: flex; flex-direction: column; gap: 14px; }
+.modulators:empty { display: none; }
+.modulators__add { min-height: 52px; margin-top: 4px; font-size: 13px; }
+
+.mod-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mod-target__label {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-dim, rgba(255,255,255,.55));
+}
+.mod-target__select {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0,0,0,.35);
+  color: inherit;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* Ein Ziel-Knob, den gerade ein aktiver LFO belegt (s. automation.js#
+   setLfoActive) -- die vorhandene has-auto-Anzeige (gefüllter Ring, s.
+   oben) bleibt sichtbar (die Lane existiert weiter, nur pausiert), wird
+   aber gedimmt statt aktiv zu leuchten, damit sofort klar ist: gerade
+   schreibt der LFO, nicht die aufgenommene Fahrt. */
+x-knob.lane-lfo-muted.has-auto .knob__dial::after {
+  opacity: .35;
 }
 
 /* Resonator: 5 einzeln bespielbare Tune-Regler (Halbton je Band) -- eigene,
@@ -1071,6 +1122,8 @@ x-knob.has-auto .knob__dial::after {
 /* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
    (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */
 .sheet--insert-picker { z-index: 60; }
+/* Modulator-Picker: gleicher Grund/gleicher Wert wie oben. */
+.sheet--modulator-picker { z-index: 60; }
 /* Sampler-Kit-Sheet: gleicher Grund/gleicher Wert wie oben. */
 .sheet--kit { z-index: 60; }
 

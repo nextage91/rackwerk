@@ -214,9 +214,23 @@ export class SubSynth extends StepSequencedSynth {
     this.buildPatternControls(container);
 
     container.appendChild(createKeybed({
-      onNoteOn: (midi) => this.noteOn(midi),
-      onNoteOff: (midi) => this.noteOff(midi),
+      // Bei aktivem Arpeggiator-Modulator übernimmt der die gehaltenen
+      // Noten (s. modulators.js) statt sie direkt an die eigene Stimmen-
+      // verwaltung zu geben -- derselbe Umleitungspunkt bei PolySynth/
+      // FMSynth (s. dort für die ausführliche Begründung).
+      onNoteOn: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOn(midi); else this.noteOn(midi);
+      },
+      onNoteOff: (midi) => {
+        const arp = this.getActiveModulator('arp');
+        if (arp) arp.noteOff(midi); else this.noteOff(midi);
+      },
     }));
   }
 
+  /** SubSynth hält Stimmen (this.voices) -- ein Arpeggiator hat hier
+   *  wirklich gehaltene Noten zum Arbeiten (anders als PercSynths reines
+   *  Fire-and-Forget, s. machine.js#modulatorTypes). */
+  get modulatorTypes() { return ['lfo', 'arp']; }
 }
