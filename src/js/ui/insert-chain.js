@@ -618,13 +618,15 @@ export function renderInsertChain(listEl, owner) {
       `;
     } else if (insert.type === 'geq') {
       // Kein knobsHtml (UI_PARAMS.geq gibt es bewusst nicht, wie bei eq8) --
-      // ein x-knob pro festem Band, gleiches Muster wie resonators
-      // Tune-Regler (Array-Parameter statt Einzelwert).
+      // ein Mini-Schieberegler pro festem Band (x-fader im Linear-Modus,
+      // s. fader.js), wie an klassischer Graphic-EQ-Hardware, statt Dreh-
+      // reglern. Gleiches Grundmuster wie resonators Tune-Regler (Array-
+      // Parameter statt Einzelwert).
       bodyHtml = `
         <div class="geq-bands">
           ${GEQ_FREQS.map((freq, i) => `
-            <x-knob label="${freq >= 1000 ? `${freq / 1000}k` : freq}" min="-12" max="12" value="${insert.params.bands[i]}" unit="dB"
-              data-geq-band="${i}"></x-knob>
+            <x-fader label="${freq >= 1000 ? `${freq / 1000}k` : freq}" min="-12" max="12" value="${insert.params.bands[i]}" default="0" unit="dB"
+              data-geq-band="${i}"></x-fader>
           `).join('')}
         </div>
       `;
