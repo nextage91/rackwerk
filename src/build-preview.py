@@ -50,6 +50,7 @@ MODULES = [
     ("js/machines/analogkit.js", ["AnalogKit"]),
     ("js/machines/sampler.js",  ["Sampler"]),
     ("js/machines/fmsynth.js",  ["FMSynth"]),
+    ("js/machines/acidbass.js", ["AcidBass"]),
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
     ("js/rack/jam-view.js",     ["initJamView", "renderJamView"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),

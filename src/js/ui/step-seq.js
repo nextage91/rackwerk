@@ -25,18 +25,23 @@ const BAR_CHOICES = [1, 2, 4, 8];
 
 export class StepSeq {
   /**
-   * @param {{on:boolean, midi?:number}[]} pattern  Daten der Maschine (Referenz)
-   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function}} [opts]
+   * @param {{on:boolean, midi?:number, accent?:boolean, slide?:boolean}[]} pattern  Daten der Maschine (Referenz)
+   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean}} [opts]
    */
   constructor(pattern, opts = {}) {
     this.pattern = pattern;
     this.onChange = opts.onChange ?? null;
     this.pitchMode = opts.pitch ?? true;
     this.onLengthChange = opts.onLengthChange ?? null;
+    /** Zwei zusätzliche Tippzonen pro Zelle (oben/unten) für Accent/Slide --
+     *  bislang nur vom AcidBass genutzt (s. acidbass.js), alle anderen
+     *  Maschinen lassen das weg und bekommen unverändert nur die normale
+     *  An/Aus-Zelle. */
+    this.accentSlide = opts.accentSlide ?? false;
     this.page = 0;
 
     this.el = document.createElement('div');
-    this.el.className = 'stepseq' + (this.pitchMode ? ' stepseq--pitch' : '');
+    this.el.className = 'stepseq' + (this.pitchMode ? ' stepseq--pitch' : '') + (this.accentSlide ? ' stepseq--accent-slide' : '');
     this.el.innerHTML = `
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
@@ -65,6 +70,27 @@ export class StepSeq {
       const label = document.createElement('span');
       label.className = 'cell__label';
       cell.appendChild(label);
+
+      // Zwei zusätzliche Tippzonen (oben = Accent, unten = Slide) --
+      // eigene <button>-Elemente statt nur CSS-Bereiche der Zelle, damit
+      // sie als eigenständige Tippziele erkennbar sind (s. #wirePointer(),
+      // das Klicks darauf explizit von der normalen An/Aus-Geste
+      // ausnimmt). Nur angehängt, wenn accentSlide aktiv ist -- alle
+      // anderen Maschinen bekommen weiterhin die schlichte Zelle von vorher.
+      if (this.accentSlide) {
+        const accentZone = document.createElement('button');
+        accentZone.type = 'button';
+        accentZone.className = 'cell__accent';
+        accentZone.setAttribute('aria-label', 'Toggle accent');
+        cell.appendChild(accentZone);
+
+        const slideZone = document.createElement('button');
+        slideZone.type = 'button';
+        slideZone.className = 'cell__slide';
+        slideZone.setAttribute('aria-label', 'Toggle slide');
+        cell.appendChild(slideZone);
+      }
+
       this.grid.appendChild(cell);
       this.cells.push(cell);
     }
@@ -97,6 +123,7 @@ export class StepSeq {
     });
 
     this.#wirePointer();
+    if (this.accentSlide) this.#wireAccentSlide();
     this.#renderAll();
   }
 
@@ -111,6 +138,10 @@ export class StepSeq {
     const cell = this.cells[c];
     cell.classList.toggle('is-on', !!st?.on);
     cell.querySelector('.cell__label').textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
+    if (this.accentSlide) {
+      cell.querySelector('.cell__accent')?.classList.toggle('is-active', !!st?.accent);
+      cell.querySelector('.cell__slide')?.classList.toggle('is-active', !!st?.slide);
+    }
   }
 
   #renderAll() {
@@ -165,6 +196,11 @@ export class StepSeq {
     const active = new Map();
 
     this.grid.addEventListener('pointerdown', (e) => {
+      // Accent-/Slide-Zonen haben ihre eigene, einfache Klick-Behandlung
+      // (s. #wireAccentSlide) -- hier aussteigen, sonst würde dieselbe
+      // Berührung ZUSÄTZLICH den Step selbst an/aus schalten oder (im
+      // Pitch-Modus) einen Zieh-Vorgang beginnen.
+      if (e.target.closest('.cell__accent, .cell__slide')) return;
       const cell = e.target.closest('.cell');
       if (!cell) return;
       e.preventDefault();
@@ -215,6 +251,25 @@ export class StepSeq {
     };
     this.grid.addEventListener('pointerup', finish);
     this.grid.addEventListener('pointercancel', finish);
+  }
+
+  /** Accent-/Slide-Zonen: einfache Klicks statt der Zieh-fähigen Geste
+   *  oben (kein Pitch-Drag, kein Multi-Touch-Sonderfall nötig -- ein
+   *  einzelner Tipp schaltet die jeweilige Eigenschaft direkt um). */
+  #wireAccentSlide() {
+    this.grid.addEventListener('click', (e) => {
+      const accentBtn = e.target.closest('.cell__accent');
+      const slideBtn = e.target.closest('.cell__slide');
+      if (!accentBtn && !slideBtn) return;
+      const btn = accentBtn ?? slideBtn;
+      const c = parseInt(btn.closest('.cell').dataset.cell, 10);
+      const st = this.pattern[this.#patIdx(c)];
+      if (!st) return;
+      if (accentBtn) st.accent = !st.accent;
+      else st.slide = !st.slide;
+      this.#renderCell(c);
+      this.onChange?.();
+    });
   }
 }
 

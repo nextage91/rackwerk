@@ -120,8 +120,11 @@ export class StepSequencedSynth extends Machine {
    *  identisch für alle notengetriebenen Synths. Erwartet this.patterns/
    *  this.pattern/this.patternIndex bereits aus buildAudio() gesetzt.
    *  Unterklassen rufen das aus buildControls() auf, VOR/NACH ihren
-   *  eigenen Reglern/Keybed, je nach gewünschter Panel-Reihenfolge. */
-  buildPatternControls(container) {
+   *  eigenen Reglern/Keybed, je nach gewünschter Panel-Reihenfolge.
+   *  `accentSlide` reicht die beiden zusätzlichen Tippzonen des Grids
+   *  durch (s. step-seq.js) -- bislang nur vom AcidBass genutzt, Default
+   *  false lässt alle anderen Unterklassen unverändert. */
+  buildPatternControls(container, { accentSlide = false } = {}) {
     this.patternBank = createPatternBank({
       index: this.patternIndex,
       shape: 'notes',
@@ -133,6 +136,7 @@ export class StepSequencedSynth extends Machine {
     container.appendChild(this.patternBank.el);
 
     this.seq = new StepSeq(this.pattern, {
+      accentSlide,
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);

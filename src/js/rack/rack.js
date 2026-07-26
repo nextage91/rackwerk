@@ -20,12 +20,13 @@ import { PolySynth } from '../machines/polysynth.js';
 import { AnalogKit } from '../machines/analogkit.js';
 import { Sampler } from '../machines/sampler.js';
 import { FMSynth } from '../machines/fmsynth.js';
+import { AcidBass } from '../machines/acidbass.js';
 import { openRenamePopup } from '../machines/machine.js';
 import { undo } from '../core/undo.js';
 import { automation } from '../core/automation.js';
 
 /** Neue Maschinentypen einfach hier registrieren. */
-export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit, Sampler, FMSynth];
+export const REGISTRY = [SubSynth, BeatBox, PercSynth, PolySynth, AnalogKit, Sampler, FMSynth, AcidBass];
 
 export class Rack {
   /**
