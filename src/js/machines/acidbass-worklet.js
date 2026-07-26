@@ -135,15 +135,19 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     this.envScaler = 1;
     this.envOffset = 0;
 
-    // Amp-Basishüllkurve -- fest ~1.2s Decay (Devil-Fish-Bereich 16..3000ms,
-    // Stock-303 laut Handbuch fix; wir exponieren dafür bewusst KEINEN Regler,
-    // s. Dateikopf/Chat: gehört nicht zum gewählten Devil-Fish-Subset), NICHT
-    // bei Slide retriggert -- echtes Legato, kein Neuanschlag der Lautstärke.
-    // Die eigentliche "Notenlänge" kommt fast komplett aus dem Filterhüllkurven-
-    // Anteil unten (mainEnv*0.45 bzw. *4 bei Accent) -- genau wie beim echten
-    // 303, s. rosic_Open303::getSample().
+    // Amp-Basishüllkurve -- Devil-Fish-Bereich 16..3000ms (Stock-303 laut
+    // Handbuch auf ~1.2-4s fest verdrahtet; hier per "Amp Decay"-Regler
+    // steuerbar, s. Dateikopf/Chat -- ohne eigenen Regler blieb dieser
+    // Anteil UNABHÄNGIG vom "Decay"-Regler (der nur die Filterhüllkurve
+    // steuert) immer bei seinem Default hängen: selbst "Decay" ganz
+    // herunterdrehen liess die Note trotzdem über ~1.2s ausklingen, weil
+    // genau DIESE Hüllkurve das noch immer tat -- gemeldeter Bug). NICHT
+    // bei Slide retriggert -- echtes Legato, kein Neuanschlag der
+    // Lautstärke. Der Rest der "Notenlänge" kommt zusätzlich aus dem
+    // Filterhüllkurven-Anteil unten (mainEnv*0.45 bzw. *4 bei Accent) --
+    // genau wie beim echten 303, s. rosic_Open303::getSample() --, beide
+    // zusammen ergeben die tatsächlich wahrgenommene Ausklingzeit.
     this.ampBaseEnv = new DecayEnv();
-    this.ampBaseEnv.setDecayMs(1230, sr);
     this.ampDeClicker = new OnePole('lp');
     this.ampDeClicker.setCutoff(200, sr);
 
@@ -153,7 +157,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     this.p = {
       waveform: 'saw', tune: 0, cutoff: 500, resonance: 0.5, envMod: 0.5,
       decay: 0.3, accentDecay: 0.15, accent: 0.6, overdrive: 0, filterFM: 0,
-      slideTime: 0.06, hiRes: false,
+      slideTime: 0.06, hiRes: false, ampDecay: 1.23,
     };
     this.resonanceSkewed = 0;
 
@@ -175,6 +179,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
   #onParamsChanged() {
     const p = this.p;
     this.pitchSlew.setTimeConstantMs(0.2 * Math.max(1, p.slideTime * 1000), this.sr);
+    this.ampBaseEnv.setDecayMs(Math.max(16, p.ampDecay * 1000), this.sr);
     // Open303s eigene resonanceSkewed-Kurve (exponentieller Skew) ist auf ihre
     // VST-UI-Konvention zugeschnitten und sättigt bei unserem linearen 0..1-
     // Regler schon ab ca. 50% Reglerweg -- deshalb stattdessen eine direkte
