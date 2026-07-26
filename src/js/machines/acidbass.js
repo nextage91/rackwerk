@@ -33,7 +33,7 @@
  */
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
-import { transport } from '../core/transport.js';
+import { transport, shuffleTime } from '../core/transport.js';
 import { createKeybed } from '../ui/keybed.js';
 import { ACIDBASS_WORKLET_SRC } from './acidbass-worklet.js';
 
@@ -151,11 +151,15 @@ export class AcidBass extends StepSequencedSynth {
    *  müssen zusätzlich Accent/Slide an trigger() durchgereicht werden. */
   onStep(step, time) {
     const idx = step % this.pattern.length;
-    const delayMs = (time - engine.now) * 1000;
+    // Shuffle/Groove, s. step-sequenced-synth.js#onStep() für die
+    // ausführliche Begründung -- hier dieselbe Logik, weil AcidBass sein
+    // eigenes onStep() braucht (Accent/Slide).
+    const t = shuffleTime(step, time, this.params.shuffle, transport.stepDuration);
+    const delayMs = (t - engine.now) * 1000;
     this.seq?.flashStep(idx, delayMs, transport.stepDuration * 900);
     const st = this.pattern[idx];
     if (!st.on) return;
-    this.trigger(st.midi, time, st.accent, st.slide);
+    this.trigger(st.midi, t, st.accent, st.slide);
   }
 
   disposeAudio() {

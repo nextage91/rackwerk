@@ -29,7 +29,7 @@ MODULES = [
     ("js/core/audio-engine.js", ["engine"]),
     ("js/core/dsp.js",          ["noise", "lfsrNoise", "env", "autoStop", "midiToHz", "applyFilterEnv"]),
     ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "UI_PARAMS", "EQ_TYPES", "FILTER_DELAY_TYPES", "DELAY_SYNC_BUTTONS", "RESONATOR_INTERVALS", "INSERT_COLORS", "RATIO_MODE_BUTTONS", "OPTO_MODE_BUTTONS", "GEQ_FREQS"]),
-    ("js/core/transport.js",    ["transport", "STEPS_PER_BAR"]),
+    ("js/core/transport.js",    ["transport", "STEPS_PER_BAR", "shuffleTime"]),
     ("js/core/automation.js",   ["automation"]),
     ("js/core/modulators.js",   ["LFO_WAVES", "LFO_SYNC_BUTTONS", "ARP_MODES", "ARP_SYNC_BUTTONS", "MODULATOR_TYPES", "MOD_DISPLAY", "MOD_COLORS", "createModulator"]),
     ("js/ui/insert-chain.js",   ["openInsertPicker", "renderInsertChain", "INSERT_DISPLAY"]),

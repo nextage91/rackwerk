@@ -175,3 +175,22 @@ class Transport {
 
 export const transport = new Transport();
 export { STEPS_PER_BAR };
+
+/**
+ * Shuffle/Groove: verschiebt jeden zweiten 16tel-Step (die zweite Note
+ * jedes 8tel-Paars -- Step 1, 3, 5, 7, …) um einen einstellbaren Betrag
+ * nach hinten, der klassische Swing-Feel aus Drum-Machines (TR-909 etc.).
+ * `amount` in Prozent, Standard-Konvention wie bei Ableton/FL Studio/
+ * Hardware-Grooveboxen: 50 = gerade (kein Effekt), Richtung 66.7 =
+ * Triolen-Gefühl, bis 75 = maximal sinnvoller Swing (verschiebt den
+ * Off-Beat exakt bis zur Mitte zum nächsten Downbeat).
+ *
+ * Bewusst NICHT im Transport selbst verankert (kein globaler Shuffle-
+ * Zustand hier) -- jede Maschine hat ihren EIGENEN Shuffle-Regler (s.
+ * Chat: pro Maschine statt global gewünscht) und ruft diese reine
+ * Funktion in ihrem eigenen onStep() auf, bevor sie `time` weiterreicht.
+ */
+export function shuffleTime(step, time, amount, stepDuration) {
+  if (step % 2 === 0 || !amount || amount <= 50) return time;
+  return time + ((amount - 50) / 50) * stepDuration;
+}
