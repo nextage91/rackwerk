@@ -107,6 +107,16 @@ const dbToLin = (db) => Math.pow(10, db / 20);
 const DYNAMICS_COMPRESSOR_LATENCY_SEC = 0.006;
 const WAVESHAPER_4X_LATENCY_SEC = 0.004;
 
+/** Grundverzögerung des Tape-Machine-Wow/Flutter-Delays (s. DEFS.tape) --
+ *  liegt konstant im Wet-Pfad an, unabhängig vom wowFlutter-Reglerstand
+ *  (der steuert nur den Modulationshub oben drauf). Muss mindestens den
+ *  grössten negativen Modulationshub abdecken (wowFlutter=1: -4ms Wow -
+ *  1.5ms Flutter = -5.5ms), sonst könnte die Delay-Zeit ins Negative
+ *  rutschen. 7ms lässt 1.5ms Sicherheitsabstand und hält die durchs Tape
+ *  Machine addierte Gesamtlatenz (mit den 4ms Shaper-Oversampling) bei
+ *  ~11ms statt der ursprünglichen ~16ms (12ms Basis + 4ms Shaper). */
+const TAPE_WOWFLUTTER_BASE_DELAY_SEC = 0.007;
+
 /** Kompensations-Delay für den TROCKENEN Pfad eines Effekts -- derselbe
  *  Trick wie ein Mastering-Limiter mit Lookahead, nur umgekehrt: verzögert
  *  die unverarbeitete Kopie um genau die Zeit, die der Effekt-Pfad durch
@@ -1281,11 +1291,13 @@ const DEFS = {
 
       // Wow (langsam, ~0.6Hz) + Flutter (schneller, ~7Hz) moduliertes Delay --
       // NICHT rekursiv, speist nur vorwärts in den Signalweg, keine
-      // Rückkopplungsschleife. Max. Modulationshub (wowFlutter=1: 4ms+1.5ms)
-      // bleibt mit Basiswert 12ms weit innerhalb der 50ms-Kapazität der
-      // DelayNode -- kein Clamping-Risiko bei jeder Reglerstellung.
+      // Rückkopplungsschleife. Basiswert s. TAPE_WOWFLUTTER_BASE_DELAY_SEC
+      // oben -- knapp über dem grössten negativen Modulationshub
+      // (wowFlutter=1: -4ms-1.5ms), damit die effektive Zusatzlatenz des
+      // Effekts (der bei mix=1 direkt hörbar ist, s. Kompensations-
+      // Kommentar unten) so klein wie ohne Clipping-Risiko möglich bleibt.
       const wfDelay = ctx.createDelay(0.05);
-      wfDelay.delayTime.value = 0.012;
+      wfDelay.delayTime.value = TAPE_WOWFLUTTER_BASE_DELAY_SEC;
       const wowLfo = ctx.createOscillator();
       wowLfo.type = 'sine';
       wowLfo.frequency.value = 0.6;
@@ -1314,14 +1326,17 @@ const DEFS = {
 
       // Kompensiert die STATISCHEN Zusatzlatenzen im Wet-Pfad: das 4x-
       // Oversampling des Shapers (WAVESHAPER_4X_LATENCY_SEC) PLUS die
-      // 12ms-Grundverzögerung des Wow/Flutter-Delays oben (dessen eigene
-      // Modulation kommt on top -- absichtlich NICHT mitkompensiert: das
-      // leichte Schweben zwischen Dry und Wet bei aufgedrehtem Wow/Flutter
-      // ist der beabsichtigte Chorus-artige Bandmaschinen-Charakter, kein
-      // Fehler. Ohne diese Basis-Kompensation wäre die trockene Kopie ~16ms
-      // VOR der bearbeiteten, beim Mischen (mix<1) deutlich hörbares
-      // Kammfilter-"Phasing" selbst bei wowFlutter=0.
-      const dryDelay = makeDryCompensationDelay(ctx, WAVESHAPER_4X_LATENCY_SEC + 0.012);
+      // Grundverzögerung des Wow/Flutter-Delays oben (TAPE_WOWFLUTTER_
+      // BASE_DELAY_SEC; dessen eigene Modulation kommt on top --
+      // absichtlich NICHT mitkompensiert: das leichte Schweben zwischen
+      // Dry und Wet bei aufgedrehtem Wow/Flutter ist der beabsichtigte
+      // Chorus-artige Bandmaschinen-Charakter, kein Fehler). Ohne diese
+      // Basis-Kompensation wäre die trockene Kopie deutlich vor der
+      // bearbeiteten, beim Mischen (mix<1) hörbares Kammfilter-"Phasing"
+      // selbst bei wowFlutter=0 -- UND (unabhängig vom Mix-Regler) trägt
+      // diese Summe bei mix=1 die volle Zusatzlatenz des Effekts gegenüber
+      // dem Rest des Mixes, weshalb sie so klein wie möglich gehalten wird.
+      const dryDelay = makeDryCompensationDelay(ctx, WAVESHAPER_4X_LATENCY_SEC + TAPE_WOWFLUTTER_BASE_DELAY_SEC);
       input.connect(dryDelay).connect(dry);
       input.connect(shaper);
       shaper.connect(dcBlock);
