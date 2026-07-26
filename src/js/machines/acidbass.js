@@ -100,6 +100,7 @@ export class AcidBass extends StepSequencedSynth {
       filterFM: 0,
       slideTime: 0.06,
       hiRes: false,
+      ampDecay: 1.23,
       volume: 0.7,
     };
 
@@ -235,6 +236,7 @@ export class AcidBass extends StepSequencedSynth {
       <x-knob label="Filter FM" min="0" max="1" value="0" data-p="filterFM" data-auto></x-knob>
       <x-knob label="Slide Time" min="0.01" max="0.5" value="0.06" curve="log" unit="s" data-p="slideTime" data-auto></x-knob>
       <x-knob label="Acc. Decay" min="0.03" max="2" value="0.15" curve="log" unit="s" data-p="accentDecay" data-auto></x-knob>
+      <x-knob label="Amp Decay" min="0.016" max="3" value="1.23" curve="log" unit="s" data-p="ampDecay" data-auto></x-knob>
       <button type="button" class="m-btn acidbass__hires${this.params.hiRes ? ' is-active' : ''}" data-hires>Hi-Res</button>
     `;
     modRow.querySelector('[data-hires]').addEventListener('click', (e) => {
