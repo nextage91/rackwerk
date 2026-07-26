@@ -93,7 +93,7 @@ export class AcidBass extends StepSequencedSynth {
       cutoff: 500,
       resonance: 0.5,
       envMod: 0.5,
-      decay: 0.3,
+      fDecay: 0.3,
       accentDecay: 0.15,
       accent: 0.6,
       overdrive: 0,
@@ -179,6 +179,16 @@ export class AcidBass extends StepSequencedSynth {
 
   deserialize(state) {
     Object.assign(this.params, state.params);
+    // Umbenennung "decay" -> "fDecay" (jetzt konsistent mit SubSynth/
+    // PolySynth/Sampler, die ihre Filterhüllkurve alle "F.Decay"/`fDecay`
+    // nennen -- "Decay" allein liess zu leicht vermuten, das sei DIE
+    // Notenlängen-Steuerung, s. Chat) -- ältere gespeicherte Projekte
+    // haben noch den alten Schlüssel, hier migrieren statt den Wert beim
+    // Laden stillschweigend zu verlieren.
+    if (state.params && 'decay' in state.params && !('fDecay' in state.params)) {
+      this.params.fDecay = state.params.decay;
+    }
+    delete this.params.decay;
     if (state.patterns) {
       this.patterns = state.patterns.map((p) => p.map((s) => ({
         on: !!s.on, midi: s.midi ?? this.constructor.DEFAULT_MIDI, accent: !!s.accent, slide: !!s.slide,
@@ -219,7 +229,7 @@ export class AcidBass extends StepSequencedSynth {
       <x-knob label="Cutoff" min="60" max="6000" value="500" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
       <x-knob label="Resonance" min="0" max="1" value="0.5" data-p="resonance" data-auto></x-knob>
       <x-knob label="Env Mod" min="0" max="1" value="0.5" data-p="envMod" data-auto></x-knob>
-      <x-knob label="Decay" min="0.03" max="2" value="0.3" curve="log" unit="s" data-p="decay" data-auto></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="2" value="0.3" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
       <x-knob label="Accent" min="0" max="1" value="0.6" data-p="accent" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;

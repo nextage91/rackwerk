@@ -156,7 +156,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
 
     this.p = {
       waveform: 'saw', tune: 0, cutoff: 500, resonance: 0.5, envMod: 0.5,
-      decay: 0.3, accentDecay: 0.15, accent: 0.6, overdrive: 0, filterFM: 0,
+      fDecay: 0.3, accentDecay: 0.15, accent: 0.6, overdrive: 0, filterFM: 0,
       slideTime: 0.06, hiRes: false, ampDecay: 1.23,
     };
     this.resonanceSkewed = 0;
@@ -231,7 +231,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     }
     this.oscFreqTarget = freq;
 
-    const decayMs = Math.max(1, (ev.accent ? p.accentDecay : p.decay) * 1000);
+    const decayMs = Math.max(1, (ev.accent ? p.accentDecay : p.fDecay) * 1000);
     this.mainEnv.setDecayMs(decayMs, this.sr);
     this.accentGain = ev.accent ? Math.max(0, Math.min(1, p.accent)) : 0;
 
