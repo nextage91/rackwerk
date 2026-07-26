@@ -17,15 +17,21 @@
  * Synths, sondern eine feste Signalkette, die schon in buildAudio()
  * einmal aufgebaut wird.
  *
- * Filter: 4 kaskadierte Tiefpässe (24dB/Okt gesamt) MIT einer echten
- * Rückkopplungsschleife (Ausgang -> Resonanz-Gain -> weicher Dioden-
- * artiger Clipper -> minimales Delay [von Web Audio für jede Schleife
- * verlangt] -> zurück an den Eingang) -- rein native Web-Audio-Nodes
- * (keine AudioWorklet-Nichtlinearität pro Sample), aber echte
- * Selbstschwingung bei hoher Resonanz statt nur eines hohen Biquad-Q.
- * Der Clipper übernimmt zwei Rollen gleichzeitig: das dreckige,
- * obertonreiche 303-typische Resonanz-"Growl" UND einen Sicherheits-
- * Begrenzer gegen unkontrolliertes Aufschaukeln der Schleife.
+ * Filter: 2 kaskadierte BiquadFilterNode-Tiefpässe (JEDER schon 2-polig,
+ * zusammen also 4-polig/24dB-Okt -- wie die echte 303, s. Korrektur-
+ * Kommentar bei this.stages unten: eine erste Version hatte hier
+ * versehentlich 4 Stufen = 8-polig/48dB, klang deutlich zu dumpf/falsch)
+ * MIT einer echten Rückkopplungsschleife (Ausgang -> Resonanz-Gain ->
+ * asymmetrischer dioden-artiger Clipper -> minimales Delay [von Web Audio
+ * für jede Schleife verlangt] -> zurück an den Eingang) -- rein native
+ * Web-Audio-Nodes (keine AudioWorklet-Nichtlinearität pro Sample), aber
+ * echte Selbstschwingung bei hoher Resonanz statt nur eines hohen
+ * Biquad-Q. Der Clipper übernimmt zwei Rollen gleichzeitig: das
+ * dreckige, ober-/untertonreiche 303-typische Resonanz-"Growl" (die
+ * Asymmetrie -- echte Dioden leiten nicht symmetrisch -- erzeugt
+ * zusätzlich geradzahlige Obertöne, ein reiner tanh()-Clipper nur
+ * ungeradzahlige) UND einen Sicherheits-Begrenzer gegen unkontrolliertes
+ * Aufschaukeln der Schleife.
  */
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
@@ -60,8 +66,8 @@ const ACCENT_AMP_BOOST = 0.7;
  *  Werte verteilen den hörbaren Übergang (sauber -> resonant -> pfeifend)
  *  über den GANZEN Regelweg; Hi-Res (Devil-Fish-Schalter) bleibt bei
  *  jeder Reglerstellung hörbar aggressiver als normal. */
-const RES_FEEDBACK_MAX_NORMAL = 0.9;
-const RES_FEEDBACK_MAX_HIRES = 1.4;
+const RES_FEEDBACK_MAX_NORMAL = 1.0;
+const RES_FEEDBACK_MAX_HIRES = 1.6;
 
 /** Tiefe des Filter-FM-Pfads in Hz je Regler-Einheit (0..1) -- der
  *  Oszillator (Einheitsamplitude ±1) wird direkt auf die frequency-
@@ -75,18 +81,27 @@ function resonanceToFeedbackGain(resonance, hiRes) {
 
 /** Fixer weicher Clipper in der Rückkopplungsschleife -- s. Dateikopf,
  *  doppelte Rolle (Dioden-Charakter + Selbstschwing-Sicherheitsnetz).
- *  Härte (k) bewusst konstant: nur der Rückkopplungs-GAIN (oben) ändert
- *  sich mit dem Resonanz-Regler, nicht die Kurvenform selbst -- entspricht
- *  dem realen Schaltungsverhalten (die Dioden sitzen fest in der
- *  Schleife, nur der Rückkopplungspegel wird vom Resonanz-Poti bestimmt). */
+ *  ABSICHTLICH ASYMMETRISCH (unterschiedliche Härte für positive/negative
+ *  Halbwelle): eine echte Diode leitet nicht symmetrisch, ein reiner
+ *  tanh()-Clipper (erste Version) ist dagegen eine ungerade Funktion und
+ *  erzeugt NUR ungeradzahlige Obertöne -- klanglich zu "sauber" für den
+ *  gemeldeten 303-Charakter. Die Asymmetrie hier erzeugt zusätzlich
+ *  geradzahlige Obertöne, hörbar als das dreckigere, rauere Resonanz-
+ *  "Growl". Härte bewusst konstant: nur der Rückkopplungs-GAIN (oben)
+ *  ändert sich mit dem Resonanz-Regler, nicht die Kurvenform selbst --
+ *  entspricht dem realen Schaltungsverhalten (die Dioden sitzen fest in
+ *  der Schleife, nur der Rückkopplungspegel wird vom Resonanz-Poti
+ *  bestimmt). */
 function makeDiodeClipCurve() {
   const n = 1024;
   const curve = new Float32Array(n);
-  const k = 2.5;
-  const norm = Math.tanh(k);
+  const kPos = 2.2;
+  const kNeg = 3.6;
+  const normPos = Math.tanh(kPos);
+  const normNeg = Math.tanh(kNeg);
   for (let i = 0; i < n; i++) {
     const x = (i * 2) / (n - 1) - 1;
-    curve[i] = Math.tanh(x * k) / norm;
+    curve[i] = x >= 0 ? Math.tanh(x * kPos) / normPos : Math.tanh(x * kNeg) / normNeg;
   }
   return curve;
 }
@@ -172,7 +187,14 @@ export class AcidBass extends StepSequencedSynth {
     // Filter-Eingangssumme: Trocken-Signal + Rückkopplung treffen sich hier.
     this.filterSum = ctx.createGain();
 
-    this.stages = [0, 1, 2, 3].map(() => {
+    // NUR 2 Stufen: jeder BiquadFilterNode vom Typ 'lowpass' ist SELBST
+    // schon 2-polig (12dB/Okt) -- eine erste Version hatte hier 4 Stufen
+    // kaskadiert und damit versehentlich ein 8-poliges (48dB/Okt) statt
+    // des echten 303-4-poligen (24dB/Okt) Filters gebaut. Deutlich zu
+    // steil (würgt oben viel mehr ab) UND falsch für die Resonanz-
+    // Kalibrierung -- per Ohr als "klingt nicht nach 303" gemeldet, per
+    // OfflineAudioContext-Vergleich bestätigt (s. Chat-Verifikation).
+    this.stages = [0, 1].map(() => {
       const f = ctx.createBiquadFilter();
       f.type = 'lowpass';
       f.Q.value = 0.55; // sanft je Stufe -- die eigentliche Resonanz kommt aus der Rückkopplung unten
@@ -206,10 +228,8 @@ export class AcidBass extends StepSequencedSynth {
     this.driveShaper.connect(this.filterSum);
     this.filterSum.connect(this.stages[0]);
     this.stages[0].connect(this.stages[1]);
-    this.stages[1].connect(this.stages[2]);
-    this.stages[2].connect(this.stages[3]);
 
-    this.stages[3].connect(this.feedbackGain);
+    this.stages[1].connect(this.feedbackGain);
     this.feedbackGain.connect(this.feedbackShaper);
     this.feedbackShaper.connect(this.feedbackDelay);
     this.feedbackDelay.connect(this.filterSum);
@@ -217,7 +237,7 @@ export class AcidBass extends StepSequencedSynth {
     this.osc.connect(this.fmGain);
     for (const s of this.stages) this.fmGain.connect(s.frequency);
 
-    this.stages[3].connect(this.ampEnv);
+    this.stages[1].connect(this.ampEnv);
     this.ampEnv.connect(this.output);
     this.output.gain.value = this.params.volume;
   }
