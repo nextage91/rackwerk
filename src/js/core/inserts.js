@@ -15,6 +15,7 @@
  */
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
+import { noise } from './dsp.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -57,6 +58,29 @@ function makeFeedbackClipCurve() {
   for (let i = 0; i < n; i++) {
     const x = (i * 2) / (n - 1) - 1;
     curve[i] = Math.tanh(x);
+  }
+  return curve;
+}
+
+/** Bandsättigungskurve für DEFS.tape -- wie makeDriveCurve() ein Blend
+ *  Identität<->Sättigung über `amount` (bei 0 exakte Identität, bei 1 volle
+ *  Sättigung), aber mit einem zusätzlichen quadratischen Term VOR dem tanh:
+ *  reines tanh(K*x) ist punktsymmetrisch (nur ungerade Harmonische, klingt
+ *  "digitaler"/kantiger), ein Band sättigt dagegen leicht ASYMMETRISCH
+ *  zwischen positiver/negativer Halbwelle (Remanenz-Verhalten des Bandes)
+ *  und erzeugt dadurch zusätzlich geradzahlige Harmonische -- der klassische
+ *  "wärmere" Bandklang. Der dadurch eingeschleuste kleine Gleichspannungs-
+ *  anteil wird NICHT hier kompensiert, sondern von einem separaten
+ *  DC-Sperrfilter hinter dem Shaper entfernt (s. DEFS.tape.build()). */
+function makeTapeCurve(amount) {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const K = 6;
+  const norm = Math.tanh(K);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / (n - 1) - 1;
+    const shaped = Math.tanh(K * (x + 0.15 * x * x)) / norm;
+    curve[i] = (1 - amount) * x + amount * shaped;
   }
   return curve;
 }
@@ -325,6 +349,29 @@ export const RATIO_MODE_BUTTONS = [
   { value: '20', label: '20' },
   { value: 'all', label: 'ALL' },
 ];
+
+/** Der echte LA-2A hat keinen Ratio-Regler, sondern einen Zweistufen-
+ *  Schalter -- "Compress" (~3:1, moderat, für Gesang/Bass) und "Limit"
+ *  (~20:1, hart, fürs "Zudrücken" lauter Peaks). */
+const OPTO_MODES = {
+  compress: { ratio: 3 },
+  limit: { ratio: 20 },
+};
+export const OPTO_MODE_BUTTONS = [
+  { value: 'compress', label: 'Compress' },
+  { value: 'limit', label: 'Limit' },
+];
+
+/** ISO-nahe Standardfrequenzen eines klassischen 10-Band-Grafik-EQs
+ *  (Oktavabstand) -- eigene, feste Bänder, bewusst UI/DSP-seitig komplett
+ *  getrennt vom parametrischen eq8 oben (dort frei positionierbar/
+ *  Q-einstellbar, hier fixe Frequenzen + feste Bandbreite, dafür als
+ *  Schieberegler-Reihe auf einen Blick bedienbar, wie am Hardware-Vorbild). */
+export const GEQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+/** Q für ~1-Oktav-Bandbreite bei einem Peaking-Filter (RBJ Audio-EQ-
+ *  Cookbook), damit sich benachbarte Bänder bei Oktavabstand sauber
+ *  überlappen statt Lücken/harte Stufen zu lassen. */
+const GEQ_Q = 1.41;
 
 const DEFS = {
   comp: {
@@ -1067,6 +1114,272 @@ const DEFS = {
       };
     },
   },
+  opto: {
+    name: 'Opto Compressor',
+    // LA-2A-Tribut: EIN Hauptregler ("Peak Reduction", wie am echten Gerät)
+    // statt eines Attack/Release/Knee-Vierersatzes -- Attack/Release/Knee
+    // stehen FEST auf für optische Kompressoren typische, deutlich trägere/
+    // weichere Werte als beim FET-Style-Compressor oben (echte T4-
+    // Elektrolumineszenzzelle: ~10ms Attack, mehrstufiger Release mit langem
+    // "Sag"-Schwanz -- hier als EIN repräsentativer Kompromisswert, kein
+    // bit-genaues Bauteil-Modell, ehrlich als Tribut statt Emulation
+    // gedacht). Limit/Compress ist der echte Zweistufen-Schalter des
+    // Originals (Ratio ~20:1 vs. ~3:1, s. OPTO_MODES oben).
+    defaults: { reduction: 0.4, gain: 0, mode: 'compress', mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const ATTACK = 0.01;
+      const RELEASE = 0.5;
+      const KNEE = 18;
+      const node = ctx.createDynamicsCompressor();
+      node.attack.value = ATTACK;
+      node.release.value = RELEASE;
+      node.knee.value = KNEE;
+      node.ratio.value = (OPTO_MODES[p.mode] ?? OPTO_MODES.compress).ratio;
+      // reduction (0..1) -> Threshold: verschiebt die Ansprechschwelle nach
+      // unten, wie das Peak-Reduction-Poti am Original -- 0 = kaum Wirkung
+      // (-4dB), 1 = tief in die Zelle getrieben (-40dB).
+      node.threshold.value = -4 - p.reduction * 36;
+
+      const makeup = ctx.createGain();
+      makeup.gain.value = dbToLin(p.gain);
+
+      input.connect(dry);
+      input.connect(node);
+      node.connect(makeup);
+      makeup.connect(wet);
+      const outSum = ctx.createGain();
+      dry.connect(outSum);
+      wet.connect(outSum);
+
+      return {
+        input, output: outSum,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'reduction') node.threshold.setTargetAtTime(-4 - v * 36, t, 0.01);
+          else if (key === 'gain') makeup.gain.setTargetAtTime(dbToLin(v), t, 0.01);
+          else if (key === 'mode') node.ratio.setTargetAtTime((OPTO_MODES[v] ?? OPTO_MODES.compress).ratio, t, 0.01);
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        // Gleiches GR-Meter wie beim FET-Compressor -- derselbe generische
+        // Abgriff des nativen reduction-Werts, UI erkennt die Methode statt
+        // des Typs (s. machine.js/insert-chain.js#startCompMeter).
+        getReductionDb() { return node.reduction ?? 0; },
+        dispose() {
+          input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
+          node.disconnect(); makeup.disconnect();
+        },
+      };
+    },
+  },
+  tape: {
+    name: 'Tape Machine',
+    // Vierteilige Kette wie ein echtes Bandgerät: Sättigung (Kopf-
+    // Übersteuerung, s. makeTapeCurve oben) -> DC-Sperrfilter (die bewusst
+    // asymmetrische Sättigungskurve könnte sonst einen Gleichspannungsanteil
+    // einschleusen) -> Höhen-Rolloff (die Bandbreite eines Tonkopfs ist
+    // physikalisch begrenzt, anders als ein digitaler Signalweg) -> Wow/
+    // Flutter (Gleichlaufschwankung der Bandmaschine, über ein NICHT-
+    // rekursives, moduliertes Delay -- der bewährt sichere Modulationsfall,
+    // s. FM-Synth-Stresstest/Reverb-Kommentare, KEIN Feedback-Loop wie beim
+    // Filter-Delay/Reverb, deshalb ohne deren Stabilitätsrisiko) -> Rauschen
+    // (Band-Grundrauschen, konstant anliegend wie am echten Gerät, nicht
+    // vom Eingang getriggert).
+    defaults: { drive: 0.3, tone: 8000, wowFlutter: 0.3, hiss: 0.15, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const shaper = ctx.createWaveShaper();
+      shaper.oversample = '4x';
+      shaper.curve = makeTapeCurve(p.drive);
+
+      const dcBlock = ctx.createBiquadFilter();
+      dcBlock.type = 'highpass';
+      dcBlock.frequency.value = 20;
+      dcBlock.Q.value = 0.7;
+
+      const tone = ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.Q.value = 0.7;
+      tone.frequency.value = p.tone;
+
+      // Wow (langsam, ~0.6Hz) + Flutter (schneller, ~7Hz) moduliertes Delay --
+      // NICHT rekursiv, speist nur vorwärts in den Signalweg, keine
+      // Rückkopplungsschleife. Max. Modulationshub (wowFlutter=1: 4ms+1.5ms)
+      // bleibt mit Basiswert 12ms weit innerhalb der 50ms-Kapazität der
+      // DelayNode -- kein Clamping-Risiko bei jeder Reglerstellung.
+      const wfDelay = ctx.createDelay(0.05);
+      wfDelay.delayTime.value = 0.012;
+      const wowLfo = ctx.createOscillator();
+      wowLfo.type = 'sine';
+      wowLfo.frequency.value = 0.6;
+      const flutterLfo = ctx.createOscillator();
+      flutterLfo.type = 'sine';
+      flutterLfo.frequency.value = 7;
+      const wowGain = ctx.createGain();
+      const flutterGain = ctx.createGain();
+      wowGain.gain.value = p.wowFlutter * 0.004;
+      flutterGain.gain.value = p.wowFlutter * 0.0015;
+      wowLfo.connect(wowGain).connect(wfDelay.delayTime);
+      flutterLfo.connect(flutterGain).connect(wfDelay.delayTime);
+      wowLfo.start();
+      flutterLfo.start();
+
+      // Bandrauschen: konstant anliegend (wie am echten Gerät), nicht vom
+      // Eingangssignal getriggert -- derselbe gecachte Rauschbuffer wie bei
+      // den Drum-Synthesen (dsp.js#noise), hier in Dauerschleife.
+      const hissSrc = ctx.createBufferSource();
+      hissSrc.buffer = noise(ctx);
+      hissSrc.loop = true;
+      const hissGain = ctx.createGain();
+      hissGain.gain.value = p.hiss * 0.05;
+      hissSrc.connect(hissGain);
+      hissSrc.start();
+
+      input.connect(dry);
+      input.connect(shaper);
+      shaper.connect(dcBlock);
+      dcBlock.connect(tone);
+      tone.connect(wfDelay);
+      wfDelay.connect(wet);
+      hissGain.connect(wet);
+      const outSum = ctx.createGain();
+      dry.connect(outSum);
+      wet.connect(outSum);
+
+      // Kurve neu bauen ist teuer -- gleiches Entprellen wie DEFS.drive oben.
+      let driveTimer = null;
+      return {
+        input, output: outSum,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'drive') {
+            clearTimeout(driveTimer);
+            driveTimer = setTimeout(() => { shaper.curve = makeTapeCurve(v); }, 60);
+          } else if (key === 'tone') tone.frequency.setTargetAtTime(v, t, 0.02);
+          else if (key === 'wowFlutter') {
+            wowGain.gain.setTargetAtTime(v * 0.004, t, 0.05);
+            flutterGain.gain.setTargetAtTime(v * 0.0015, t, 0.05);
+          } else if (key === 'hiss') hissGain.gain.setTargetAtTime(v * 0.05, t, 0.05);
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          clearTimeout(driveTimer);
+          input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
+          shaper.disconnect(); dcBlock.disconnect(); tone.disconnect(); wfDelay.disconnect();
+          wowLfo.stop(); wowLfo.disconnect(); flutterLfo.stop(); flutterLfo.disconnect();
+          wowGain.disconnect(); flutterGain.disconnect();
+          hissSrc.stop(); hissSrc.disconnect(); hissGain.disconnect();
+        },
+      };
+    },
+  },
+  geq: {
+    name: 'Graphic EQ',
+    // 10 feste Bänder (Oktavabstand, s. GEQ_FREQS oben) -- anders als das
+    // parametrische 'eq' (frei positionierbar) oder 'eq8' (8 frei
+    // positionierbare Bänder mit Touch-Graph) hier eine reine Balkenreihe
+    // wie am Hardware-Vorbild: pro Band nur ein Gain-Regler, Frequenz/Q
+    // liegen fest.
+    defaults: { bands: GEQ_FREQS.map(() => 0) },
+    build(ctx, p) {
+      const nodes = GEQ_FREQS.map((freq, i) => {
+        const node = ctx.createBiquadFilter();
+        node.type = 'peaking';
+        node.frequency.value = freq;
+        node.Q.value = GEQ_Q;
+        node.gain.value = p.bands[i] ?? 0;
+        return node;
+      });
+      for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]);
+
+      return {
+        input: nodes[0],
+        output: nodes[nodes.length - 1],
+        // Läuft komplett über setBandGain -- gleiches Muster wie setBand
+        // beim 8-Band-EQ (der generische setParam(key,value) kennt nur "ein
+        // Feld", nicht "ein Feld eines von 10 Bändern").
+        setParam() {},
+        setBandGain(i, v) {
+          p.bands[i] = v;
+          nodes[i]?.gain.setTargetAtTime(v, engine.now, 0.01);
+        },
+        dispose() { nodes.forEach((n) => n.disconnect()); },
+      };
+    },
+  },
+  limiter: {
+    name: 'Limiter',
+    // Bewusst NICHT dieselbe Rolle wie engine.limiter (audio-engine.js) --
+    // jener ist ein unsichtbares App-weites Sicherheitsnetz direkt vor
+    // ctx.destination, nie eingestellt/gesehen. Dieser Insert ist ein
+    // bewusst eingesetztes, sichtbares Mastering-Werkzeug (klassischer
+    // "Brickwall"-Loudness-Limiter): schnellerer, fester Attack und härterer,
+    // fester Knee als der 1176-Style-Compressor oben (der stattdessen
+    // Ratio-MODI statt eines Ceilings anbietet).
+    defaults: { inputGain: 0, ceiling: -0.5, release: 0.05, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const inputGain = ctx.createGain();
+      inputGain.gain.value = dbToLin(p.inputGain);
+      const ATTACK = 0.001;
+      const RATIO = 20;
+      const KNEE = 0;
+      const node = ctx.createDynamicsCompressor();
+      node.attack.value = ATTACK;
+      node.ratio.value = RATIO;
+      node.knee.value = KNEE;
+      node.release.value = p.release;
+      node.threshold.value = p.ceiling;
+
+      input.connect(dry);
+      input.connect(inputGain);
+      inputGain.connect(node);
+      node.connect(wet);
+      const outSum = ctx.createGain();
+      dry.connect(outSum);
+      wet.connect(outSum);
+
+      return {
+        input, output: outSum,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'inputGain') inputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
+          else if (key === 'ceiling') node.threshold.setTargetAtTime(v, t, 0.01);
+          else if (key === 'release') node.release.setTargetAtTime(v, t, 0.01);
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        getReductionDb() { return node.reduction ?? 0; },
+        dispose() {
+          input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
+          inputGain.disconnect(); node.disconnect();
+        },
+      };
+    },
+  },
 };
 
 export const INSERT_TYPES = Object.keys(DEFS);
@@ -1084,6 +1397,10 @@ export const INSERT_COLORS = {
   filterDelay: '#6f9ceb', // Delay: kühles Blau, wie ein Tape-/Digital-Delay-Rack
   reverb: '#a888e0', // Reverb: Violett, wie ein Hall-/Space-Rack
   resonator: '#e0c840', // Resonator: Messing/Glockenspiel-Gelb, wie angeschlagenes Metall
+  opto: '#c9a0e0',   // Opto-Kompressor: sanftes Lavendel, deutlich vom Messing/Gold des FET-Comp abgesetzt
+  tape: '#d99a5b',   // Tape Machine: warmes Sepia/Rostbraun, wie altes Bandmaterial
+  geq: '#7fd9c4',    // Graphic EQ: helles Türkis, von eq/eq8's Teal/Cyan abgesetzt
+  limiter: '#e0555f', // Limiter: warnendes Rot -- hartes Ceiling-Werkzeug
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -1165,6 +1482,24 @@ export const UI_PARAMS = {
     { key: 'resonance', label: 'Resonance', min: 0, max: 1, unit: '' },
     { key: 'damping', label: 'Damping', min: 500, max: 15000, curve: 'log', unit: 'Hz' },
     { key: 'width', label: 'Width', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  opto: [
+    { key: 'reduction', label: 'Peak Reduct.', min: 0, max: 1, unit: '' },
+    { key: 'gain', label: 'Gain', min: -20, max: 20, unit: 'dB' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  tape: [
+    { key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' },
+    { key: 'tone', label: 'Tone', min: 2000, max: 16000, curve: 'log', unit: 'Hz' },
+    { key: 'wowFlutter', label: 'Wow/Flut.', min: 0, max: 1, unit: '' },
+    { key: 'hiss', label: 'Hiss', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  limiter: [
+    { key: 'inputGain', label: 'Input', min: 0, max: 24, unit: 'dB' },
+    { key: 'ceiling', label: 'Ceiling', min: -20, max: 0, unit: 'dB' },
+    { key: 'release', label: 'Release', min: 0.01, max: 0.5, curve: 'log', unit: 's' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
 };
@@ -1284,6 +1619,8 @@ export function createInsert(type, saved = null) {
     getEq8Response: effect.getEq8Response ? (freqArray) => effect.getEq8Response(freqArray) : undefined,
     // Nur beim Resonator vorhanden (s. dortigen Kommentar in DEFS.resonator).
     setBandTune: effect.setBandTune ? (i, semitones) => effect.setBandTune(i, semitones) : undefined,
+    // Nur beim Graphic EQ vorhanden (s. dortigen Kommentar in DEFS.geq).
+    setBandGain: effect.setBandGain ? (i, v) => effect.setBandGain(i, v) : undefined,
     setBypass(b) {
       insert.bypassed = b;
       const t = engine.now;

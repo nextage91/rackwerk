@@ -39,6 +39,9 @@
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { createInsert } from './inserts.js';
+import { automation } from './automation.js';
+import { undo } from './undo.js';
+import { renderInsertChain, openInsertPicker, INSERT_DISPLAY } from '../ui/insert-chain.js';
 
 /** Delay-Notenwerte: Anzahl 16tel-Steps ↔ Beschriftung. */
 const DIVISIONS = [
@@ -78,11 +81,30 @@ class MasterFX {
     // 1 (sonst hebelt ein Flush, der GENAU WEIL "niemand mehr hörbar"
     // ausgelöst wurde, dieses Schließen sofort wieder auf).
     this.#audible = true;
+
+    /** @type {Array<ReturnType<typeof createInsert>>} Frei bestückbare
+     *  Insert-Kette auf dem Master-Bus -- dieselbe Mechanik wie bei jeder
+     *  Maschine (s. machine.js), nur zwischen engine.masterChainIn/-Out
+     *  statt zwischen output/panner verdrahtet (s. #rewireMasterInsertChain).
+     *  Sitzt VOR dem Limiter (masterChainOut->limiter, s. audio-engine.js) --
+     *  bewusst so: der Limiter bleibt reines Sicherheitsnetz, die Inserts
+     *  sind der kreative Bearbeitungsweg des Gesamtmixes davor. */
+    this.inserts = [];
   }
+
+  /** Für insert-chain.js#renderInsertChain (Automation-Lane-Präfix) — fest
+   *  'master' statt einer Maschinen-id, s. dortigen Dateikopf-Kommentar. */
+  get laneKeyPrefix() { return 'master'; }
 
   /** Auf Werkseinstellung zurück (für „Neue Session"). */
   reset() {
     this.deserialize({ ...FX_DEFAULTS });
+    this.deserializeInserts([]);
+    // rack.clear() räumt beim Neustart die Lanes JEDER Maschine auf (s.
+    // automation.js#unregisterMachine), das 'master:'-Präfix gehört aber
+    // keiner Maschine -- ohne diesen Aufruf blieben Master-Insert-Lanes
+    // einer vorherigen Session als unerreichbare Leichen stehen.
+    automation.clearLanesWithPrefix('master:');
   }
 
   #audible;
@@ -99,6 +121,7 @@ class MasterFX {
 
     this.#buildDelayChain(ctx);
     this.#buildReverbChain(ctx);
+    this.#rewireMasterInsertChain(); // übernimmt die Identitäts-Verbindung aus audio-engine.js
 
     // Delay-Zeit folgt dem Tempo (auch bei BPM vom Jam-Host) — einmalig
     // registriert, überlebt spätere flushTails()-Neuaufbauten unverändert
@@ -185,6 +208,99 @@ class MasterFX {
     this.delay.delayTime.setTargetAtTime(Math.min(4, t), engine.now, 0.03);
   }
 
+  /* ---------- Insert-FX (Master-Bus) ---------- */
+
+  /** Verbindet masterChainIn -> insert[0] -> ... -> insert[n] -> masterChainOut
+   *  neu -- exaktes Gegenstück zu Machine#rewireInsertChain(), nur mit den
+   *  festen Anker-Gains aus audio-engine.js statt output/panner. */
+  #rewireMasterInsertChain() {
+    engine.masterChainIn.disconnect();
+    for (const insert of this.inserts) insert.output.disconnect();
+    let prev = engine.masterChainIn;
+    for (const insert of this.inserts) {
+      prev.connect(insert.input);
+      prev = insert.output;
+    }
+    prev.connect(engine.masterChainOut);
+  }
+
+  addInsert(type) {
+    const insert = createInsert(type);
+    this.inserts.push(insert);
+    this.#rewireMasterInsertChain();
+    this.#renderInserts();
+    return insert;
+  }
+
+  /** Wie Machine#removeInsert() -- gleicher Undo-Toast, gleiche
+   *  Lane-Rettung/-Wiederherstellung, nur mit dem festen 'master'-Präfix
+   *  statt einer Maschinen-id. */
+  removeInsert(id) {
+    const idx = this.inserts.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const [insert] = this.inserts.splice(idx, 1);
+    this.#rewireMasterInsertChain();
+
+    const savedInsert = insert.serialize();
+    const lanePrefix = `${this.laneKeyPrefix}:insert:${id}:`;
+    const savedLanes = automation.exportLanesWithPrefix(lanePrefix);
+    const insertIndex = idx;
+
+    insert.dispose();
+    automation.clearLanesWithPrefix(lanePrefix);
+    this.#renderInserts();
+
+    const label = INSERT_DISPLAY[insert.type]?.name ?? insert.name;
+    undo.offer(`${label} removed`, () => {
+      const restored = createInsert(savedInsert.type, savedInsert);
+      this.inserts.splice(insertIndex, 0, restored);
+      this.#rewireMasterInsertChain();
+      automation.importLanesWithPrefix(lanePrefix, savedLanes);
+      this.#renderInserts();
+    });
+  }
+
+  moveInsert(id, dir) {
+    const idx = this.inserts.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const j = idx + dir;
+    if (j < 0 || j >= this.inserts.length) return;
+    [this.inserts[idx], this.inserts[j]] = [this.inserts[j], this.inserts[idx]];
+    this.#rewireMasterInsertChain();
+    this.#renderInserts();
+  }
+
+  setInsertBypass(id, bypassed) {
+    this.inserts.find((i) => i.id === id)?.setBypass(bypassed);
+  }
+
+  setInsertParam(id, key, value) {
+    this.inserts.find((i) => i.id === id)?.setParam(key, value);
+  }
+
+  /** Für project.js — analog zu Machine#serializeInserts(), Sibling-Feld
+   *  neben `fx`/`song` statt Teil von serialize()/deserialize(). */
+  serializeInserts() {
+    return this.inserts.map((i) => i.serialize());
+  }
+
+  deserializeInserts(list) {
+    for (const insert of this.inserts) insert.dispose();
+    this.inserts = (list ?? []).map((saved) => createInsert(saved.type, saved));
+    this.#rewireMasterInsertChain();
+    this.#renderInserts();
+  }
+
+  /** Wie Machine#onLanesImported() — zweiter Render-Durchlauf nach
+   *  automation.importLanes(), damit has-auto auf den Insert-Knobs stimmt. */
+  onLanesImported() {
+    this.#renderInserts();
+  }
+
+  #renderInserts() {
+    renderInsertChain(this.insertsListEl, this);
+  }
+
   /** Von machine.js' refreshGates() bei jeder Mute/Solo-Änderung aufgerufen
    *  — schließt die Rückführung, sobald keine Maschine mehr hörbar ist. */
   setReturnAudible(audible) {
@@ -269,6 +385,10 @@ class MasterFX {
           <x-knob label="Damp." min="500" max="15000" value="6000" curve="log" unit="Hz" data-p="revDamp"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.4" data-p="revLevel"></x-knob>
         </div>
+        <div class="machine__row machine__row--inserts">
+          <div class="inserts" data-inserts></div>
+          <button type="button" class="rack__add inserts__add" data-add-insert>+  Add Effect</button>
+        </div>
       </div>
     `;
 
@@ -282,8 +402,15 @@ class MasterFX {
       this.setParam('delaySteps', Number(btn.dataset.div));
       this.#syncUI();
     });
+    el.querySelector('[data-add-insert]').addEventListener('click', () => {
+      openInsertPicker((type) => {
+        this.addInsert(type);
+      });
+    });
 
     this.el = el;
+    this.insertsListEl = el.querySelector('[data-inserts]');
+    this.#renderInserts();
     this.#syncUI();
     this.#startVU();
     return el;

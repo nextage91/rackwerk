@@ -22,6 +22,15 @@ class AudioEngine {
     this.reverbBus = null;
     /** @type {AnalyserNode|null}  Master-Abgriff fürs VU-Meter */
     this.analyser = null;
+    /** @type {GainNode|null}  Feste Anker-Punkte für MasterFX' Insert-Kette
+     *  (s. fx.js#rewireMasterInsertChain) -- masterChainIn/-Out bleiben
+     *  UNVERÄNDERT verbunden (masterBus->chainIn, chainOut->limiter),
+     *  MasterFX splict seine 0..n Inserts nur ZWISCHEN den beiden um,
+     *  genau wie Machine#rewireInsertChain zwischen output/panner. Leer
+     *  verbindet chainIn direkt mit chainOut (Identität, kein Unterschied
+     *  zum bisherigen Verhalten ohne Insert-Kette). */
+    this.masterChainIn = null;
+    this.masterChainOut = null;
     this.unlocked = false;
   }
 
@@ -62,7 +71,13 @@ class AudioEngine {
     // über die Hits hinweg gleichmäßiger statt pro Schlag zu springen.
     this.limiter.release.value = 0.25;
 
-    this.masterBus.connect(this.limiter);
+    // Anker-Punkte für MasterFX' frei bestückbare Insert-Kette -- direkt
+    // verbunden, solange sie leer ist (s. Feld-Kommentar oben).
+    this.masterChainIn = ctx.createGain();
+    this.masterChainOut = ctx.createGain();
+    this.masterBus.connect(this.masterChainIn);
+    this.masterChainIn.connect(this.masterChainOut);
+    this.masterChainOut.connect(this.limiter);
     this.limiter.connect(ctx.destination);
 
     // FX-Send-Busse: Maschinen docken hier zusätzlich an (Post-Fader).
