@@ -111,6 +111,7 @@ export function renderModulationChain(listEl, owner) {
         <div class="insert-row__params">
           ${mod.params.division === 'free' ? knobHtml('Rate', 'rateHz', 0.05, 20, { curve: 'log', unit: 'Hz' }) : ''}
           ${knobHtml('Depth', 'depth', 0, 1)}
+          ${knobHtml('Offset', 'offset', 0, 1)}
         </div>
       `;
     } else {
