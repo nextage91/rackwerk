@@ -142,7 +142,7 @@ function refreshGates() {
 /**
  * Latenz-Ausgleich (Plugin Delay Compensation) über alle Maschinen: manche
  * Insert-Effekte bringen eine kleine, aber feste Zusatzlatenz mit (Kompressor/
- * Opto/Limiter/Resonator ~6ms, Drive ~4ms, Tape Machine ~11ms -- s. inserts.js#
+ * Opto/Limiter/Resonator ~6ms, Drive ~4ms, Tape Machine ~5.5ms -- s. inserts.js#
  * insertChainLatencySec), weil sie intern einen DynamicsCompressorNode- oder
  * WaveShaperNode(oversample:'4x')-Lookahead nutzen. Ohne Ausgleich läuft eine
  * Maschine mit z. B. Tape Machine in der Kette hörbar HINTER dem Rest des

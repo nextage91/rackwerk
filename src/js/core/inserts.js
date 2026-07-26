@@ -75,7 +75,14 @@ function makeFeedbackClipCurve() {
 function makeTapeCurve(amount) {
   const n = 1024;
   const curve = new Float32Array(n);
-  const K = 6;
+  // K=6 (wie ursprünglich) sättigt bereits bei HALBEM Vollausschlag fast
+  // vollständig (tanh(6*0.5)~0.995) -- das klang selbst bei niedrigem
+  // `amount` schon deutlich nach Verzerrung/Drive statt nach der gewünschten
+  // dezenten Bandsättigung ("soll eigentlich nur bandsättigen", s. Chat).
+  // K=1.6 lässt die Kurve bis in den oberen Pegelbereich hinein nahezu
+  // linear, rundet also wirklich erst nahe Vollausschlag -- deutlich näher
+  // am echten Bandsättigungs-Charakter (nur bei "heissem" Signal hörbar).
+  const K = 1.6;
   const norm = Math.tanh(K);
   for (let i = 0; i < n; i++) {
     const x = (i * 2) / (n - 1) - 1;
@@ -110,12 +117,18 @@ const WAVESHAPER_4X_LATENCY_SEC = 0.004;
 /** Grundverzögerung des Tape-Machine-Wow/Flutter-Delays (s. DEFS.tape) --
  *  liegt konstant im Wet-Pfad an, unabhängig vom wowFlutter-Reglerstand
  *  (der steuert nur den Modulationshub oben drauf). Muss mindestens den
- *  grössten negativen Modulationshub abdecken (wowFlutter=1: -4ms Wow -
- *  1.5ms Flutter = -5.5ms), sonst könnte die Delay-Zeit ins Negative
- *  rutschen. 7ms lässt 1.5ms Sicherheitsabstand und hält die durchs Tape
- *  Machine addierte Gesamtlatenz (mit den 4ms Shaper-Oversampling) bei
- *  ~11ms statt der ursprünglichen ~16ms (12ms Basis + 4ms Shaper). */
-const TAPE_WOWFLUTTER_BASE_DELAY_SEC = 0.007;
+ *  grössten negativen Modulationshub abdecken (wowFlutter=1: -0.7ms Wow -
+ *  0.25ms Flutter = -0.95ms, s. wowGain/flutterGain unten), sonst könnte
+ *  die Delay-Zeit ins Negative rutschen. 1.5ms lässt gut 0.5ms
+ *  Sicherheitsabstand. Bewusst KLEIN gehalten (ursprünglich 7ms/±5.5ms
+ *  Hub): ein moduliertes Delay dieser Grössenordnung erzeugt beim Mischen
+ *  mit einer unmodulierten Kopie (Dry/Wet-Regler <1, aber genauso bei
+ *  parallelem Processing z. B. über einen Send) hörbares Kammfilter-
+ *  "Phasing" -- klang eher nach Flanger als nach echtem Bandgeräte-Wobbel.
+ *  Reale Tonbandmaschinen liegen im Bereich weniger Zehntel-Millisekunden;
+ *  bei diesen kleineren Hüben liegen die Kammfilter-Kerben so hoch/eng,
+ *  dass sie praktisch nicht mehr als Flanger-Sweep wahrnehmbar sind. */
+const TAPE_WOWFLUTTER_BASE_DELAY_SEC = 0.0015;
 
 /** Kompensations-Delay für den TROCKENEN Pfad eines Effekts -- derselbe
  *  Trick wie ein Mastering-Limiter mit Lookahead, nur umgekehrt: verzögert
@@ -1273,8 +1286,7 @@ const DEFS = {
     name: 'Tape Machine',
     // Feste Zusatzlatenz aus Sättigungs-Oversampling PLUS Wow/Flutter-
     // Grunddelay (s. WAVESHAPER_4X_LATENCY_SEC/TAPE_WOWFLUTTER_BASE_DELAY_SEC
-    // oben) -- mit ~11ms der mit Abstand latenteste Insert-Typ, s. Kommentar
-    // bei DEFS.comp.latencySec.
+    // oben) -- s. Kommentar bei DEFS.comp.latencySec.
     latencySec: WAVESHAPER_4X_LATENCY_SEC + TAPE_WOWFLUTTER_BASE_DELAY_SEC,
     // Vierteilige Kette wie ein echtes Bandgerät: Sättigung (Kopf-
     // Übersteuerung, s. makeTapeCurve oben) -> DC-Sperrfilter (die bewusst
@@ -1313,7 +1325,7 @@ const DEFS = {
       // NICHT rekursiv, speist nur vorwärts in den Signalweg, keine
       // Rückkopplungsschleife. Basiswert s. TAPE_WOWFLUTTER_BASE_DELAY_SEC
       // oben -- knapp über dem grössten negativen Modulationshub
-      // (wowFlutter=1: -4ms-1.5ms), damit die effektive Zusatzlatenz des
+      // (wowFlutter=1: -0.7ms-0.25ms), damit die effektive Zusatzlatenz des
       // Effekts (der bei mix=1 direkt hörbar ist, s. Kompensations-
       // Kommentar unten) so klein wie ohne Clipping-Risiko möglich bleibt.
       const wfDelay = ctx.createDelay(0.05);
@@ -1326,8 +1338,8 @@ const DEFS = {
       flutterLfo.frequency.value = 7;
       const wowGain = ctx.createGain();
       const flutterGain = ctx.createGain();
-      wowGain.gain.value = p.wowFlutter * 0.004;
-      flutterGain.gain.value = p.wowFlutter * 0.0015;
+      wowGain.gain.value = p.wowFlutter * 0.0007;
+      flutterGain.gain.value = p.wowFlutter * 0.00025;
       wowLfo.connect(wowGain).connect(wfDelay.delayTime);
       flutterLfo.connect(flutterGain).connect(wfDelay.delayTime);
       wowLfo.start();
@@ -1379,8 +1391,8 @@ const DEFS = {
             driveTimer = setTimeout(() => { shaper.curve = makeTapeCurve(v); }, 60);
           } else if (key === 'tone') tone.frequency.setTargetAtTime(v, t, 0.02);
           else if (key === 'wowFlutter') {
-            wowGain.gain.setTargetAtTime(v * 0.004, t, 0.05);
-            flutterGain.gain.setTargetAtTime(v * 0.0015, t, 0.05);
+            wowGain.gain.setTargetAtTime(v * 0.0007, t, 0.05);
+            flutterGain.gain.setTargetAtTime(v * 0.00025, t, 0.05);
           } else if (key === 'hiss') hissGain.gain.setTargetAtTime(v * HISS_MAX_GAIN, t, 0.05);
           else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
@@ -1680,7 +1692,7 @@ let nextInsertId = 1;
  * beim Ausgang komplett am Effekt vorbei, s. createInsert()#dryGain/wetGain
  * oben, hat also keine hörbare Zusatzlatenz). Für machine.js#refreshLatency-
  * Compensation: jede Maschine gleicht ihre eigene Summe gegen das
- * Rack-Maximum aus, damit z. B. eine Tape Machine (~11ms) ihre Maschine
+ * Rack-Maximum aus, damit z. B. eine Tape Machine (~5.5ms) ihre Maschine
  * nicht hörbar aus dem Groove der anderen schiebt.
  */
 export function insertChainLatencySec(inserts) {
