@@ -1556,7 +1556,6 @@ button {
   gap: 8px 4px;
   margin-bottom: 12px;
 }
-.sample-editor__knobs--3 { grid-template-columns: repeat(3, 1fr); }
 .sample-editor__knobs x-knob { --knob-size: 38px; gap: 3px; }
 .sample-editor__knobs x-knob .knob__label,
 .sample-editor__knobs x-knob .knob__value { font-size: 9px; white-space: nowrap; }

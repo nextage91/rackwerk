@@ -31,6 +31,7 @@ import { song } from '../core/song.js';
 import { undo } from '../core/undo.js';
 import { hintOnce, showHintToast } from '../core/hints.js';
 import { sampleStore, newSampleId, base64ToArrayBuffer } from '../core/sample-store.js';
+import { store } from '../core/store.js';
 import { micRecorder } from '../core/mic-recorder.js';
 import { env, applyFilterEnv } from '../core/dsp.js';
 import { FILTER_DELAY_TYPES } from '../core/inserts.js';
@@ -401,17 +402,74 @@ export class Sampler extends Machine {
     }
   }
 
+  /** Gemeinsames Feld-Set eines Pads für Projekt-Export UND Kit-Export
+   *  (s. saveKit) -- ein Kit ist inhaltlich exakt ein Pad-Zustand ohne
+   *  Pattern-Bezug, deshalb dieselbe Liste statt einer zweiten, separat
+   *  gepflegten. */
+  #serializeTrack(tr) {
+    return {
+      name: tr.name, sampleId: tr.sampleId, tune: tr.tune, level: tr.level, pan: tr.pan,
+      sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
+      trimStart: tr.trimStart, trimEnd: tr.trimEnd,
+      ampAttack: tr.ampAttack, ampDecay: tr.ampDecay, ampRelease: tr.ampRelease,
+      filterType: tr.filterType, cutoff: tr.cutoff, resonance: tr.resonance,
+      envAmt: tr.envAmt, fDecay: tr.fDecay,
+    };
+  }
+
+  /** Gegenstück zu #serializeTrack() -- wendet einen gespeicherten Pad-
+   *  Zustand auf Pad i an. Gemeinsame Grundlage für deserialize() (Projekt
+   *  laden) UND loadKit() (Kit laden, s.u.): beide transportieren exakt
+   *  dieselben Pad-Felder, nur die Quelle (Projekt-JSON vs. lokal
+   *  gespeichertes Kit) unterscheidet sich. */
+  #applyTrackState(i, saved) {
+    const tr = this.tracks[i];
+    if (!tr || !saved) return;
+    if (saved.name) tr.name = saved.name;
+    tr.tune = saved.tune ?? 0;
+    tr.level = saved.level ?? 0.9;
+    this.setTrackPan(i, saved.pan ?? 0);
+    // this.knobs existiert beim allerersten Laden noch nicht (deserialize
+    // läuft vor buildControls) — direkt an Feld + Gain-Node schreiben statt
+    // über setTrackSend, das erst nach dem Rendern sicher aufrufbar ist.
+    // loadKit() läuft dagegen immer NACH buildControls, schreibt hier also
+    // in ein bereits existierendes this.knobs -- #refreshPadUI()/#selectPad()
+    // holen den Knob-Sync danach in beiden Fällen nach.
+    tr.sendDelay = saved.sendDelay ?? 0;
+    tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
+    tr.sendReverb = saved.sendReverb ?? 0;
+    tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
+    // Trim/Hüllkurven/Filter -- trimEnd bleibt Infinity (voller Ausschnitt),
+    // solange kein Sample geladen ist bzw. keine gespeicherte Grenze
+    // vorliegt; #clampedTrim() klemmt das beim Triggern ohnehin auf die
+    // tatsächliche Buffer-Länge.
+    tr.trimStart = saved.trimStart ?? 0;
+    tr.trimEnd = saved.trimEnd ?? Infinity;
+    tr.ampAttack = saved.ampAttack ?? 0;
+    tr.ampDecay = saved.ampDecay ?? 2.0;
+    tr.ampRelease = saved.ampRelease ?? 0.05;
+    tr.filterType = saved.filterType ?? 'lowpass';
+    tr.cutoff = saved.cutoff ?? 20000;
+    tr.resonance = saved.resonance ?? 0.707;
+    tr.envAmt = saved.envAmt ?? 0;
+    tr.fDecay = saved.fDecay ?? 0.2;
+    // Sample: entweder eine eingebettete Datei (Import aus einer
+    // portablen Projekt-Datei) oder eine Referenz auf eine schon lokal
+    // vorhandene IndexedDB-ID (Autosave/benanntes Projekt/Kit) — beides
+    // läuft asynchron im Hintergrund weiter. Hat der gespeicherte Zustand
+    // KEIN Sample, muss das Pad explizit geleert werden (nicht nur "nichts
+    // tun") -- bei deserialize() trifft das nie zu (frische Pads sind
+    // ohnehin schon leer), aber loadKit()/dessen Undo wenden dies auch auf
+    // ein BEREITS befülltes Pad an, das dann wirklich geleert werden muss.
+    if (saved.sampleData) this.#importEmbeddedSample(i, saved.sampleData);
+    else if (saved.sampleId) this.#loadPadFromStore(i, saved.sampleId);
+    else { tr.sampleId = null; tr.buffer = null; }
+  }
+
   serialize() {
     return {
       volume: this.volume,
-      tracks: this.tracks.map((tr) => ({
-        name: tr.name, sampleId: tr.sampleId, tune: tr.tune, level: tr.level, pan: tr.pan,
-        sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
-        trimStart: tr.trimStart, trimEnd: tr.trimEnd,
-        ampAttack: tr.ampAttack, ampDecay: tr.ampDecay, ampRelease: tr.ampRelease,
-        filterType: tr.filterType, cutoff: tr.cutoff, resonance: tr.resonance,
-        envAmt: tr.envAmt, fDecay: tr.fDecay,
-      })),
+      tracks: this.tracks.map((tr) => this.#serializeTrack(tr)),
       patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
       patternIndex: this.patternIndex,
       pan: this.pan,
@@ -421,41 +479,7 @@ export class Sampler extends Machine {
   deserialize(state) {
     this.volume = state.volume ?? 0.8;
     this.output.gain.value = this.volume;
-    state.tracks?.forEach((saved, i) => {
-      const tr = this.tracks[i];
-      if (!tr) return;
-      if (saved.name) tr.name = saved.name;
-      tr.tune = saved.tune ?? 0;
-      tr.level = saved.level ?? 0.9;
-      this.setTrackPan(i, saved.pan ?? 0);
-      // this.knobs existiert beim Laden noch nicht (deserialize läuft vor
-      // buildControls) — direkt an Feld + Gain-Node schreiben statt über
-      // setTrackSend, das erst nach dem Rendern sicher aufrufbar ist.
-      tr.sendDelay = saved.sendDelay ?? 0;
-      tr.sendDelayNode.gain.setTargetAtTime(tr.sendDelay, engine.now, 0.01);
-      tr.sendReverb = saved.sendReverb ?? 0;
-      tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
-      // Trim/Hüllkurven/Filter -- trimEnd bleibt Infinity (voller Ausschnitt),
-      // solange kein Sample geladen ist bzw. keine gespeicherte Grenze
-      // vorliegt; #clampedTrim() klemmt das beim Triggern ohnehin auf die
-      // tatsächliche Buffer-Länge.
-      tr.trimStart = saved.trimStart ?? 0;
-      tr.trimEnd = saved.trimEnd ?? Infinity;
-      tr.ampAttack = saved.ampAttack ?? 0;
-      tr.ampDecay = saved.ampDecay ?? 2.0;
-      tr.ampRelease = saved.ampRelease ?? 0.05;
-      tr.filterType = saved.filterType ?? 'lowpass';
-      tr.cutoff = saved.cutoff ?? 20000;
-      tr.resonance = saved.resonance ?? 0.707;
-      tr.envAmt = saved.envAmt ?? 0;
-      tr.fDecay = saved.fDecay ?? 0.2;
-      // Sample: entweder eine eingebettete Datei (Import aus einer
-      // portablen Projekt-Datei) oder eine Referenz auf eine schon lokal
-      // vorhandene IndexedDB-ID (Autosave/benanntes Projekt) — beides läuft
-      // asynchron im Hintergrund weiter.
-      if (saved.sampleData) this.#importEmbeddedSample(i, saved.sampleData);
-      else if (saved.sampleId) this.#loadPadFromStore(i, saved.sampleId);
-    });
+    state.tracks?.forEach((saved, i) => this.#applyTrackState(i, saved));
     if (state.patterns) {
       this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
       this.patternIndex = state.patternIndex ?? 0;
@@ -464,6 +488,45 @@ export class Sampler extends Machine {
     this.patternIndex = Math.min(this.patternIndex ?? 0, 3);
     this.tracks.forEach((tr, ti) => { tr.steps = this.patterns[this.patternIndex][ti]; });
     this.setPan(state.pan ?? 0);
+  }
+
+  /* ---------- Sample-Kits (Save/Load über Sessions hinweg) ----------
+   * Ein Kit ist der reine Pad-Zustand (Samples + Klangformung), OHNE
+   * Pattern-Bezug -- bewusst getrennt vom Projekt-Speichern (das die ganze
+   * Rack-Session inkl. Patterns/anderer Maschinen sichert). Liegt wie
+   * Projekte in localStorage (store.js), Schlüssel-Präfix "sampler-kit:" --
+   * die eigentlichen Audiodaten bleiben in der IndexedDB (sample-store.js)
+   * und werden nur per sampleId referenziert (gleiches Muster wie Projekte/
+   * Autosave: funktioniert zuverlässig innerhalb desselben Geräts/Browser-
+   * Profils, für Cross-Device-Transport gibt es weiterhin den Datei-Export). */
+  saveKit(name) {
+    store.set(`sampler-kit:${name}`, JSON.stringify({
+      v: 1,
+      tracks: this.tracks.map((tr) => this.#serializeTrack(tr)),
+    }));
+  }
+
+  /** Ersetzt alle 8 Pads durch den gespeicherten Kit-Zustand -- mit Undo
+   *  (wie jede andere ersetzende/löschende Aktion in der App), da dies den
+   *  kompletten aktuellen Pad-Satz überschreibt. */
+  loadKit(name) {
+    const raw = store.get(`sampler-kit:${name}`);
+    if (!raw) return;
+    let data;
+    try { data = JSON.parse(raw); } catch {
+      showHintToast('This kit could not be loaded — the data seems to be damaged.');
+      return;
+    }
+    const prevTracks = this.tracks.map((tr) => this.#serializeTrack(tr));
+    const prevSelected = this.selected;
+    (data.tracks ?? []).forEach((saved, i) => this.#applyTrackState(i, saved));
+    this.#refreshPadUI();
+    this.#selectPad(this.selected);
+    undo.offer(`Kit "${name}" loaded`, () => {
+      prevTracks.forEach((saved, i) => this.#applyTrackState(i, saved));
+      this.#refreshPadUI();
+      this.#selectPad(prevSelected);
+    });
   }
 
   /* ---------- UI ---------- */
@@ -499,6 +562,28 @@ export class Sampler extends Machine {
       sendReverb: row.querySelector('[data-p="trackSendReverb"]'),
     };
 
+    // Amp-Hüllkurve direkt im Panel statt nur im Sample-Editor (der
+    // behält Trim/Filter, aber nicht mehr diese Regler -- eine einzige
+    // Bedienstelle statt zweier auseinanderlaufender Kopien derselben
+    // Felder). Gleiches Ranges/Kurven wie zuvor im Editor.
+    const envRow = document.createElement('div');
+    envRow.className = 'machine__row machine__row--track';
+    envRow.innerHTML = `
+      <span class="track-row__label">Envelope</span>
+      <x-knob label="Attack" min="0.002" max="1" value="0.002" curve="log" unit="s" data-p="ampAttack"></x-knob>
+      <x-knob label="Decay" min="0.05" max="5" value="2" curve="log" unit="s" data-p="ampDecay"></x-knob>
+      <x-knob label="Release" min="0.01" max="2" value="0.05" curve="log" unit="s" data-p="ampRelease"></x-knob>
+    `;
+    envRow.addEventListener('input', (e) => {
+      const key = e.target.dataset?.p;
+      if (!key) return;
+      this.tracks[this.selected][key] = e.detail.value;
+    });
+    container.appendChild(envRow);
+    this.knobs.ampAttack = envRow.querySelector('[data-p="ampAttack"]');
+    this.knobs.ampDecay = envRow.querySelector('[data-p="ampDecay"]');
+    this.knobs.ampRelease = envRow.querySelector('[data-p="ampRelease"]');
+
     const volRow = document.createElement('div');
     volRow.className = 'machine__row';
     volRow.innerHTML = '<x-knob label="Kit Volume" min="0" max="1" value="0.8" data-p="volume" data-auto></x-knob>';
@@ -507,10 +592,22 @@ export class Sampler extends Machine {
     });
     container.appendChild(volRow);
 
+    // Kits: der komplette Pad-Satz (Samples + Klangformung, ohne Patterns)
+    // unter einem Namen sichern/wiederladen -- unabhängig von der laufenden
+    // Rack-Session, damit ein selbst zusammengestelltes Kit auch in einem
+    // ANDEREN Projekt/einer anderen Sitzung wieder verfügbar ist (anders als
+    // "Save Project" oben, das die ganze Session inkl. Patterns/anderer
+    // Maschinen sichert).
+    const kitRow = document.createElement('div');
+    kitRow.className = 'machine__row';
+    kitRow.innerHTML = '<button type="button" class="m-btn m-btn--wide" data-open-kits>🎛 Kits (Save / Load)</button>';
+    kitRow.querySelector('[data-open-kits]').addEventListener('click', () => openKitSheet(this));
+    container.appendChild(kitRow);
+
     // Pro-Pad-Automation: Lane-Schlüssel entsteht aus dem gerade gewählten
     // Pad — jedes Pad hat eigene Fahrten (gleiches Muster wie
     // TrackedDrumMachine#buildControls).
-    for (const param of ['tune', 'level']) {
+    for (const param of ['tune', 'level', 'ampAttack', 'ampDecay', 'ampRelease']) {
       const applyForKey = (key, value) => {
         const trIdx = parseInt(key.split(':')[1], 10);
         this.tracks[trIdx][param] = value;
@@ -625,7 +722,13 @@ export class Sampler extends Machine {
     this.knobs.level.value = tr.level;
     this.knobs.sendDelay.value = tr.sendDelay;
     this.knobs.sendReverb.value = tr.sendReverb;
-    for (const param of ['tune', 'level', 'sendDelay', 'sendReverb']) {
+    // ampAttack darf laut Log-Kurve nie 0 anzeigen (min="0.002") -- ältere
+    // Pads/Kits kennen aber noch den transparenten Default 0 (kein Attack).
+    // Gleicher Klemm-Trick wie vorher im Sample-Editor.
+    this.knobs.ampAttack.value = Math.max(0.002, tr.ampAttack);
+    this.knobs.ampDecay.value = tr.ampDecay;
+    this.knobs.ampRelease.value = tr.ampRelease;
+    for (const param of ['tune', 'level', 'sendDelay', 'sendReverb', 'ampAttack', 'ampDecay', 'ampRelease']) {
       this.knobs[param].classList.toggle('has-auto', automation.hasLane(`${this.id}:${i}:${param}`));
     }
     this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
@@ -648,6 +751,14 @@ export class Sampler extends Machine {
       pad.classList.toggle('pad--empty', !tr.buffer && !tr.loading);
       pad.classList.toggle('pad--loading', !!tr.loading);
     });
+  }
+
+  /** Nach dem Umbenennen eines Pads (s. openPadRenamePopup) -- Pad-Kachel
+   *  UND, falls das umbenannte Pad gerade gewählt ist, auch Panel-Kopf/
+   *  Sequenzer-Titel (die nur #selectPad() auffrischt) nachziehen. */
+  onPadRenamed(i) {
+    this.#refreshPadUI();
+    if (i === this.selected) this.#selectPad(i);
   }
 
   /** Nach dem Laden eines Projekts: LEDs/Solo an das gewählte Pad anpassen. */
@@ -687,6 +798,15 @@ function openPadMenu(sampler, i, anchorEl) {
   recBtn.addEventListener('click', () => { dismissPadMenu(); openRecordPopup(sampler, i); });
   padMenu.appendChild(recBtn);
 
+  // Immer sichtbar (nicht an tr.buffer gebunden wie Edit/Clear unten) --
+  // ein Pad lässt sich schon VOR dem Laden eines Samples beschriften, z. B.
+  // um vorab zu planen, was auf welches Pad soll.
+  const renameBtn = document.createElement('button');
+  renameBtn.className = 'pat-chip__btn';
+  renameBtn.textContent = '🏷 Rename';
+  renameBtn.addEventListener('click', () => { dismissPadMenu(); openPadRenamePopup(sampler, i, anchorEl); });
+  padMenu.appendChild(renameBtn);
+
   if (tr.buffer) {
     const editBtn = document.createElement('button');
     editBtn.className = 'pat-chip__btn';
@@ -713,7 +833,149 @@ function openPadMenu(sampler, i, anchorEl) {
   padMenu.style.top = `${Math.max(8, r.top - padMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsidePadMenu, true), 0);
   clearTimeout(padMenu.dismissTimer);
-  padMenu.dismissTimer = setTimeout(dismissPadMenu, 6000); // drei statt zwei Optionen zum Lesen
+  padMenu.dismissTimer = setTimeout(dismissPadMenu, 6000); // bis zu vier Optionen zum Lesen
+}
+
+/* ---------- Pad umbenennen ----------
+ * Gleiches Popup-Muster wie openRenamePopup() in machine.js (Textfeld +
+ * Reset-Knopf, Aussen-Tap SPEICHERT statt zu verwerfen, Escape verwirft
+ * explizit) -- hier eigenständig statt jene Funktion wiederzuverwenden, weil
+ * sie fest an eine Machine-Instanz (machine.setLabel/machine.displayName)
+ * gebunden ist, nicht an einen beliebigen Pad-Index. */
+let padRenamePop = null;
+const dismissPadRenamePop = (commit = true) => {
+  if (!padRenamePop) return;
+  if (commit) {
+    const trimmed = padRenamePop._input.value.trim().slice(0, 24);
+    padRenamePop._sampler.tracks[padRenamePop._padIndex].name = trimmed || `Pad ${padRenamePop._padIndex + 1}`;
+    padRenamePop._sampler.onPadRenamed?.(padRenamePop._padIndex);
+  }
+  padRenamePop.remove();
+  padRenamePop = null;
+  document.removeEventListener('pointerdown', onOutsidePadRenamePop, true);
+};
+const onOutsidePadRenamePop = (e) => { if (padRenamePop && !padRenamePop.contains(e.target)) dismissPadRenamePop(true); };
+
+function openPadRenamePopup(sampler, i, anchorEl) {
+  dismissPadRenamePop();
+
+  padRenamePop = document.createElement('div');
+  padRenamePop.className = 'rename-pop';
+  padRenamePop._sampler = sampler;
+  padRenamePop._padIndex = i;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-pop__input';
+  input.maxLength = 24;
+  input.placeholder = `Pad ${i + 1}`;
+  input.value = sampler.tracks[i].name;
+  padRenamePop._input = input;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); dismissPadRenamePop(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); dismissPadRenamePop(false); }
+  });
+  padRenamePop.appendChild(input);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'rename-pop__reset';
+  resetBtn.textContent = '↺';
+  resetBtn.setAttribute('aria-label', 'Reset to default pad name');
+  resetBtn.addEventListener('click', () => { input.value = ''; dismissPadRenamePop(true); });
+  padRenamePop.appendChild(resetBtn);
+
+  document.body.appendChild(padRenamePop);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - padRenamePop.offsetWidth - 8, r.left));
+  padRenamePop.style.left = `${left}px`;
+  padRenamePop.style.top = `${Math.max(8, r.top - padRenamePop.offsetHeight - 8)}px`;
+  input.focus();
+  input.select();
+  setTimeout(() => document.addEventListener('pointerdown', onOutsidePadRenamePop, true), 0);
+}
+
+/* ---------- Sample-Kits (Sheet) ----------
+ * Gleiches Grundgerüst wie das Projekte-Sheet in main.js (Namensfeld +
+ * Speichern-Knopf, darunter eine Liste mit Load/Delete je Eintrag) -- hier
+ * als eigenständiges, modulweites Sheet statt im statischen index.html-
+ * Markup, weil es sampler-spezifisch ist (kann von JEDER Sampler-Instanz
+ * im Rack geöffnet werden, aber nie mehr als eines gleichzeitig, gleiches
+ * Singleton-Muster wie insertPickerEl in insert-chain.js). z-index 60 wie
+ * sample-editor/rec-pop/pat-chip -- wird typischerweise AUS dem geöffneten
+ * Vollbild-Editor heraus aufgerufen (.machine-focus, z-index 55). */
+let kitSheetEl = null;
+
+function openKitSheet(sampler) {
+  if (!kitSheetEl) {
+    kitSheetEl = document.createElement('div');
+    kitSheetEl.className = 'sheet sheet--kit';
+    kitSheetEl.hidden = true;
+    kitSheetEl.innerHTML = `
+      <div class="sheet__backdrop" data-close></div>
+      <div class="sheet__panel" role="dialog" aria-label="Sample Kits">
+        <div class="sheet__grip"></div>
+        <h2 class="sheet__title">Sample Kits</h2>
+        <div class="saverow">
+          <input class="saverow__input" data-kit-name placeholder="Kit name" maxlength="40">
+          <button type="button" class="m-btn saverow__btn" data-kit-save>Save</button>
+        </div>
+        <div class="sheet__list" data-kit-list></div>
+      </div>
+    `;
+    document.body.appendChild(kitSheetEl);
+    kitSheetEl.querySelector('[data-close]').addEventListener('click', () => {
+      kitSheetEl.hidden = true;
+    });
+  }
+
+  const nameInput = kitSheetEl.querySelector('[data-kit-name]');
+  const list = kitSheetEl.querySelector('[data-kit-list]');
+
+  const refreshList = () => {
+    list.innerHTML = '';
+    const names = store.keys()
+      .filter((k) => k.startsWith('sampler-kit:'))
+      .map((k) => k.slice('sampler-kit:'.length))
+      .sort();
+    if (!names.length) {
+      list.innerHTML = '<p class="sheet__empty">No saved kits yet.</p>';
+      return;
+    }
+    for (const name of names) {
+      const item = document.createElement('div');
+      item.className = 'sheet__item sheet__item--project';
+      item.innerHTML = `
+        <button type="button" class="project__load">${name}</button>
+        <button type="button" class="project__delete" aria-label="Delete kit">✕</button>
+      `;
+      item.querySelector('.project__load').addEventListener('click', () => {
+        sampler.loadKit(name);
+        kitSheetEl.hidden = true;
+      });
+      item.querySelector('.project__delete').addEventListener('click', () => {
+        store.remove(`sampler-kit:${name}`);
+        refreshList();
+      });
+      list.appendChild(item);
+    }
+  };
+
+  // Direktes Überschreiben statt addEventListener -- die Sheet-Instanz ist
+  // modulweit (nur eine für alle Sampler im Rack), der Speichern-Knopf muss
+  // aber IMMER die zuletzt öffnende Instanz treffen, nicht die erste, die
+  // ihn je gebunden hat (addEventListener würde sich sonst über mehrere
+  // Öffnungen hinweg aufsummieren).
+  kitSheetEl.querySelector('[data-kit-save]').onclick = () => {
+    const name = nameInput.value.trim() || 'Untitled Kit';
+    sampler.saveKit(name);
+    nameInput.value = '';
+    refreshList();
+  };
+
+  nameInput.value = '';
+  refreshList();
+  kitSheetEl.hidden = false;
 }
 
 /* ---------- Aufnahme-Popup ----------
@@ -787,16 +1049,20 @@ function openRecordPopup(sampler, i) {
   });
 }
 
-/* ---------- Sample-Editor (Trim + ADR-Hüllkurve + Filter) ----------
+/* ---------- Sample-Editor (Trim + Filter) ----------
  * Grösseres Popup wie das Aufnahme-Popup, mit Wellenform + zwei ziehbaren
- * Trim-Marken, einem Preview-Button und den 7 Klangformungs-Reglern.
+ * Trim-Marken, einem Preview-Button und den 4 Filter-Reglern. Die Amp-
+ * Hüllkurve (Attack/Decay/Release) lebt NICHT mehr hier -- die steht jetzt
+ * automatisierbar direkt im Hauptpanel (s. buildControls()), eine einzige
+ * Bedienstelle statt zweier auseinanderlaufender Kopien derselben Felder.
  * Änderungen wirken sofort (kein "Übernehmen"-Schritt, wie jeder andere
- * Regler in der App). Bewusst NICHT automatisierbar: die Knobs leben nur
- * so lange wie das Popup, das bestehende Automation-System geht von einem
- * dauerhaft vorhandenen Knob-Element aus (s. Tune/Level-Reihe im
- * Panel) -- für Sound-Design-Regler, die man selten mitten in einer
- * Aufnahme dreht, ist das ein akzeptabler Verzicht statt echte
- * Ephemeral-Knob-Unterstützung ins Automation-System nachzurüsten. */
+ * Regler in der App). Die verbliebenen Filter-Regler bleiben bewusst NICHT
+ * automatisierbar: die Knobs leben nur so lange wie das Popup, das
+ * bestehende Automation-System geht von einem dauerhaft vorhandenen Knob-
+ * Element aus (s. Tune/Level/Envelope-Reihen im Panel) -- für Sound-
+ * Design-Regler, die man selten mitten in einer Aufnahme dreht, ist das
+ * ein akzeptabler Verzicht statt echte Ephemeral-Knob-Unterstützung ins
+ * Automation-System nachzurüsten. */
 let sampleEditorPop = null;
 
 function closeSampleEditor() {
@@ -833,13 +1099,6 @@ function openSampleEditor(sampler, i) {
       <x-knob label="Reso" min="0.5" max="20" value="${tr.resonance}" data-p="resonance"></x-knob>
       <x-knob label="Env Amt" min="0" max="1" value="${tr.envAmt}" data-p="envAmt"></x-knob>
       <x-knob label="F.Decay" min="0.03" max="1.5" value="${tr.fDecay}" curve="log" unit="s" data-p="fDecay"></x-knob>
-    </div>
-
-    <div class="sample-editor__section">Amp Envelope</div>
-    <div class="sample-editor__knobs sample-editor__knobs--3">
-      <x-knob label="Attack" min="0.002" max="1" value="${Math.max(0.002, tr.ampAttack)}" curve="log" unit="s" data-p="ampAttack"></x-knob>
-      <x-knob label="Decay" min="0.05" max="5" value="${tr.ampDecay}" curve="log" unit="s" data-p="ampDecay"></x-knob>
-      <x-knob label="Release" min="0.01" max="2" value="${tr.ampRelease}" curve="log" unit="s" data-p="ampRelease"></x-knob>
     </div>
   `;
   document.body.appendChild(pop);
