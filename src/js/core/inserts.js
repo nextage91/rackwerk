@@ -405,6 +405,17 @@ export const GEQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
  *  überlappen statt Lücken/harte Stufen zu lassen. */
 const GEQ_Q = 1.41;
 
+/** Maximale Rauschamplitude bei Hiss=1 (s. DEFS.tape) -- ursprünglich 0.05,
+ *  war deutlich zu laut: Band-Grundrauschen will man grundsätzlich nur ganz
+ *  leise mit dabei haben, kein hörbares Zischen im Vordergrund. Um 60%
+ *  gesenkt (0.05 -> 0.02); als Nebeneffekt deckt der GESAMTE Regelweg des
+ *  Knobs jetzt den tatsächlich brauchbaren, dezenten Bereich ab, statt dass
+ *  (wie vorher) schon die untere Hälfte des Reglers zu laut war und nur ein
+ *  kleiner Ausschnitt am unteren Anschlag praktisch nutzbar blieb -- ohne
+ *  Kurven-Änderung, allein durch die Skalierung "verfeinert" sich damit die
+ *  Auflösung im leisen, eigentlich gewünschten Bereich. */
+const HISS_MAX_GAIN = 0.02;
+
 const DEFS = {
   comp: {
     name: 'Compressor',
@@ -1297,7 +1308,7 @@ const DEFS = {
       hissSrc.buffer = noise(ctx);
       hissSrc.loop = true;
       const hissGain = ctx.createGain();
-      hissGain.gain.value = p.hiss * 0.05;
+      hissGain.gain.value = p.hiss * HISS_MAX_GAIN;
       hissSrc.connect(hissGain);
       hissSrc.start();
 
@@ -1335,7 +1346,7 @@ const DEFS = {
           else if (key === 'wowFlutter') {
             wowGain.gain.setTargetAtTime(v * 0.004, t, 0.05);
             flutterGain.gain.setTargetAtTime(v * 0.0015, t, 0.05);
-          } else if (key === 'hiss') hissGain.gain.setTargetAtTime(v * 0.05, t, 0.05);
+          } else if (key === 'hiss') hissGain.gain.setTargetAtTime(v * HISS_MAX_GAIN, t, 0.05);
           else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
