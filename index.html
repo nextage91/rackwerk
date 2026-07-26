@@ -2576,16 +2576,20 @@ x-knob.has-auto .knob__dial::after {
    inserts.js) -- gleiches Muster wie .resonator-tune oben (Array-Parameter
    statt regulärer knobsHtml), nur ohne den dunklen Hintergrund-Container
    (hier IST die ganze Reihe der Insert-Body, kein Zusatz über den Knobs). */
+/* Festes 5er-Raster statt flex-wrap -- zwei übersichtliche Reihen zu je 5
+   Bändern (Low/Mid-Bässe oben, Mitten/Höhen unten), unabhängig von der
+   tatsächlichen Handybreite (flex-wrap liess je nach Breite mal 8+2, mal
+   7+3 Bänder pro Reihe entstehen, was der klaren "erste/zweite Oktavgruppe"-
+   Aufteilung eines echten Graphic-EQs widersprach). */
 .geq-bands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 6px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px 4px;
   justify-content: center;
 }
 /* Miniatur-Schieberegler statt Drehregler, wie an klassischer Graphic-EQ-
    Hardware -- x-fader im Linear-Modus (s. fader.js), schmaler als der
-   Kanalzug-Fader im Mixer, damit 10 Bänder auf Handybreite passen (nötig-
-   enfalls per flex-wrap zweizeilig). */
+   Kanalzug-Fader im Mixer, damit 5 Bänder je Reihe auf Handybreite passen. */
 .geq-bands x-fader {
   height: 96px;
   --fader-track-w: 12px;
