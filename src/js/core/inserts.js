@@ -87,6 +87,38 @@ function makeTapeCurve(amount) {
 
 const dbToLin = (db) => Math.pow(10, db / 20);
 
+/** Handfest GEMESSENE Zusatzlatenzen zweier Web-Audio-Bausteine, die diese
+ *  Datei mehrfach nutzt (DynamicsCompressorNode-Lookahead, WaveShaperNode-
+ *  Interpolationsfilter bei oversample:'4x') -- keine Werte aus der
+ *  Spezifikation (die legt hierzu nichts fest, "implementation-defined"),
+ *  sondern per Impulsantwort-Messung ermittelt: ein Impuls allein durch den
+ *  jeweiligen Knoten geschickt, der Sample-Index des Antwort-Peaks mit einer
+ *  unveränderten Referenz verglichen (298 bzw. 202 Samples statt 10, bei
+ *  48kHz -- glatte 6ms/4ms, offenbar feste ZEITEN statt fester Sample-
+ *  Zahlen, überleben eine abweichende ctx.sampleRate also unverändert).
+ *  Betrifft jeden Effekt, der intern einen dieser Knotentypen NUR im WET-
+ *  Pfad seines eigenen Mix-Reglers nutzt (Comp/Opto/Limiter/Resonator via
+ *  DynamicsCompressorNode, Drive/Tape via WaveShaperNode) -- ohne
+ *  Kompensation summiert der Mix-Regler dort zwei zueinander verschobene
+ *  Kopien desselben Signals, hörbar als Kammfilter-"Phasing" (am stärksten
+ *  bei Mix~50%). Auf anderen Engines (v. a. WebKit/iOS, das eigentliche
+ *  Zielgerät dieser App) womöglich leicht abweichend, aber ein
+ *  kompensierter Wert ist immer näher an richtig als gar keiner. */
+const DYNAMICS_COMPRESSOR_LATENCY_SEC = 0.006;
+const WAVESHAPER_4X_LATENCY_SEC = 0.004;
+
+/** Kompensations-Delay für den TROCKENEN Pfad eines Effekts -- derselbe
+ *  Trick wie ein Mastering-Limiter mit Lookahead, nur umgekehrt: verzögert
+ *  die unverarbeitete Kopie um genau die Zeit, die der Effekt-Pfad durch
+ *  einen der obigen Knoten zusätzlich braucht, damit Dry und Wet beim
+ *  Mischen wieder phasengleich sind. Bei mix=1 (dry.gain=0) wirkt sich das
+ *  nicht aus -- nur bei Zwischenstellungen ändert es hörbar etwas. */
+function makeDryCompensationDelay(ctx, seconds) {
+  const d = ctx.createDelay(Math.max(0.02, seconds * 2));
+  d.delayTime.value = seconds;
+  return d;
+}
+
 /** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
  *  fürs Reverb-FDN -- bewusst NICHT der naheliegende ctx.createBiquadFilter():
  *  ein 2-poliger Biquad-Tiefpass hat (unabhängig von Q, auch bei sehr
@@ -393,6 +425,12 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
+      // Kompensiert den Lookahead des DynamicsCompressorNode unten (s.
+      // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- ohne das käme die trockene
+      // Kopie ~6ms VOR der bearbeiteten an, beim Mischen (mix<1) ein
+      // hörbares Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+
       const inputGain = ctx.createGain();
       inputGain.gain.value = dbToLin(p.input);
       const node = ctx.createDynamicsCompressor();
@@ -405,7 +443,7 @@ const DEFS = {
       const outputGain = ctx.createGain();
       outputGain.gain.value = dbToLin(p.output);
 
-      input.connect(dry);
+      input.connect(dryDelay).connect(dry);
       input.connect(inputGain);
       inputGain.connect(node);
       node.connect(outputGain);
@@ -437,7 +475,7 @@ const DEFS = {
         getReductionDb() { return node.reduction ?? 0; },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          inputGain.disconnect(); node.disconnect(); outputGain.disconnect();
+          dryDelay.disconnect(); inputGain.disconnect(); node.disconnect(); outputGain.disconnect();
         },
       };
     },
@@ -568,7 +606,12 @@ const DEFS = {
       const level = ctx.createGain();
       level.gain.value = p.level;
 
-      input.connect(dry);
+      // Kompensiert das 4x-Oversampling-Interpolationsfilter des Shapers
+      // oben (s. WAVESHAPER_4X_LATENCY_SEC) -- sonst käme die trockene
+      // Kopie ~4ms VOR der gesättigten an, beim Mischen (mix<1) ein
+      // hörbares Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, WAVESHAPER_4X_LATENCY_SEC);
+      input.connect(dryDelay).connect(dry);
       input.connect(pre);
       pre.connect(shaper);
       shaper.connect(tone);
@@ -602,7 +645,7 @@ const DEFS = {
         dispose() {
           clearTimeout(driveTimer);
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          pre.disconnect(); shaper.disconnect(); tone.disconnect(); level.disconnect();
+          dryDelay.disconnect(); pre.disconnect(); shaper.disconnect(); tone.disconnect(); level.disconnect();
         },
       };
     },
@@ -1067,7 +1110,12 @@ const DEFS = {
       const damp = makeOnePoleLowpass(ctx, p.damping);
       limiter.connect(damp.input);
 
-      input.connect(dry).connect(output);
+      // Kompensiert den Lookahead des Sicherheits-Limiters oben (s.
+      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- der sitzt NUR im Wet-Pfad,
+      // ohne Kompensation käme die trockene Kopie ~6ms VOR der resonierten
+      // an, beim Mischen (mix<1) ein hörbares Kammfilter-"Phasing".
+      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      input.connect(dryDelay).connect(dry).connect(output);
       damp.output.connect(wet).connect(output);
 
       return {
@@ -1106,7 +1154,7 @@ const DEFS = {
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
-          limiter.disconnect();
+          dryDelay.disconnect(); limiter.disconnect();
           damp.dispose();
           for (const bp of bands) bp.disconnect();
           for (const panner of panners) panner.disconnect();
@@ -1149,7 +1197,12 @@ const DEFS = {
       const makeup = ctx.createGain();
       makeup.gain.value = dbToLin(p.gain);
 
-      input.connect(dry);
+      // Kompensiert den Lookahead von node oben (s.
+      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- sonst käme die trockene Kopie
+      // ~6ms VOR der komprimierten an, beim Mischen (mix<1) ein hörbares
+      // Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      input.connect(dryDelay).connect(dry);
       input.connect(node);
       node.connect(makeup);
       makeup.connect(wet);
@@ -1175,7 +1228,7 @@ const DEFS = {
         getReductionDb() { return node.reduction ?? 0; },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          node.disconnect(); makeup.disconnect();
+          dryDelay.disconnect(); node.disconnect(); makeup.disconnect();
         },
       };
     },
@@ -1248,7 +1301,17 @@ const DEFS = {
       hissSrc.connect(hissGain);
       hissSrc.start();
 
-      input.connect(dry);
+      // Kompensiert die STATISCHEN Zusatzlatenzen im Wet-Pfad: das 4x-
+      // Oversampling des Shapers (WAVESHAPER_4X_LATENCY_SEC) PLUS die
+      // 12ms-Grundverzögerung des Wow/Flutter-Delays oben (dessen eigene
+      // Modulation kommt on top -- absichtlich NICHT mitkompensiert: das
+      // leichte Schweben zwischen Dry und Wet bei aufgedrehtem Wow/Flutter
+      // ist der beabsichtigte Chorus-artige Bandmaschinen-Charakter, kein
+      // Fehler. Ohne diese Basis-Kompensation wäre die trockene Kopie ~16ms
+      // VOR der bearbeiteten, beim Mischen (mix<1) deutlich hörbares
+      // Kammfilter-"Phasing" selbst bei wowFlutter=0.
+      const dryDelay = makeDryCompensationDelay(ctx, WAVESHAPER_4X_LATENCY_SEC + 0.012);
+      input.connect(dryDelay).connect(dry);
       input.connect(shaper);
       shaper.connect(dcBlock);
       dcBlock.connect(tone);
@@ -1281,7 +1344,7 @@ const DEFS = {
         dispose() {
           clearTimeout(driveTimer);
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          shaper.disconnect(); dcBlock.disconnect(); tone.disconnect(); wfDelay.disconnect();
+          dryDelay.disconnect(); shaper.disconnect(); dcBlock.disconnect(); tone.disconnect(); wfDelay.disconnect();
           wowLfo.stop(); wowLfo.disconnect(); flutterLfo.stop(); flutterLfo.disconnect();
           wowGain.disconnect(); flutterGain.disconnect();
           hissSrc.stop(); hissSrc.disconnect(); hissGain.disconnect();
@@ -1352,7 +1415,12 @@ const DEFS = {
       node.release.value = p.release;
       node.threshold.value = p.ceiling;
 
-      input.connect(dry);
+      // Kompensiert den Lookahead von node oben (s.
+      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- sonst käme die trockene Kopie
+      // ~6ms VOR der limitierten an, beim Mischen (mix<1) ein hörbares
+      // Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      input.connect(dryDelay).connect(dry);
       input.connect(inputGain);
       inputGain.connect(node);
       node.connect(wet);
@@ -1375,7 +1443,7 @@ const DEFS = {
         getReductionDb() { return node.reduction ?? 0; },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          inputGain.disconnect(); node.disconnect();
+          dryDelay.disconnect(); inputGain.disconnect(); node.disconnect();
         },
       };
     },
