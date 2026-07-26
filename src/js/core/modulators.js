@@ -21,7 +21,6 @@
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { automation } from './automation.js';
-import { DELAY_SYNC_DIVISIONS } from './inserts.js';
 
 const TICK_MS = 30;
 
@@ -77,21 +76,28 @@ export const ARP_MODES = [
   { value: 'random', label: 'Random' },
 ];
 
-/** Tempo-Sync-Buttons des Arpeggiators -- dieselben Notenwerte/Faktoren wie
- *  der Filter Delay (DELAY_SYNC_DIVISIONS, relativ zu einer Viertelnote),
- *  bewusst OHNE 'free': ein Arp ohne Songtempo-Bezug ergibt musikalisch
- *  keinen Sinn (anders als ein LFO, der auch als freie Hz-Modulation
- *  Sinn ergibt, z. B. Vibrato unabhängig vom Sequencer-Tempo). */
+/** Tempo-Sync-Buttons des Arpeggiators, bewusst OHNE 'free': ein Arp ohne
+ *  Songtempo-Bezug ergibt musikalisch keinen Sinn (anders als ein LFO, der
+ *  auch als freie Hz-Modulation Sinn ergibt, z. B. Vibrato unabhängig vom
+ *  Sequencer-Tempo). Nur glatte 16tel-Vielfache (kein Triolen-/Punktierungs-
+ *  Angebot wie beim Filter Delay) -- der Arp feuert exakt auf den globalen
+ *  16tel-Schritten des Transports (s. ARP_DIVISION_STEPS/build() unten),
+ *  damit gehaltene Noten bei aktiver Live-Aufnahme sauber aufs Pattern-
+ *  Raster treffen; Triolen liessen sich auf diesem 16tel-Raster gar nicht
+ *  exakt abbilden. */
 export const ARP_SYNC_BUTTONS = [
   { value: '1/16', label: '1/16' },
-  { value: '1/8t', label: '1/8t' },
   { value: '1/8', label: '1/8' },
-  { value: '1/8d', label: '1/8.' },
-  { value: '1/4t', label: '1/4t' },
   { value: '1/4', label: '1/4' },
-  { value: '1/4d', label: '1/4.' },
   { value: '1/2', label: '1/2' },
+  { value: '1', label: '1 Bar' },
 ];
+
+/** Notenwert -> Anzahl 16tel-Schritte (STEPS_PER_BAR=16 pro Takt, s.
+ *  transport.js). Rein lokal (anders als beim Filter Delay keine
+ *  Sekunden-Umrechnung nötig): der Arp vergleicht direkt gegen
+ *  transport.currentStep, s. build() unten. */
+const ARP_DIVISION_STEPS = { '1/16': 1, '1/8': 2, '1/4': 4, '1/2': 8, '1': 16 };
 
 const MOD_DEFS = {
   lfo: {
@@ -158,12 +164,28 @@ const MOD_DEFS = {
   arp: {
     name: 'Arpeggiator',
     defaults: { mode: 'up', octaves: 1, division: '1/16' },
+    // Phase-gekoppelt an transport.currentStep statt an einen eigenen, ab
+    // Tastendruck frei laufenden Timer -- zwei Gründe: (1) sonst driftet
+    // der Arp gegenüber dem Rest des Mixes auseinander, je nachdem wann
+    // genau gedrückt wurde; (2) NUR so landen die einzelnen Arp-Töne bei
+    // aktiver Live-Aufnahme (REC scharf + Transport läuft, s. machine.js#
+    // isLiveRecording) exakt auf dem 16tel-Raster, das owner.noteOn() beim
+    // Schreiben ins Pattern verwendet (transport.currentStep) -- eine
+    // gehaltene Note lässt sich dadurch als fertig ausgeschriebener
+    // Arpeggio ins Pattern aufnehmen, statt nur live hörbar zu sein.
+    // Läuft der Transport NICHT (freies Spiel ohne Pattern-Bezug), fällt
+    // der Arp auf eine eigene, sofort reagierende Zeitbasis zurück (kein
+    // Sequencer-Raster zum Andocken vorhanden).
     build(owner, p) {
       let held = [];
-      let stepTimer = null;
+      let pollTimer = null;
       let stepIdx = 0;
       let sounding = null;
       let bypassedFlag = false;
+      let lastFiredStep = null; // transport.currentStep, gegen Doppel-Trigger
+      let nextFreeFireAt = 0;   // engine.now-Zeitpunkt, nur im Nicht-Playing-Fall
+
+      const divisionSteps = () => ARP_DIVISION_STEPS[p.division] ?? 1;
 
       const sequence = () => {
         if (!held.length) return [];
@@ -175,9 +197,7 @@ const MOD_DEFS = {
         return stack;
       };
 
-      const stepMs = () => transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 0.25) * 1000;
-
-      const advance = () => {
+      const fire = () => {
         if (sounding != null) { owner.noteOff(sounding); sounding = null; }
         const seq = sequence();
         if (!seq.length) return;
@@ -185,13 +205,35 @@ const MOD_DEFS = {
         owner.noteOn(sounding);
       };
 
-      const restart = () => {
-        clearInterval(stepTimer);
-        stepTimer = setInterval(advance, stepMs());
+      const poll = () => {
+        if (!held.length || bypassedFlag) return;
+        if (transport.isPlaying) {
+          const step = transport.currentStep;
+          const n = divisionSteps();
+          if (step % n === 0 && step !== lastFiredStep) {
+            lastFiredStep = step;
+            fire();
+          }
+        } else if (engine.now >= nextFreeFireAt) {
+          nextFreeFireAt = engine.now + transport.stepDuration * divisionSteps();
+          fire();
+        }
+      };
+
+      // 15ms-Poll fein genug, um kein 16tel bei 300 BPM zu verpassen (kürzester
+      // Schritt dort ~50ms) -- schneller als automation.js' 22ms-Ticker, weil
+      // hier zusätzlich ein Raster-Treffer (nicht nur ein Wert) nicht verpasst
+      // werden darf.
+      const start = () => {
+        if (pollTimer) return;
+        lastFiredStep = null;
+        nextFreeFireAt = 0;
+        pollTimer = setInterval(poll, 15);
+        poll();
       };
       const stop = () => {
-        clearInterval(stepTimer);
-        stepTimer = null;
+        clearInterval(pollTimer);
+        pollTimer = null;
         if (sounding != null) { owner.noteOff(sounding); sounding = null; }
         stepIdx = 0;
       };
@@ -203,19 +245,16 @@ const MOD_DEFS = {
         // owner.noteOn/noteOff.
         noteOn(midi) {
           if (!held.includes(midi)) held.push(midi);
-          if (!bypassedFlag && !stepTimer) { restart(); advance(); }
+          if (!bypassedFlag) start();
         },
         noteOff(midi) {
           held = held.filter((m) => m !== midi);
           if (!held.length) stop();
         },
-        onParam(key) {
-          if (key === 'division' && stepTimer) restart();
-        },
         onBypass(v) {
           bypassedFlag = v;
           if (v) stop();
-          else if (held.length) { restart(); advance(); }
+          else if (held.length) start();
         },
         dispose() { stop(); },
       };
