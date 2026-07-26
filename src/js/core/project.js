@@ -16,6 +16,10 @@
  *     fehlt in alten Projekten → Default false (aus)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
+ *   - masterInserts: frei bestückbare Insert-Kette auf dem Master-Bus
+ *            (s. fx.js), gleiches Sibling-Muster wie machines[].inserts
+ *   - masterLanes: Automation der Master-Insert-Regler, Präfix 'master:'
+ *            statt einer Maschinen-ID (s. automation.js)
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
  *     (IDs werden beim Laden neu vergeben, deshalb nur der Suffix)
  */
@@ -32,6 +36,8 @@ export function serializeProject(rack) {
     v: 1,
     bpm: transport.bpm,
     fx: masterFX.serialize(),
+    masterInserts: masterFX.serializeInserts(),
+    masterLanes: automation.exportLanesWithPrefix('master:'),
     song: song.serialize(),
     machines: rack.machines.map((m) => ({
       type: m.constructor.meta.type,
@@ -69,6 +75,9 @@ export function loadProject(rack, data) {
   rack.clear();
   transport.setBpm(data.bpm ?? 120);
   masterFX.deserialize(data.fx); // fehlt bei alten Projekten → Defaults
+  masterFX.deserializeInserts(data.masterInserts); // fehlt bei alten Projekten → leere Kette
+  if (data.masterLanes) automation.importLanesWithPrefix('master:', data.masterLanes);
+  masterFX.onLanesImported();
 
   let loaded = 0;
   for (const md of data.machines) {

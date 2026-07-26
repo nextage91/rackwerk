@@ -894,6 +894,18 @@ x-knob.has-auto .knob__dial::after {
 }
 .resonator-tune x-knob { --knob-size: 38px; gap: 3px; }
 
+/* Graphic EQ: 10 feste Bänder als kompakte Knob-Reihe (s. GEQ_FREQS in
+   inserts.js) -- gleiches Muster wie .resonator-tune oben (Array-Parameter
+   statt regulärer knobsHtml), nur ohne den dunklen Hintergrund-Container
+   (hier IST die ganze Reihe der Insert-Body, kein Zusatz über den Knobs). */
+.geq-bands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 4px;
+  justify-content: center;
+}
+.geq-bands x-knob { --knob-size: 34px; gap: 3px; }
+
 /* ---- Compressor: 1176-Style GR-Meter + Ratio-Taster statt -Regler ---- */
 .comp-meter {
   display: flex;
