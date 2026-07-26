@@ -25462,20 +25462,29 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     this.pitchSlew.setTimeConstantMs(0.2 * Math.max(1, p.slideTime * 1000), this.sr);
     // Open303s eigene resonanceSkewed-Kurve (exponentieller Skew) ist auf ihre
     // VST-UI-Konvention zugeschnitten und sättigt bei unserem linearen 0..1-
-    // Regler schon ab ca. 50% Reglerweg (per Messung: r(0.5)=0.82, r(1.0)=1.0
-    // -- die obere Hälfte des Reglers hätte sich fast tot angefühlt, exakt
-    // dasselbe Problem wie beim ersten nativen Anlauf mit dem falsch
-    // kalibrierten Feedback-Gain, s. Dateikopf/Chat). Stattdessen: direkte
-    // lineare Skalierung, per Messung (Standalone-Sweep über 200-2000Hz) so
-    // gewählt, dass Selbstschwingung erst im OBEREN Reglerviertel einsetzt
-    // (typisches 303-Reglergefühl) und Hi-Res spürbar aggressiver selbst-
-    // schwingt. Der Sicherheits-Clip unten (Tanh im Feedback-Pfad)
-    // fängt jeden Rest-Fall ab, in dem die reine Ladder-Rekursion sonst
-    // unbegrenzt aufschwingen würde (eine rein lineare Rückkopplung hat KEIN
-    // natürliches Limit -- anders als eine echte Diodenkette).
+    // Regler schon ab ca. 50% Reglerweg -- deshalb stattdessen eine direkte
+    // lineare Skalierung (s. erste Korrektur, Chat).
+    //
+    // ZWEITE Korrektur (s. Chat): die erste Ober-Grenze (1.6 normal / 2.2
+    // Hi-Res) klang zwar bei Ohr-Tests nach "mehr Resonanz", schwang aber
+    // NIE wirklich hörbar auf: per Zeitmessung (Standalone-Sweep, Zeit bis
+    // die Rückkopplung eine hörbare Amplitude erreicht) brauchte diese
+    // Ober-Grenze bei typischen Cutoff-Einstellungen (400-2000Hz) SEKUNDEN
+    // bis NIEMALS statt der für eine 303-Bassline (kurze, schnelle Noten)
+    // nötigen wenigen Millisekunden -- das Selbstschwingen ist zwar
+    // mathematisch vorhanden, kam aber in der Praxis nie rechtzeitig an,
+    // bevor die Note längst wieder verklungen war. Diese höhere Ober-Grenze
+    // (4.5 normal / 7.0 Hi-Res) wurde genau daraufhin kalibriert: bei voll
+    // aufgedrehter Resonanz erreicht die Selbstschwingung über den gesamten
+    // Cutoff-Reglerbereich hinweg eine hörbare Amplitude innerhalb von
+    // <20ms (oft <5ms) -- fühlt sich jetzt wie das erwartete "sofortige"
+    // 303-Kreischen an, nicht wie ein Regler ohne Wirkung. Der
+    // Sicherheits-Clip unten (Tanh im Feedback-Pfad + weicher Zustands-
+    // Clamp) fängt jeden Rest-Fall ab, in dem die reine (komplett lineare)
+    // Ladder-Rekursion sonst unbegrenzt aufschwingen würde.
     const r = Math.max(0, Math.min(1, p.resonance));
     this.resonanceRaw = r;
-    this.resonanceSkewed = r * (p.hiRes ? 2.2 : 1.6);
+    this.resonanceSkewed = r * (p.hiRes ? 7.0 : 4.5);
 
     // Gemessene envMod->Cutoff-Skalierung/Offset (s. Dateikopf,
     // rosic_Open303::calculateEnvModScalerAndOffset -- Konstanten aus
