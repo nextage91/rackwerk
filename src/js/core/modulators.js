@@ -102,7 +102,7 @@ const ARP_DIVISION_STEPS = { '1/16': 1, '1/8': 2, '1/4': 4, '1/2': 8, '1': 16 };
 const MOD_DEFS = {
   lfo: {
     name: 'LFO',
-    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1 },
+    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1, offset: 0 },
     build(owner, p) {
       let timer = null;
       let phaseAcc = 0;
@@ -136,8 +136,20 @@ const MOD_DEFS = {
         if (p.wave === 'random' && phase < lastPhase) sh.value = Math.random();
         lastPhase = phase;
 
-        const t01 = waveValue(p.wave, phase, sh) * Math.min(1, Math.max(0, p.depth));
-        target.apply(paramValueAt(target.knob, t01));
+        // Depth verkleinert den Ausschlag, ist dabei aber IMMER am unteren
+        // Reglerende verankert (Ausschlag reicht von 0 bis depth, s.
+        // waveValue()-Kommentar oben) -- verkleinert man depth, wandert die
+        // Modulation also nicht "in die Mitte", sondern bleibt am unteren
+        // Ende hängen. Offset schiebt genau diesen (ggf. verkleinerten)
+        // Bereich zusätzlich additiv nach oben -- Depth bestimmt die
+        // GRÖSSE des bestrichenen Bereichs, Offset dessen LAGE (s. Chat:
+        // "verkleinerten Bereich verschieben"). Bewusst additiv+clamp statt
+        // z. B. eine bipolare Zentrierung um Offset: bleibt bei offset=0
+        // exakt das alte Verhalten (Default, rückwärtskompatibel zu vor
+        // diesem Feature gespeicherten LFOs).
+        const t01raw = Math.min(1, Math.max(0, p.offset)) +
+          waveValue(p.wave, phase, sh) * Math.min(1, Math.max(0, p.depth));
+        target.apply(paramValueAt(target.knob, Math.min(1, Math.max(0, t01raw))));
       };
 
       return {
