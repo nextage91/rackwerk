@@ -15762,14 +15762,15 @@ const GEQ_Q = 1.41;
 
 /** Maximale Rauschamplitude bei Hiss=1 (s. DEFS.tape) -- ursprünglich 0.05,
  *  war deutlich zu laut: Band-Grundrauschen will man grundsätzlich nur ganz
- *  leise mit dabei haben, kein hörbares Zischen im Vordergrund. Um 60%
- *  gesenkt (0.05 -> 0.02); als Nebeneffekt deckt der GESAMTE Regelweg des
- *  Knobs jetzt den tatsächlich brauchbaren, dezenten Bereich ab, statt dass
- *  (wie vorher) schon die untere Hälfte des Reglers zu laut war und nur ein
- *  kleiner Ausschnitt am unteren Anschlag praktisch nutzbar blieb -- ohne
- *  Kurven-Änderung, allein durch die Skalierung "verfeinert" sich damit die
- *  Auflösung im leisen, eigentlich gewünschten Bereich. */
-const HISS_MAX_GAIN = 0.02;
+ *  leise mit dabei haben, kein hörbares Zischen im Vordergrund. Erst um 60%
+ *  gesenkt (0.05 -> 0.02), dann nochmals um 30% (0.02 -> 0.014) fürs feinere
+ *  Einstellen im dezenten Bereich. Als Nebeneffekt deckt der GESAMTE
+ *  Regelweg des Knobs jetzt den tatsächlich brauchbaren, dezenten Bereich
+ *  ab, statt dass (wie ursprünglich) schon die untere Hälfte des Reglers zu
+ *  laut war und nur ein kleiner Ausschnitt am unteren Anschlag praktisch
+ *  nutzbar blieb -- ohne Kurven-Änderung, allein durch die Skalierung
+ *  "verfeinert" sich damit die Auflösung im leisen, gewünschten Bereich. */
+const HISS_MAX_GAIN = 0.014;
 
 const DEFS = {
   comp: {
