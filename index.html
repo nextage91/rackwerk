@@ -17607,8 +17607,30 @@ class Automation {
     this.armed = armed;
   }
 
-  register(key, knob, apply) {
-    this.targets.set(key, { knob, apply });
+  /** `onLfoOff` (optional): läuft, sobald ein LFO aufhört, dieses Ziel zu
+   *  steuern (Ziel gewechselt, Modulator bypasst/entfernt -- s. setLfoActive()
+   *  unten und modulators.js#setMute()). Für Ziele, deren apply() NICHT den
+   *  sichtbaren Regler selbst schreibt, sondern einen separaten, relativen
+   *  Modulations-Kanal (s. machine.js "Volume" -- LFO moduliert dort einen
+   *  eigenen Multiplikator-Gain statt den Fader/Knob absolut zu
+   *  überschreiben, sonst "gewinnt" der LFO dauerhaft gegen den Fader, s.
+   *  Chat): ohne diesen Hook bliebe der Multiplikator nach Abschalten des
+   *  LFOs für immer auf seinem letzten Wert stehen statt auf "kein Effekt"
+   *  zurückzuspringen.
+   *
+   * `skipHandOverride` (optional): sagt dem LFO-Tick (s. modulators.js),
+   *  bei DIESEM Ziel NICHT zu prüfen, ob `knob.value` sich seit dem letzten
+   *  eigenen Schreiben von Hand geändert hat, sondern immer bedingungslos
+   *  zu schreiben. Für "Volume" (s. oben) gesetzt: dessen apply() schreibt
+   *  gar nicht auf `knob.value` (der bleibt die Fader-Anzeige), der
+   *  generische Werte-Vergleich (s. LFO_HAND_OVERRIDE_MS) würde dort NIE
+   *  eine Übereinstimmung finden und den LFO fälschlich für immer stumm
+   *  halten -- unnötig UND falsch, da Fader und LFO für "Volume" ohnehin
+   *  schon getrennte Gains sind (output.gain vs. volumeMod.gain), es also
+   *  gar keine Konkurrenz ums selbe Ziel mehr gibt, die eine Vorrang-Regel
+   *  bräuchte. */
+  register(key, knob, apply, { onLfoOff, skipHandOverride = false } = {}) {
+    this.targets.set(key, { knob, apply, onLfoOff, skipHandOverride });
 
     knob.addEventListener('knob-grab', () => {
       // Ausgangswert sofort festhalten — nicht erst beim nächsten Tick,
@@ -17783,7 +17805,12 @@ class Automation {
    *  gibt sie unverändert zurück). */
   setLfoActive(key, active) {
     if (active) this.lfoActive.add(key); else this.lfoActive.delete(key);
-    this.targets.get(key)?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+    const target = this.targets.get(key);
+    target?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+    // s. register()#onLfoOff -- lässt Ziele mit einem separaten Modulations-
+    // Kanal (aktuell nur "Volume", s. machine.js) beim Abschalten sauber auf
+    // "kein Effekt" zurückspringen, statt am letzten LFO-Wert hängen zu bleiben.
+    if (!active) target?.onLfoOff?.();
   }
 
   isLfoActive(key) {
@@ -18234,13 +18261,20 @@ const MOD_DEFS = {
         // Vergleich statt eigener grab/release-Events: so greift der
         // Vorrang auf JEDEM Weg, der am Ende denselben Knob schreibt, ganz
         // ohne dass Jam-Fader/Makro-Knobs/X/Y-Pad extra etwas melden müssen.
-        const now = engine.now;
-        if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
-          handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
-        }
-        if (now < handOverrideUntil) {
-          lastAppliedValue = target.knob.value;
-          return;
+        // Ziele mit skipHandOverride (s. automation.js#register, aktuell nur
+        // "Volume") schreiben gar nicht auf knob.value -- der Vergleich
+        // würde dort nie zutreffen und den LFO fälschlich für immer stumm
+        // halten, deshalb hier übersprungen (dort gibt's ohnehin keine
+        // Konkurrenz ums selbe Ziel mehr, die einen Vorrang bräuchte).
+        if (!target.skipHandOverride) {
+          const now = engine.now;
+          if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
+            handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
+          }
+          if (now < handOverrideUntil) {
+            lastAppliedValue = target.knob.value;
+            return;
+          }
         }
         target.apply(applied);
         lastAppliedValue = applied;
@@ -20918,6 +20952,19 @@ class Machine {
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();
+    /** @type {GainNode} Multiplikator HINTER this.output, standardmässig 1
+     *  (kein Effekt) -- ausschliesslich für LFO/Automation auf "Volume"
+     *  reserviert (s. render()#Sonderfall unten). Ohne diesen zweiten Gain
+     *  würde eine LFO-Fahrt auf "Volume" denselben this.output.gain
+     *  ABSOLUT überschreiben, den auch der Fader/Volume-Knob setzt --
+     *  Ergebnis (Nutzer-Bugreport): der Jam-Fader wirkt nur, solange man
+     *  ihn bewegt, das Signal "kommt gleich wieder", weil der nächste LFO-
+     *  Tick den gerade gesetzten Fader-Wert wieder verwirft. Multiplikativ
+     *  getrennt bleibt der Fader IMMER die vom Nutzer gewählte Zimmerdecke,
+     *  der LFO moduliert relativ dazu (Tremolo), statt gegen ihn zu
+     *  konkurrieren. */
+    this.volumeMod = engine.ctx.createGain();
+    this.output.connect(this.volumeMod);
     /** @type {StereoPannerNode} Panorama — sitzt direkt hinterm Fader, wie
      *  am echten Kanalzug. Die Sends (Delay/Reverb) hängen hinter dem Gate,
      *  tragen die Stereo-Position also mit. */
@@ -21089,9 +21136,12 @@ class Machine {
    *  output/insert-outputs haben immer nur EIN Ziel, disconnect() ohne
    *  Argument trennt also genau die eine bestehende Verbindung. */
   #rewireInsertChain() {
-    this.output.disconnect();
+    // this.output -> this.volumeMod ist eine feste 1:1-Verbindung (s.
+    // Konstruktor), die Kette baut deshalb ab volumeMod neu, nicht ab
+    // output selbst.
+    this.volumeMod.disconnect();
     for (const insert of this.inserts) insert.output.disconnect();
-    let prev = this.output;
+    let prev = this.volumeMod;
     for (const insert of this.inserts) {
       prev.connect(insert.input);
       prev = insert.output;
@@ -21487,8 +21537,34 @@ class Machine {
     // Alle Knobs mit data-auto bei der Automation anmelden. apply() nutzt
     // dieselbe input-Leitung wie eine Handbewegung — Maschinen brauchen
     // für Automation keinen Extra-Code.
+    //
+    // Sonderfall "Volume": schreibt NICHT über die normale input-Leitung
+    // (die am Ende setLevel() aufruft, also denselben output.gain, den
+    // auch der Fader/Volume-Knob setzt) -- sonst überschreibt eine LFO-/
+    // Automations-Fahrt auf Volume den Fader absolut, und der Fader "hat
+    // keinen Effekt mehr" (Nutzer-Bugreport), sobald der nächste LFO-Tick
+    // den gerade gesetzten Fader-Wert wieder verwirft. Stattdessen direkt
+    // auf volumeMod.gain (s. Konstruktor) -- ein Multiplikator HINTER dem
+    // Fader, macht die Modulation zum Tremolo relativ zur Fader-Stellung
+    // statt zur Konkurrenz um denselben Gain-Wert. onLfoOff federt das
+    // Abschalten ab: ohne das bliebe volumeMod nach Entfernen/Bypassen des
+    // LFOs für immer auf seinem letzten Modulationswert hängen.
     for (const knob of el.querySelectorAll('x-knob[data-auto]')) {
       const key = `${this.id}:${knob.dataset.p}`;
+      if (knob.dataset.p === 'volume') {
+        automation.register(key, knob, (v) => {
+          this.volumeMod.gain.setTargetAtTime(v, engine.now, 0.01);
+        }, {
+          onLfoOff: () => this.volumeMod.gain.setTargetAtTime(1, engine.now, 0.05),
+          // s. automation.js#register für die ausführliche Begründung:
+          // Fader und LFO landen für "Volume" nie mehr auf demselben Gain,
+          // die Hand-Vorrang-Erkennung (die knob.value beobachtet) würde
+          // hier nur fälschlich anschlagen, weil apply() knob.value gar
+          // nicht mehr schreibt.
+          skipHandOverride: true,
+        });
+        continue;
+      }
       automation.register(key, knob, (v) => {
         knob.value = v;
         knob.dispatchEvent(new CustomEvent('input', {
@@ -21614,6 +21690,7 @@ class Machine {
     this.gate.gain.setTargetAtTime(0, t, 0.02);
     setTimeout(() => {
       this.output.disconnect();
+      this.volumeMod.disconnect();
       this.panner.disconnect();
       this.gate.disconnect();
       this.pdcDelay.disconnect();

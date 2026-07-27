@@ -69,8 +69,30 @@ class Automation {
     this.armed = armed;
   }
 
-  register(key, knob, apply) {
-    this.targets.set(key, { knob, apply });
+  /** `onLfoOff` (optional): läuft, sobald ein LFO aufhört, dieses Ziel zu
+   *  steuern (Ziel gewechselt, Modulator bypasst/entfernt -- s. setLfoActive()
+   *  unten und modulators.js#setMute()). Für Ziele, deren apply() NICHT den
+   *  sichtbaren Regler selbst schreibt, sondern einen separaten, relativen
+   *  Modulations-Kanal (s. machine.js "Volume" -- LFO moduliert dort einen
+   *  eigenen Multiplikator-Gain statt den Fader/Knob absolut zu
+   *  überschreiben, sonst "gewinnt" der LFO dauerhaft gegen den Fader, s.
+   *  Chat): ohne diesen Hook bliebe der Multiplikator nach Abschalten des
+   *  LFOs für immer auf seinem letzten Wert stehen statt auf "kein Effekt"
+   *  zurückzuspringen.
+   *
+   * `skipHandOverride` (optional): sagt dem LFO-Tick (s. modulators.js),
+   *  bei DIESEM Ziel NICHT zu prüfen, ob `knob.value` sich seit dem letzten
+   *  eigenen Schreiben von Hand geändert hat, sondern immer bedingungslos
+   *  zu schreiben. Für "Volume" (s. oben) gesetzt: dessen apply() schreibt
+   *  gar nicht auf `knob.value` (der bleibt die Fader-Anzeige), der
+   *  generische Werte-Vergleich (s. LFO_HAND_OVERRIDE_MS) würde dort NIE
+   *  eine Übereinstimmung finden und den LFO fälschlich für immer stumm
+   *  halten -- unnötig UND falsch, da Fader und LFO für "Volume" ohnehin
+   *  schon getrennte Gains sind (output.gain vs. volumeMod.gain), es also
+   *  gar keine Konkurrenz ums selbe Ziel mehr gibt, die eine Vorrang-Regel
+   *  bräuchte. */
+  register(key, knob, apply, { onLfoOff, skipHandOverride = false } = {}) {
+    this.targets.set(key, { knob, apply, onLfoOff, skipHandOverride });
 
     knob.addEventListener('knob-grab', () => {
       // Ausgangswert sofort festhalten — nicht erst beim nächsten Tick,
@@ -245,7 +267,12 @@ class Automation {
    *  gibt sie unverändert zurück). */
   setLfoActive(key, active) {
     if (active) this.lfoActive.add(key); else this.lfoActive.delete(key);
-    this.targets.get(key)?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+    const target = this.targets.get(key);
+    target?.knob.classList.toggle('lane-lfo-muted', active && this.lanes.has(key));
+    // s. register()#onLfoOff -- lässt Ziele mit einem separaten Modulations-
+    // Kanal (aktuell nur "Volume", s. machine.js) beim Abschalten sauber auf
+    // "kein Effekt" zurückspringen, statt am letzten LFO-Wert hängen zu bleiben.
+    if (!active) target?.onLfoOff?.();
   }
 
   isLfoActive(key) {
