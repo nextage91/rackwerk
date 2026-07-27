@@ -1062,9 +1062,10 @@ const DEFS = {
   },
   resonator: {
     name: 'Resonator',
-    // Feste Zusatzlatenz des Sicherheits-Limiters im Wet-Pfad (s.
-    // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
-    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
+    // ZWEI DynamicsCompressorNodes im Wet-Pfad hintereinander (Anreger-
+    // Ducker unten + Sicherheits-Limiter, s. build()) -- doppelte
+    // Zusatzlatenz gegenüber den anderen Kompressor-basierten Inserts.
+    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC * 2,
     // Bank aus 5 rückgekoppelten Resonanz-Delaylines (Delay -> Damping ->
     // Feedback -> zurück in die Delay), Karplus-Strong-artig -- genau das
     // Prinzip, mit dem auch Abletons Resonators-Effekt arbeitet, statt
@@ -1103,6 +1104,32 @@ const DEFS = {
     // Resonance/Damping gleichzeitig live automatisiert WÄHREND aktiv
     // geklungen und retriggert wird -- durchgehend kein NaN, kein
     // unbegrenztes Aufschaukeln.
+    //
+    // Anreger-Ducker (s. build(), "exciter"): anders als ein Bandpass-
+    // Filter verschiebt eine Feedback-Delayline die Tonhöhe eines
+    // DAUERHAFTEN Eingangssignals nicht -- solange eine Note gehalten wird,
+    // läuft deren rohes, breitbandiges Signal ständig direkt in jede der 5
+    // Bänder-Schleifen, jede Bande gibt also grösstenteils weiter nur die
+    // ANSCHLAG-Tonhöhe wieder, nicht ihre eigene Stimmung (gemessen: bei
+    // einem gehaltenen Ton liegen alle 5 Bänder eines "Chord"-Presets zwar
+    // pegel-mässig nah beieinander, klingen aber kaum wie 5 unterschiedliche
+    // Töne -- Nutzer-Feedback: "ich höre die einzelnen Stimmen kaum").
+    // Ein DynamicsCompressorNode mit bewusst LANGSAMEM Attack lässt die
+    // ersten ~30ms einer neuen Anregung (den Anschlag) fast unkomprimiert
+    // durch, drosselt danach aber den GEHALTENEN Teil stark -- wie eine
+    // echte mitschwingende Saite, die vom Anschlag angeregt wird und
+    // danach EIGENSTÄNDIG (mit ihrer eigenen Stimmung) ausklingt, statt
+    // dauerhaft vom Halteton "nachgefüttert" zu werden. Ein erster Versuch
+    // mit eigenem Hüllkurven-Differenz-Schaltkreis (schnelle minus
+    // langsame Einpol-Hüllkurve) schlug fehl: minimales Restwelligkeit-
+    // "Leck" im Rest-Signal wurde von der Resonanz-Schleife über die Zeit
+    // unbegrenzt hochgeschaukelt, statt sauber gegen Null zu klingen --
+    // der native Kompressor hat dieses Problem nicht (gemessen: Pegel
+    // klingt nach dem Anschlag sauber auf einen stabilen, tiefen Sockel
+    // ab, kein Aufschaukeln über mehrere Sekunden). Gemessen über 150-
+    // 500ms-Retriggerung (schnelles Drum-Pattern): jeder Anschlag regt die
+    // Bänder gleich stark an wie der vorherige, kein Nachlassen durch
+    // vorherige Ducker-Aktivität.
     defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic', width: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -1134,6 +1161,20 @@ const DEFS = {
       // Filter Delay, das dieselbe Kurve für beide Kanäle wiederverwendet).
       const clipCurve = makeFeedbackClipCurve();
 
+      // Anreger-Ducker (s. Kommentar oben beim DEFS-Eintrag) -- feste,
+      // nicht per Regler einstellbare Werte, wie schon der Sicherheits-
+      // Limiter weiter unten. Schwelle sehr niedrig (praktisch alles
+      // triggert die Kompression), Ratio hart, Attack bewusst langsam
+      // (lässt den Anschlag durch, bevor die Reduktion greift), Release
+      // moderat (erholt sich zwischen einzelnen Anschlägen eines Patterns).
+      const exciter = ctx.createDynamicsCompressor();
+      exciter.threshold.value = -50;
+      exciter.knee.value = 0;
+      exciter.ratio.value = 20;
+      exciter.attack.value = 0.03;
+      exciter.release.value = 0.2;
+      input.connect(exciter);
+
       const delays = [], damps = [], clips = [], fbGains = [], panners = [];
       const bandDelayTime = new Array(N);
       const sum = ctx.createGain();
@@ -1151,7 +1192,7 @@ const DEFS = {
         const panner = ctx.createStereoPanner();
         panner.pan.value = RESONATOR_PAN[i] * p.width;
 
-        input.connect(delayNode);
+        exciter.connect(delayNode);
         delayNode.connect(damp.input);
         damp.output.connect(clip);
         clip.connect(fb);
@@ -1199,11 +1240,12 @@ const DEFS = {
       limiter.release.value = 0.15;
       sum.connect(limiter);
 
-      // Kompensiert den Lookahead des Sicherheits-Limiters oben (s.
-      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- der sitzt NUR im Wet-Pfad,
-      // ohne Kompensation käme die trockene Kopie ~6ms VOR der resonierten
-      // an, beim Mischen (mix<1) ein hörbares Kammfilter-"Phasing".
-      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      // Kompensiert den Lookahead BEIDER Kompressoren im Wet-Pfad (Anreger-
+      // Ducker oben + Sicherheits-Limiter unten, je DYNAMICS_COMPRESSOR_
+      // LATENCY_SEC) -- die sitzen NUR im Wet-Pfad, ohne Kompensation käme
+      // die trockene Kopie ~12ms VOR der resonierten an, beim Mischen
+      // (mix<1) ein hörbares Kammfilter-"Phasing".
+      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC * 2);
       input.connect(dryDelay).connect(dry).connect(output);
       limiter.connect(wet).connect(output);
 
@@ -1252,7 +1294,7 @@ const DEFS = {
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
-          dryDelay.disconnect(); limiter.disconnect();
+          dryDelay.disconnect(); exciter.disconnect(); limiter.disconnect();
           for (const delayNode of delays) delayNode.disconnect();
           for (const damp of damps) damp.dispose();
           for (const clip of clips) clip.disconnect();
