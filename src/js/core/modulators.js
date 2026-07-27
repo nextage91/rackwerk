@@ -187,13 +187,20 @@ const MOD_DEFS = {
         // Vergleich statt eigener grab/release-Events: so greift der
         // Vorrang auf JEDEM Weg, der am Ende denselben Knob schreibt, ganz
         // ohne dass Jam-Fader/Makro-Knobs/X/Y-Pad extra etwas melden müssen.
-        const now = engine.now;
-        if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
-          handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
-        }
-        if (now < handOverrideUntil) {
-          lastAppliedValue = target.knob.value;
-          return;
+        // Ziele mit skipHandOverride (s. automation.js#register, aktuell nur
+        // "Volume") schreiben gar nicht auf knob.value -- der Vergleich
+        // würde dort nie zutreffen und den LFO fälschlich für immer stumm
+        // halten, deshalb hier übersprungen (dort gibt's ohnehin keine
+        // Konkurrenz ums selbe Ziel mehr, die einen Vorrang bräuchte).
+        if (!target.skipHandOverride) {
+          const now = engine.now;
+          if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
+            handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
+          }
+          if (now < handOverrideUntil) {
+            lastAppliedValue = target.knob.value;
+            return;
+          }
         }
         target.apply(applied);
         lastAppliedValue = applied;

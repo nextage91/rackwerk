@@ -183,6 +183,19 @@ export class Machine {
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();
+    /** @type {GainNode} Multiplikator HINTER this.output, standardmässig 1
+     *  (kein Effekt) -- ausschliesslich für LFO/Automation auf "Volume"
+     *  reserviert (s. render()#Sonderfall unten). Ohne diesen zweiten Gain
+     *  würde eine LFO-Fahrt auf "Volume" denselben this.output.gain
+     *  ABSOLUT überschreiben, den auch der Fader/Volume-Knob setzt --
+     *  Ergebnis (Nutzer-Bugreport): der Jam-Fader wirkt nur, solange man
+     *  ihn bewegt, das Signal "kommt gleich wieder", weil der nächste LFO-
+     *  Tick den gerade gesetzten Fader-Wert wieder verwirft. Multiplikativ
+     *  getrennt bleibt der Fader IMMER die vom Nutzer gewählte Zimmerdecke,
+     *  der LFO moduliert relativ dazu (Tremolo), statt gegen ihn zu
+     *  konkurrieren. */
+    this.volumeMod = engine.ctx.createGain();
+    this.output.connect(this.volumeMod);
     /** @type {StereoPannerNode} Panorama — sitzt direkt hinterm Fader, wie
      *  am echten Kanalzug. Die Sends (Delay/Reverb) hängen hinter dem Gate,
      *  tragen die Stereo-Position also mit. */
@@ -354,9 +367,12 @@ export class Machine {
    *  output/insert-outputs haben immer nur EIN Ziel, disconnect() ohne
    *  Argument trennt also genau die eine bestehende Verbindung. */
   #rewireInsertChain() {
-    this.output.disconnect();
+    // this.output -> this.volumeMod ist eine feste 1:1-Verbindung (s.
+    // Konstruktor), die Kette baut deshalb ab volumeMod neu, nicht ab
+    // output selbst.
+    this.volumeMod.disconnect();
     for (const insert of this.inserts) insert.output.disconnect();
-    let prev = this.output;
+    let prev = this.volumeMod;
     for (const insert of this.inserts) {
       prev.connect(insert.input);
       prev = insert.output;
@@ -752,8 +768,34 @@ export class Machine {
     // Alle Knobs mit data-auto bei der Automation anmelden. apply() nutzt
     // dieselbe input-Leitung wie eine Handbewegung — Maschinen brauchen
     // für Automation keinen Extra-Code.
+    //
+    // Sonderfall "Volume": schreibt NICHT über die normale input-Leitung
+    // (die am Ende setLevel() aufruft, also denselben output.gain, den
+    // auch der Fader/Volume-Knob setzt) -- sonst überschreibt eine LFO-/
+    // Automations-Fahrt auf Volume den Fader absolut, und der Fader "hat
+    // keinen Effekt mehr" (Nutzer-Bugreport), sobald der nächste LFO-Tick
+    // den gerade gesetzten Fader-Wert wieder verwirft. Stattdessen direkt
+    // auf volumeMod.gain (s. Konstruktor) -- ein Multiplikator HINTER dem
+    // Fader, macht die Modulation zum Tremolo relativ zur Fader-Stellung
+    // statt zur Konkurrenz um denselben Gain-Wert. onLfoOff federt das
+    // Abschalten ab: ohne das bliebe volumeMod nach Entfernen/Bypassen des
+    // LFOs für immer auf seinem letzten Modulationswert hängen.
     for (const knob of el.querySelectorAll('x-knob[data-auto]')) {
       const key = `${this.id}:${knob.dataset.p}`;
+      if (knob.dataset.p === 'volume') {
+        automation.register(key, knob, (v) => {
+          this.volumeMod.gain.setTargetAtTime(v, engine.now, 0.01);
+        }, {
+          onLfoOff: () => this.volumeMod.gain.setTargetAtTime(1, engine.now, 0.05),
+          // s. automation.js#register für die ausführliche Begründung:
+          // Fader und LFO landen für "Volume" nie mehr auf demselben Gain,
+          // die Hand-Vorrang-Erkennung (die knob.value beobachtet) würde
+          // hier nur fälschlich anschlagen, weil apply() knob.value gar
+          // nicht mehr schreibt.
+          skipHandOverride: true,
+        });
+        continue;
+      }
       automation.register(key, knob, (v) => {
         knob.value = v;
         knob.dispatchEvent(new CustomEvent('input', {
@@ -879,6 +921,7 @@ export class Machine {
     this.gate.gain.setTargetAtTime(0, t, 0.02);
     setTimeout(() => {
       this.output.disconnect();
+      this.volumeMod.disconnect();
       this.panner.disconnect();
       this.gate.disconnect();
       this.pdcDelay.disconnect();
