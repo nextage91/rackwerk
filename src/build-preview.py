@@ -53,6 +53,7 @@ MODULES = [
     ("js/machines/acidbass-worklet.js", ["ACIDBASS_WORKLET_SRC"]),
     ("js/machines/acidbass.js", ["AcidBass"]),
     ("js/machines/kicksynth.js", ["KickSynth"]),
+    ("js/machines/psysynth.js", ["PsySynth"]),
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
     ("js/rack/jam-view.js",     ["initJamView", "renderJamView"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),
