@@ -12,14 +12,25 @@
  *   Ableton Live Session View, nur ohne eigenen Zähler pro Spur.
  * - Läuft der Transport gerade NICHT, wird sofort gebunden (kein Warten
  *   auf einen Taktanfang, der nicht kommt).
- * - "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
- *   Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch still
- *   (machine.setJamGate(), s. dort — ein zusätzliches, unabhängiges Gate
- *   neben Mute/Solo, kein persistenter Zustand). Läuft NIRGENDS ein Clip,
- *   ist niemand eingeschränkt — normales Mehrspur-Rack-Verhalten, bis man
- *   anfängt zu jammen. Mehrere gleichzeitig laufende Clips auf
- *   verschiedenen Spuren bleiben dabei bewusst zusammen hörbar (layern),
- *   s. refreshJamGates().
+ * - Jede Spur hat einen EIGENEN, unabhängigen Stumm-Zustand (`stopped`,
+ *   s. stateFor()/haltMachine()/resumeMachine()) — anders als früher NICHT
+ *   mehr davon abhängig, ob irgendwo sonst im Rack ein Clip läuft (Nutzer-
+ *   Anfrage: "wenn kein Clip läuft, spielen trotzdem alle Maschinen ihr
+ *   Pattern — das sollte komplett stoppen können"). machine.setJamGate()
+ *   (ein zusätzliches Gate neben Mute/Solo, kein persistenter Zustand)
+ *   spiegelt exakt dieses Flag, s. refreshJamGate(). Eine unangetastete
+ *   Spur bleibt beim Standard `stopped:false` und spielt wie gewohnt ihr
+ *   normales A/B/C/D-Pattern — nur EXPLIZITES Stoppen (Stop-Button pro
+ *   Spur, erneuter Tap auf den aktiven Clip, oder der globale "Stop All"-
+ *   Button, s. stopAllClips()) macht sie still, ganz wie Ableton Live
+ *   Session View: Stop heisst "keine Clips mehr auf dieser Spur", nicht
+ *   "Transport anhalten" — der Takt läuft einfach weiter.
+ * - Scenes (s. saveScene()/launchScene()) merken sich pro Maschine den
+ *   gerade aktiven Clip als benannten Schnappschuss; ein Launch triggert
+ *   exakt diese Clips neu UND stoppt jede Maschine, die beim Speichern
+ *   KEINEN aktiven Clip hatte — "einen ganzen Song-Abschnitt mit einem Tap
+ *   wechseln", das Ableton-Scene-Äquivalent. Rein Jam-Performance-Zustand
+ *   wie activeClipId/stopped (s. unten) — nicht im Projekt gespeichert.
  * - Reglerwerte (Fader/Pan/Sends/Makro-Knobs) laufen über dieselben
  *   Setter/Custom-Elemente wie überall sonst in der App (x-knob/x-fader,
  *   setLevel/setSend/…) — keine Parallel-Implementierung.
@@ -480,7 +491,7 @@ function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
 const jamState = new WeakMap();
 function stateFor(machine) {
   let st = jamState.get(machine);
-  if (!st) { st = { activeClipId: null, queuedClipId: null }; jamState.set(machine, st); }
+  if (!st) { st = { activeClipId: null, queuedClipId: null, stopped: false }; jamState.set(machine, st); }
   return st;
 }
 
@@ -515,35 +526,59 @@ function promoteQueuedClip(machine, st) {
   st.queuedClipId = null;
   if (clip) machine.bindClipData(clip.data);
   refreshClipStates(machine);
-  refreshJamGates();
 }
 
-/** "Nur Spuren mit aktivem Clip klingen": sobald IRGENDWO im Rack ein
- *  Clip läuft, werden alle Maschinen OHNE aktiven Clip automatisch
- *  stummgeschaltet (über machine.setJamGate — unabhängig von Mute/Solo,
- *  kein persistenter Zustand). Läuft gerade NIRGENDS ein Clip, ist
- *  niemand eingeschränkt (normales Rack-Verhalten, bevor überhaupt
- *  gejammt wird). Mehrere Clips auf verschiedenen Spuren bleiben dabei
- *  weiterhin gleichzeitig hörbar (layern) — nur Spuren, die GAR keinen
- *  Clip fahren, werden stumm. Nach jeder Clip-Start/-Stop-Aktion neu
- *  ausgewertet. */
+/** Spiegelt `stopped` dieser EINEN Maschine aufs Jam-Gate — komplett
+ *  unabhängig von allen anderen Spuren (s. Dateikopf-Kommentar). */
+function refreshJamGate(machine) {
+  machine.setJamGate(!stateFor(machine).stopped);
+}
+
+/** Beim (Wieder-)Öffnen des Sheets für ALLE Maschinen aufgerufen — fängt
+ *  z. B. eine Maschine ab, die neu ins Rack kam, während das Sheet zu war
+ *  (setJamGate() lief für sie noch nie). */
 function refreshJamGates() {
-  const list = boundRack?.machines ?? [];
-  const jamActive = list.some((m) => stateFor(m).activeClipId != null);
-  for (const m of list) {
-    m.setJamGate(!jamActive || stateFor(m).activeClipId != null);
-  }
+  for (const m of boundRack?.machines ?? []) refreshJamGate(m);
 }
 
-/** Clip antippen: läuft er bereits, sofortiger Stop (kein Warten auf
- *  einen zweiten Taktanfang nötig, symmetrisch zum STOP-Button). Sonst
- *  quantisiert einreihen — oder sofort, wenn der Transport gerade steht. */
-function toggleClip(machine, clipId) {
+/** Diese EINE Spur sofort stumm — unabhängig von allen anderen (s. Datei-
+ *  kopf-Kommentar). activeClipId/queuedClipId bleiben dabei bewusst
+ *  UNVERÄNDERT (anders als früher kein Rücksprung aufs normale Pattern):
+ *  ein erneuter Tap auf denselben Clip, der Stop-Button selbst (Toggle,
+ *  s. buildColumn), oder ein Scene-Recall macht exakt da weiter, wo die
+ *  Spur stand, statt den gewählten Clip zu vergessen. */
+function haltMachine(machine) {
   const st = stateFor(machine);
-  if (st.activeClipId === clipId) {
-    stopClip(machine);
-    return;
-  }
+  if (st.stopped) return;
+  st.stopped = true;
+  refreshClipStates(machine);
+  refreshJamGate(machine);
+}
+
+/** Gegenstück zu haltMachine() — macht die Spur wieder hörbar, ohne
+ *  irgendetwas an der Clip-Auswahl zu ändern. */
+function resumeMachine(machine) {
+  const st = stateFor(machine);
+  if (!st.stopped) return;
+  st.stopped = false;
+  refreshClipStates(machine);
+  refreshJamGate(machine);
+}
+
+/** Globaler "Stop All Clips" (Button im Sheet-Kopf) — schaltet JEDE Spur
+ *  unabhängig stumm, wie Ableton Live's "Stop Clips": der Transport/Takt
+ *  läuft dabei einfach weiter, es wird nur still. */
+export function stopAllClips() {
+  for (const m of boundRack?.machines ?? []) haltMachine(m);
+}
+
+/** Einen Clip tatsächlich starten (Tap auf einen noch nicht aktiven Clip,
+ *  Scene-Launch) — hebt `stopped` für diese Spur auf (ein Clip-Tap soll
+ *  immer hörbar werden) und reiht den Clip quantisiert ein, oder bindet
+ *  ihn sofort, wenn der Transport gerade steht. */
+function playClip(machine, clipId) {
+  resumeMachine(machine);
+  const st = stateFor(machine);
   if (!transport.isPlaying) {
     st.queuedClipId = clipId;
     promoteQueuedClip(machine, st);
@@ -553,33 +588,55 @@ function toggleClip(machine, clipId) {
   refreshClipStates(machine);
 }
 
-/** Zurück zum normalen A/B/C/D-Pattern der Maschine — der Clip lief
- *  NEBEN patternIndex, ein erneutes setPatternIndex(patternIndex) bindet
- *  also einfach wieder das reguläre Pattern, ohne dass irgendwas anderes
- *  angefasst werden musste. */
-function stopClip(machine) {
+/** Clip antippen: läuft er bereits UND ist die Spur hörbar, sofortiger
+ *  Stop (kein Warten auf einen zweiten Taktanfang nötig, symmetrisch zum
+ *  STOP-Button). Ist die Spur gerade gestoppt (auch wenn's derselbe Clip
+ *  ist), macht ein Tap sie stattdessen wieder hörbar -- sonst liesse sich
+ *  eine gestoppte Spur über ihren eigenen (weiterhin "aktiven") Clip gar
+ *  nicht mehr reaktivieren. */
+function toggleClip(machine, clipId) {
   const st = stateFor(machine);
-  st.activeClipId = null;
-  st.queuedClipId = null;
-  machine.setPatternIndex(machine.patternIndex);
-  refreshClipStates(machine);
-  refreshJamGates();
+  if (st.activeClipId === clipId && !st.stopped) {
+    haltMachine(machine);
+    return;
+  }
+  playClip(machine, clipId);
 }
 
+/** Spiegelt den aktuellen Zustand (Clip-Farben, Stop-Button, Spalten-
+ *  Dimmung) einer Maschine in ihre schon gerenderte Spalte -- läuft nach
+ *  JEDER Zustandsänderung (Clip getippt, gestoppt, Scene gelauncht, …). */
 function refreshClipStates(machine) {
   const cols = columnEls.get(machine);
   if (!cols) return; // Sheet gerade nicht offen -- nichts zu tun
   const st = stateFor(machine);
   for (const el of cols.clipsEl.querySelectorAll('.clip')) {
     const id = Number(el.dataset.clipId);
-    el.dataset.state = id === st.activeClipId ? 'playing' : id === st.queuedClipId ? 'queued' : 'filled';
+    el.dataset.state = id !== st.activeClipId ? (id === st.queuedClipId ? 'queued' : 'filled')
+      : st.stopped ? 'stopped' : 'playing';
   }
+  cols.stopBtn.classList.toggle('is-active', st.stopped);
+  cols.col.classList.toggle('is-stopped', st.stopped);
+}
+
+/** Zurück zum normalen A/B/C/D-Pattern der Maschine (der gelöschte Clip
+ *  darf nicht weiter im Hintergrund gebunden bleiben) -- der Clip lief
+ *  NEBEN patternIndex, ein erneutes setPatternIndex(patternIndex) bindet
+ *  also einfach wieder das reguläre Pattern. Anders als haltMachine()
+ *  bleibt die Spur dabei HÖRBAR (kein Grund, sie zusätzlich stumm zu
+ *  schalten, nur ein Rücksprung auf den sicheren Default). */
+function revertToPattern(machine) {
+  const st = stateFor(machine);
+  st.activeClipId = null;
+  st.queuedClipId = null;
+  machine.setPatternIndex(machine.patternIndex);
+  refreshClipStates(machine);
 }
 
 /** Entfernt einen Clip endgültig (mit Undo-Angebot, wie Pattern-Clear in
- *  step-seq.js). Läuft/wartet der gelöschte Clip gerade, wird er zuerst
- *  regulär gestoppt (stopClip kümmert sich um Pattern-Rückkehr + Jam-Gates
- *  -- kein Sonderfall nötig). Undo fügt denselben Clip (gleiche id) an
+ *  step-seq.js). Läuft/wartet der gelöschte Clip gerade, springt die
+ *  Maschine zuerst auf ihr normales Pattern zurück (revertToPattern --
+ *  kein Sonderfall nötig). Undo fügt denselben Clip (gleiche id) an
  *  seiner ursprünglichen Position wieder ein, startet ihn aber nicht neu. */
 function deleteClip(machine, clipId) {
   const idx = machine.clips.findIndex((c) => c.id === clipId);
@@ -587,7 +644,7 @@ function deleteClip(machine, clipId) {
   const clip = machine.clips[idx];
 
   const st = stateFor(machine);
-  if (st.activeClipId === clipId || st.queuedClipId === clipId) stopClip(machine);
+  if (st.activeClipId === clipId || st.queuedClipId === clipId) revertToPattern(machine);
 
   machine.removeClip(clipId);
   const cols = columnEls.get(machine);
@@ -673,7 +730,8 @@ function renderClips(machine, clipsEl) {
   const st = stateFor(machine);
   const usedSlots = new Set(machine.clips.map((c) => c.sourceSlot).filter((s) => s != null));
   const clipsHtml = machine.clips.map((clip) => {
-    const state = clip.id === st.activeClipId ? 'playing' : clip.id === st.queuedClipId ? 'queued' : 'filled';
+    const state = clip.id !== st.activeClipId ? (clip.id === st.queuedClipId ? 'queued' : 'filled')
+      : st.stopped ? 'stopped' : 'playing';
     return `
       <div class="clip" data-clip-id="${clip.id}" data-state="${state}">
         <span class="clip__progress"></span>
@@ -990,7 +1048,15 @@ function buildColumn(machine) {
     <div class="clips"></div>
     <button type="button" class="clip-stop">STOP</button>
   `;
-  col.querySelector('.clip-stop').addEventListener('click', () => stopClip(machine));
+  col.classList.toggle('is-stopped', stateFor(machine).stopped);
+  const stopBtn = col.querySelector('.clip-stop');
+  stopBtn.classList.toggle('is-active', stateFor(machine).stopped);
+  // Toggle statt reinem Stop -- ein zweiter Tap auf den Button macht die
+  // Spur wieder hörbar (Gegenstück zu haltMachine(), s. dort), genau wie
+  // ein erneuter Tap auf ihren eigenen aktiven Clip (s. toggleClip()).
+  stopBtn.addEventListener('click', () => {
+    if (stateFor(machine).stopped) resumeMachine(machine); else haltMachine(machine);
+  });
 
   const clipsEl = col.querySelector('.clips');
   renderClips(machine, clipsEl);
@@ -1044,7 +1110,7 @@ function buildColumn(machine) {
   muteBtn.addEventListener('click', () => { machine.setMuted(!machine.muted); muteBtn.classList.toggle('is-active', machine.muted); });
   col.appendChild(stripRow);
 
-  columnEls.set(machine, { col, clipsEl });
+  columnEls.set(machine, { col, clipsEl, stopBtn });
   return col;
 }
 
@@ -1092,10 +1158,138 @@ function openMacroPopup(machine, anchorEl) {
   setTimeout(() => document.addEventListener('pointerdown', onOutsideMacroPop, true), 0);
 }
 
+/* ---------- Scenes (Ableton-Style Song-Abschnitt launchen) ----------
+ * Rein Jam-Performance-Zustand wie activeClipId/stopped oben -- lebt nur
+ * für die Dauer der Session (nicht im Projekt gespeichert), ein Neuladen
+ * setzt die Liste zurück wie jeden anderen Jam-Zustand auch. `entries`
+ * merkt sich pro Maschinen-ID (nicht Objekt-Referenz -- Scenes müssen
+ * einfache, GC-unabhängige Daten bleiben) den Clip, der beim Speichern
+ * aktiv war. Verweist eine Scene auf eine inzwischen entfernte Maschine
+ * oder einen gelöschten Clip, läuft launchScene() einfach am betroffenen
+ * Eintrag vorbei (dieselbe "stale Referenz = No-Op"-Toleranz wie beim
+ * X/Y-Pad-Mapping, s. dort) -- kein Aufräumen nötig. */
+let scenes = [];
+let nextSceneId = 1;
+let scenesEl = null;
+
+/** Schnappschuss: für jede Maschine mit einem gerade HÖRBAREN aktiven Clip
+ *  (nicht gestoppt) wird dessen Clip-ID gemerkt. Maschinen ohne aktiven
+ *  Clip (oder gerade gestoppt) bekommen bewusst KEINEN Eintrag -- beim
+ *  späteren Launch werden sie darüber erkannt und mitgestoppt (s.
+ *  launchScene()), damit ein Recall wirklich "genau dieser Song-Abschnitt"
+ *  reproduziert, nicht nur eine Teilmenge davon nachspielt. */
+function saveScene() {
+  const entries = {};
+  for (const m of boundRack?.machines ?? []) {
+    const st = stateFor(m);
+    if (st.activeClipId != null && !st.stopped) entries[m.id] = st.activeClipId;
+  }
+  scenes.push({ id: nextSceneId++, name: `Scene ${scenes.length + 1}`, entries });
+  renderScenes();
+}
+
+/** Eine Scene launchen: jede Maschine MIT Eintrag bekommt ihren gemerkten
+ *  Clip (neu) gestartet, jede Maschine OHNE Eintrag wird gestoppt -- exakt
+ *  der Zustand, der beim Speichern galt, deterministisch reproduziert
+ *  (s. Kommentar oben "genau dieser Song-Abschnitt", das eigentliche
+ *  Ableton-Scene-Äquivalent). */
+function launchScene(scene) {
+  for (const m of boundRack?.machines ?? []) {
+    const clipId = scene.entries[m.id];
+    if (clipId != null && m.clips.some((c) => c.id === clipId)) playClip(m, clipId);
+    else haltMachine(m);
+  }
+}
+
+function deleteScene(id) {
+  const idx = scenes.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  scenes.splice(idx, 1);
+  renderScenes();
+}
+
+/** Halten-Chip zum Löschen einer Scene -- dasselbe modulweite Ein-Chip-
+ *  Popup-Muster wie clipMenu/xyMenu oben (nie mehr als eines offen). */
+let sceneMenu = null;
+const dismissSceneMenu = () => {
+  sceneMenu?.remove();
+  sceneMenu = null;
+  document.removeEventListener('pointerdown', onOutsideSceneMenu, true);
+};
+const onOutsideSceneMenu = (e) => { if (sceneMenu && !sceneMenu.contains(e.target)) dismissSceneMenu(); };
+
+function openSceneDeleteMenu(scene, anchorEl) {
+  dismissSceneMenu();
+  sceneMenu = document.createElement('div');
+  sceneMenu.className = 'pat-chip';
+  const delBtn = document.createElement('button');
+  delBtn.className = 'pat-chip__btn pat-chip__btn--danger';
+  delBtn.textContent = '🗑 Delete Scene';
+  delBtn.addEventListener('click', () => {
+    deleteScene(scene.id);
+    dismissSceneMenu();
+  });
+  sceneMenu.appendChild(delBtn);
+  document.body.appendChild(sceneMenu);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(
+    window.innerWidth - sceneMenu.offsetWidth - 8,
+    r.left + r.width / 2 - sceneMenu.offsetWidth / 2,
+  ));
+  sceneMenu.style.left = `${left}px`;
+  sceneMenu.style.top = `${Math.max(8, r.top - sceneMenu.offsetHeight - 8)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideSceneMenu, true), 0);
+  clearTimeout(sceneMenu.dismissTimer);
+  sceneMenu.dismissTimer = setTimeout(dismissSceneMenu, 4000);
+}
+
+/** Tap launcht, Halten (wie Clips/A-B-C-D-Slots) öffnet den Löschen-Chip. */
+function wireSceneChip(chip, scene) {
+  let holdTimer = null;
+  let held = false;
+  chip.addEventListener('pointerdown', () => {
+    held = false;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      held = true;
+      openSceneDeleteMenu(scene, chip);
+    }, CLIP_HOLD_MS);
+  });
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+  chip.addEventListener('pointerup', cancelHold);
+  chip.addEventListener('pointercancel', cancelHold);
+  chip.addEventListener('pointerleave', cancelHold);
+  chip.addEventListener('click', () => {
+    if (held) { held = false; return; }
+    launchScene(scene);
+  });
+}
+
+function renderScenes() {
+  if (!scenesEl) return;
+  scenesEl.innerHTML = '';
+  for (const scene of scenes) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'jam-scene-chip';
+    chip.textContent = scene.name;
+    wireSceneChip(chip, scene);
+    scenesEl.appendChild(chip);
+  }
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'jam-scene-chip jam-scene-chip--add';
+  addBtn.textContent = '+ Save Scene';
+  addBtn.addEventListener('click', saveScene);
+  scenesEl.appendChild(addBtn);
+}
+
 /** Baut die komplette Jam-Ansicht neu — beim Öffnen des Sheets aufgerufen
  *  (wie Mixer#render()), damit sie immer den aktuellen Rack-Zustand
- *  zeigt (Maschinen hinzugefügt/entfernt, Namen/Farben etc.). */
-export function renderJamView(listEl) {
+ *  zeigt (Maschinen hinzugefügt/entfernt, Namen/Farben etc.). `scenesContainerEl`
+ *  ist optional (nur gesetzt, wenn die Jam-Ansicht auch eine Scenes-Leiste
+ *  hat, s. main.js). */
+export function renderJamView(listEl, scenesContainerEl) {
   listEl.innerHTML = '';
   for (const machine of boundRack?.machines ?? []) {
     listEl.appendChild(buildColumn(machine));
@@ -1105,4 +1299,8 @@ export function renderJamView(listEl) {
   // Öffnen des Sheets bekommt jede Maschine garantiert den aktuell
   // korrekten Gate-Zustand.
   refreshJamGates();
+  if (scenesContainerEl) {
+    scenesEl = scenesContainerEl;
+    renderScenes();
+  }
 }

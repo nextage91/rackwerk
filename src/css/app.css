@@ -699,6 +699,61 @@ button {
 }
 .console__head .sheet__title { margin: 0; }
 .console__close { min-width: 44px; min-height: 40px; font-size: 15px; }
+.console__head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.console__head-left .sheet__title { white-space: nowrap; }
+
+/* Globaler "Stop All Clips" (Jam-Sheet-Kopf, s. jam-view.js#stopAllClips)
+   -- gleiche Farbgebung wie der Pro-Spur-Stop-Button (.clip-stop unten),
+   damit "stoppen" optisch eine durchgängige Sprache hat, egal ob für eine
+   einzelne Spur oder global. */
+.jam-stopall-btn {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: linear-gradient(#3a2622, #271a17);
+  color: #ff8a8a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  touch-action: manipulation;
+}
+.jam-stopall-btn:active { transform: translateY(1px); }
+
+/* Scenes-Leiste (s. jam-view.js#renderScenes) -- horizontal scrollbar wie
+   die Spalten selbst, sitzt aber ALS EIGENE Zeile ÜBER ihnen (nicht in
+   derselben Flex-Reihe wie .jam-console), sonst würde sie als weitere
+   "Spalte" mitgezählt statt quer über alle Spuren zu launchen. */
+.jam-scenes {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 2px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.jam-scene-chip {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: linear-gradient(#3a342b, #23201a);
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.4);
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  white-space: nowrap;
+  touch-action: manipulation;
+}
+.jam-scene-chip:active { transform: translateY(1px); }
+.jam-scene-chip--add {
+  color: var(--ink-faint);
+  background: transparent;
+  box-shadow: none;
+  border: 1px dashed var(--edge-dark);
+}
 
 .mixer-console {
   flex: 1 1 auto;
@@ -1047,6 +1102,14 @@ button {
   0%, 100% { box-shadow: 0 0 0 2px transparent inset, 0 2px 4px rgba(0,0,0,.4); }
   50%      { box-shadow: 0 0 0 2px var(--ch-color, var(--lcd-ink)) inset, 0 2px 4px rgba(0,0,0,.4); }
 }
+/* Aktiver Clip, aber die Spur ist gerade gestoppt (s. jam-view.js#haltMachine)
+   -- gleicher Rahmen wie "playing", nur gedimmt: "das hier läuft wieder,
+   sobald du die Spur freigibst", nicht "läuft gerade hörbar". */
+.clip[data-state="stopped"] {
+  box-shadow: 0 0 0 2px var(--ch-color, var(--led-play)) inset, 0 2px 4px rgba(0,0,0,.4);
+  opacity: .5;
+}
+.clip[data-state="stopped"] .clip__label { color: var(--ch-color, var(--led-play)); }
 .clip.is-dragging { z-index: 5; box-shadow: 0 6px 18px rgba(0,0,0,.65); }
 
 .clip-stop {
@@ -1062,6 +1125,18 @@ button {
   touch-action: manipulation;
 }
 .clip-stop:active { transform: translateY(1px); }
+/* Aktiv = diese Spur ist gerade tatsächlich gestoppt (s. haltMachine()) --
+   gefüllter statt nur umrandeter Zustand, klar unterscheidbar vom Ruhe-
+   Look oben. */
+.clip-stop.is-active {
+  background: linear-gradient(#5a2822, #3a1a15);
+  box-shadow: 0 0 0 2px #ff8a8a inset, 0 2px 4px rgba(0,0,0,.4);
+}
+/* Ganze Spalte gedimmt, solange sie gestoppt ist -- macht auf einen Blick
+   sichtbar, welche Spuren gerade schweigen, ohne jede davon einzeln
+   anzuschauen (wichtig, sobald mehr als 3 Spuren im Rack sind und man
+   durch die Spalten scrollen muss). */
+.channel.is-stopped { opacity: .6; }
 
 /* Feste Höhe statt flex:1 -- sonst frisst das Pad den ganzen restlichen
    Platz und drängt Solo/Mute/Fader/Makros aus der Spalte (schon einmal
