@@ -238,12 +238,23 @@ export class Machine {
     this.clips = [];
 
     /** Auto-Return-Schalter des Jam-X/Y-Pads (s. jam-view.js#buildXYPad,
-     *  .xy-spring-btn) — anders als die restlichen Jam-Pad-Einstellungen
-     *  (Achsen-Zuordnung, s. dort) EIN Sibling-Feld wie sends/inserts/clips,
-     *  weil Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie
-     *  sie ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
+     *  .xy-spring-btn) — ein Sibling-Feld wie sends/inserts/clips, weil
+     *  Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie sie
+     *  ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
      *  Default zurückzufallen. */
     this.xySpring = false;
+
+    /** @type {{x:Array<{key:string,from:number,to:number,centered?:boolean}>,
+     *  y:Array<{key:string,from:number,to:number,centered?:boolean}>}|null}
+     *  Welche Regler auf der X/Y-Achse des Jam-Pads liegen (s. jam-view.js
+     *  #xyStateFor/#buildXYPad) — genau wie xySpring ein Sibling-Feld
+     *  (Nutzer-Anfrage: eine mühsam eingestellte Pad-Zuordnung soll ein
+     *  Neuladen/Speichern überleben, nicht auf den Delay/Reverb-Default
+     *  zurückfallen). Bleibt hier `null` (statt schon mit dem Default
+     *  belegt) -- jam-view.js#xyStateFor() legt ihn beim ersten Zugriff an,
+     *  dieselbe Lazy-Init wie zuvor über eine private WeakMap, nur jetzt
+     *  direkt auf der Maschine statt daneben, damit er serialisierbar ist. */
+    this.xyMap = null;
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter Gate UND pdcDelay,
      *  damit Mute/Solo UND der Latenz-Ausgleich die Effekt-Fahnen mitnehmen
@@ -681,6 +692,7 @@ export class Machine {
           modulators: this.serializeModulators(),
           clips: this.serializeClips(),
           xySpring: this.xySpring,
+          xyMap: this.xyMap,
           lanes: automation.exportLanes(this.id),
           label: this.label,
         };
