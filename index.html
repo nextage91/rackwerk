@@ -18071,6 +18071,14 @@ const { LFO_WAVES, LFO_SYNC_BUTTONS, ARP_MODES, ARP_SYNC_BUTTONS, MODULATOR_TYPE
 
 const TICK_MS = 30;
 
+/** Wie lange der LFO nach einer erkannten Handbedienung (s. tick() unten)
+ *  stumm bleibt, bevor er den Regler wieder übernimmt -- lang genug, dass
+ *  eine laufende Zieh-Geste (Panel-Knob, Jam-Fader, Makro-Knob, X/Y-Pad --
+ *  s. Dateikopf/Chat) nicht zwischen zwei Fremdänderungen schon wieder
+ *  überschrieben wird, kurz genug, dass der LFO nach dem Loslassen zügig
+ *  weiterläuft statt spürbar "auszusetzen". */
+const LFO_HAND_OVERRIDE_MS = 250;
+
 /** Modulierte Waveforms (0..1, unipolar -- LFO-Tiefe skaliert davon
  *  ausgehend den tatsächlich bestrichenen Reglerbereich, s. paramValueAt). */
 function waveValue(wave, phase, sh) {
@@ -18159,6 +18167,22 @@ const MOD_DEFS = {
       let trackedTarget = p.target;
       let bypassedFlag = false;
 
+      // Erkennt Handbedienung DESSELBEN Reglers, den der LFO gerade steuert
+      // -- egal auf welchem Weg (echter Panel-Knob, Jam-Fader, Makro-Knob,
+      // X/Y-Pad: alle landen am Ende auf demselben target.knob, s. Chat-
+      // Bugreport "Fader in der Jam-Ansicht hat keinen Effekt mehr, sobald
+      // Volume vom LFO moduliert wird"). automation.js kennt "Hand schlägt
+      // Automation" bereits für aufgenommene Lanes (s. dortiges #tick()),
+      // aber der LFO lief bisher komplett unabhängig davon einfach weiter
+      // und schrieb jeden Tick unbedingt über jede Handbewegung drüber --
+      // hier derselbe Vorrang, nur wertbasiert erkannt statt über eigene
+      // grab/release-Events (die der Jam-Fader/die Makro-Knobs gar nicht
+      // feuern, s. dort). lastKnob/lastAppliedValue werden zurückgesetzt,
+      // sobald sich `target.knob` ändert (anderes Ziel gewählt).
+      let lastKnob = null;
+      let lastAppliedValue = null;
+      let handOverrideUntil = 0;
+
       const muteKey = (target) => (target ? `${owner.laneKeyPrefix}:${target}` : null);
       const setMute = (target, active) => {
         const k = muteKey(target);
@@ -18170,6 +18194,12 @@ const MOD_DEFS = {
         if (!k) return;
         const target = automation.getTarget(k);
         if (!target) return;
+
+        if (target.knob !== lastKnob) {
+          lastKnob = target.knob;
+          lastAppliedValue = null;
+          handOverrideUntil = 0;
+        }
 
         let phase;
         if (p.division === 'free') {
@@ -18196,7 +18226,24 @@ const MOD_DEFS = {
         // diesem Feature gespeicherten LFOs).
         const t01raw = Math.min(1, Math.max(0, p.offset)) +
           waveValue(p.wave, phase, sh) * Math.min(1, Math.max(0, p.depth));
-        target.apply(paramValueAt(target.knob, Math.min(1, Math.max(0, t01raw))));
+        const applied = paramValueAt(target.knob, Math.min(1, Math.max(0, t01raw)));
+
+        // Hat sich der Regler seit unserem letzten Schreiben verändert, OHNE
+        // dass wir es waren -> gerade in Handbedienung, Gnadenfrist neu
+        // anstossen (s. LFO_HAND_OVERRIDE_MS oben). Bewusst ein Werte-
+        // Vergleich statt eigener grab/release-Events: so greift der
+        // Vorrang auf JEDEM Weg, der am Ende denselben Knob schreibt, ganz
+        // ohne dass Jam-Fader/Makro-Knobs/X/Y-Pad extra etwas melden müssen.
+        const now = engine.now;
+        if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
+          handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
+        }
+        if (now < handOverrideUntil) {
+          lastAppliedValue = target.knob.value;
+          return;
+        }
+        target.apply(applied);
+        lastAppliedValue = applied;
       };
 
       return {
