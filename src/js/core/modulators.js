@@ -130,9 +130,14 @@ const MOD_DEFS = {
       // und schrieb jeden Tick unbedingt über jede Handbewegung drüber --
       // hier derselbe Vorrang, nur wertbasiert erkannt statt über eigene
       // grab/release-Events (die der Jam-Fader/die Makro-Knobs gar nicht
-      // feuern, s. dort). lastKnob/lastAppliedValue werden zurückgesetzt,
-      // sobald sich `target.knob` ändert (anderes Ziel gewählt).
-      let lastKnob = null;
+      // feuern, s. dort). lastKey/lastAppliedValue werden zurückgesetzt,
+      // sobald sich das aufgelöste Lane-Ziel ändert -- über den SCHLÜSSEL,
+      // nicht über target.knob: pro-Sound-Ziele (Sampler/Drum-Machine-Pads)
+      // teilen sich alle denselben physischen Knob (nur das gerade
+      // gewählte Pad wird angezeigt), zwei verschiedene Pad-Ziele könnten
+      // also identisches target.knob haben und der alte Vergleich hätte
+      // beim Umschalten zwischen ihnen fälschlich NICHT zurückgesetzt.
+      let lastKey = null;
       let lastAppliedValue = null;
       let handOverrideUntil = 0;
 
@@ -148,8 +153,8 @@ const MOD_DEFS = {
         const target = automation.getTarget(k);
         if (!target) return;
 
-        if (target.knob !== lastKnob) {
-          lastKnob = target.knob;
+        if (k !== lastKey) {
+          lastKey = k;
           lastAppliedValue = null;
           handOverrideUntil = 0;
         }
@@ -191,14 +196,19 @@ const MOD_DEFS = {
         // "Volume") schreiben gar nicht auf knob.value -- der Vergleich
         // würde dort nie zutreffen und den LFO fälschlich für immer stumm
         // halten, deshalb hier übersprungen (dort gibt's ohnehin keine
-        // Konkurrenz ums selbe Ziel mehr, die einen Vorrang bräuchte).
+        // Konkurrenz ums selbe Ziel mehr, die einen Vorrang bräuchte). Über
+        // target.getValue() statt target.knob.value gelesen: pro-Sound-Ziele
+        // (Sampler/Drum-Machine-Pads) teilen sich einen Knob, der nur das
+        // gerade GEWÄHLTE Pad anzeigt -- getValue() liest stattdessen immer
+        // den echten Wert DIESES Ziels, egal welches Pad im UI offen ist.
         if (!target.skipHandOverride) {
           const now = engine.now;
-          if (lastAppliedValue != null && Math.abs(target.knob.value - lastAppliedValue) > 1e-6) {
+          const liveValue = target.getValue?.() ?? target.knob.value;
+          if (lastAppliedValue != null && Math.abs(liveValue - lastAppliedValue) > 1e-6) {
             handOverrideUntil = now + LFO_HAND_OVERRIDE_MS / 1000;
           }
           if (now < handOverrideUntil) {
-            lastAppliedValue = target.knob.value;
+            lastAppliedValue = liveValue;
             return;
           }
         }
