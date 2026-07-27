@@ -25,7 +25,16 @@ function modColorVars(hex) {
  *  dieselben Knobs, die man auch von Hand als Automations-Lane aufnehmen
  *  kann (data-auto, s. machine.js#render()). Insert- und Modulator-Ketten-
  *  Knobs tragen bewusst KEIN data-auto (eigener Registrierungsweg, s. dort),
- *  tauchen hier also nie versehentlich als Ziel auf. */
+ *  tauchen hier also nie versehentlich als Ziel auf.
+ *
+ *  Bei Maschinen mit pro-Sound-Reglern (Sampler/Drum-Machine: owner.tracks +
+ *  owner.knobs, s. dort registerDynamic()-Verdrahtung) kommt zusätzlich EIN
+ *  gruppierter Eintrag pro Track dazu -- Zielschlüssel `${trackIdx}:${param}`,
+ *  genau das Format, das ${owner.id}: davor bekommt und dann als Lane-Key
+ *  bei automation.getTarget() landet (s. modulators.js#muteKey). So bleibt
+ *  die Maschinen-weite Liste (Volume, Shuffle, …) unverändert flach, während
+ *  die Pad/Track-Ziele übersichtlich nach Sound gruppiert erscheinen, statt
+ *  alle Pads/Parameter in einer einzigen langen Liste zu vermischen. */
 function targetOptions(owner) {
   if (!owner.el) return [];
   const seen = new Set();
@@ -35,6 +44,17 @@ function targetOptions(owner) {
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push({ key, label: knob.getAttribute('label') || key });
+  }
+  if (Array.isArray(owner.tracks) && owner.knobs) {
+    for (let ti = 0; ti < owner.tracks.length; ti++) {
+      const tr = owner.tracks[ti];
+      const group = [];
+      for (const [param, knob] of Object.entries(owner.knobs)) {
+        if (!knob || tr[param] === undefined) continue;
+        group.push({ key: `${ti}:${param}`, label: knob.getAttribute('label') || param });
+      }
+      if (group.length) out.push({ group: tr.name, options: group });
+    }
   }
   return out;
 }
@@ -95,7 +115,10 @@ export function renderModulationChain(listEl, owner) {
           <span class="mod-target__label">Target</span>
           <select class="mod-target__select" data-mod-target>
             <option value=""${mod.params.target ? '' : ' selected'}>— none —</option>
-            ${options.map((o) => `<option value="${o.key}"${o.key === mod.params.target ? ' selected' : ''}>${o.label}</option>`).join('')}
+            ${options.map((o) => o.group
+              ? `<optgroup label="${o.group}">${o.options.map((oo) => `<option value="${oo.key}"${oo.key === mod.params.target ? ' selected' : ''}>${oo.label}</option>`).join('')}</optgroup>`
+              : `<option value="${o.key}"${o.key === mod.params.target ? ' selected' : ''}>${o.label}</option>`
+            ).join('')}
           </select>
         </div>
         <div class="seg">

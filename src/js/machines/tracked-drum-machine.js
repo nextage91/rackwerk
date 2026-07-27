@@ -386,16 +386,22 @@ export class TrackedDrumMachine extends Machine {
         this.tracks[trIdx][param] = value;
         if (trIdx === this.selected) this.knobs[param].value = value;
       };
+      // s. automation.js#registerDynamic -- liefert den WAHREN Wert einer
+      // beliebigen Spur, unabhängig davon, ob sie gerade ausgewählt ist
+      // (Grundlage fürs LFO-Modulieren einzelner Spuren statt nur
+      // maschinenweiter Regler, s. modulators.js).
+      const getValueForKey = (key) => this.tracks[parseInt(key.split(':')[1], 10)][param];
       automation.registerDynamic(
         this.knobs[param],
         () => `${this.id}:${this.selected}:${param}`,
         applyForKey,
+        getValueForKey,
       );
       // Alle Spur-Ziele vorregistrieren, damit GELADENE Lanes sofort
       // abspielen (ohne dass der Knob erst angefasst werden muss)
       for (let ti = 0; ti < this.tracks.length; ti++) {
         const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v), () => getValueForKey(key));
       }
     }
 
@@ -409,14 +415,16 @@ export class TrackedDrumMachine extends Machine {
         const trIdx = parseInt(key.split(':')[1], 10);
         this.setTrackSend(trIdx, which, value);
       };
+      const getValueForKey = (key) => this.tracks[parseInt(key.split(':')[1], 10)][param];
       automation.registerDynamic(
         this.knobs[param],
         () => `${this.id}:${this.selected}:${param}`,
         applyForKey,
+        getValueForKey,
       );
       for (let ti = 0; ti < this.tracks.length; ti++) {
         const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v), () => getValueForKey(key));
       }
     }
 
@@ -502,6 +510,13 @@ export class TrackedDrumMachine extends Machine {
     for (const param of ['tune', 'decay', 'level', 'attack', 'release', 'snap', 'oscMix', 'noiseMix', 'sendDelay', 'sendReverb']) {
       this.knobs[param].classList.toggle('has-auto',
         automation.hasLane(`${this.id}:${i}:${param}`));
+      // Der geteilte Knob kann pro Spur ein anderes LFO-Ziel sein (s.
+      // registerDynamic-Aufrufe oben) -- beim Spurwechsel neu abgleichen,
+      // sonst zeigt er fälschlich den LFO-Muted-Look einer ANDEREN,
+      // gerade nicht sichtbaren Spur.
+      const lfoKey = `${this.id}:${i}:${param}`;
+      this.knobs[param].classList.toggle('lane-lfo-muted',
+        automation.isLfoActive(lfoKey) && automation.hasLane(lfoKey));
     }
     this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
     this.#refreshSoloUI();

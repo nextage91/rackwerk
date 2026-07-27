@@ -631,10 +631,11 @@ export class Sampler extends Machine {
         this.tracks[trIdx][param] = value;
         if (trIdx === this.selected) this.knobs[param].value = value;
       };
-      automation.registerDynamic(this.knobs[param], () => `${this.id}:${this.selected}:${param}`, applyForKey);
+      const getValueForKey = (key) => this.tracks[parseInt(key.split(':')[1], 10)][param];
+      automation.registerDynamic(this.knobs[param], () => `${this.id}:${this.selected}:${param}`, applyForKey, getValueForKey);
       for (let ti = 0; ti < this.tracks.length; ti++) {
         const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v), () => getValueForKey(key));
       }
     }
     for (const [param, which] of [['sendDelay', 'delay'], ['sendReverb', 'reverb']]) {
@@ -642,10 +643,11 @@ export class Sampler extends Machine {
         const trIdx = parseInt(key.split(':')[1], 10);
         this.setTrackSend(trIdx, which, value);
       };
-      automation.registerDynamic(this.knobs[param], () => `${this.id}:${this.selected}:${param}`, applyForKey);
+      const getValueForKey = (key) => this.tracks[parseInt(key.split(':')[1], 10)][param];
+      automation.registerDynamic(this.knobs[param], () => `${this.id}:${this.selected}:${param}`, applyForKey, getValueForKey);
       for (let ti = 0; ti < this.tracks.length; ti++) {
         const key = `${this.id}:${ti}:${param}`;
-        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v));
+        automation.ensureTarget(key, this.knobs[param], (v) => applyForKey(key, v), () => getValueForKey(key));
       }
     }
 
@@ -747,7 +749,9 @@ export class Sampler extends Machine {
     this.knobs.ampDecay.value = tr.ampDecay;
     this.knobs.ampRelease.value = tr.ampRelease;
     for (const param of ['tune', 'level', 'sendDelay', 'sendReverb', 'ampAttack', 'ampDecay', 'ampRelease']) {
-      this.knobs[param].classList.toggle('has-auto', automation.hasLane(`${this.id}:${i}:${param}`));
+      const lfoKey = `${this.id}:${i}:${param}`;
+      this.knobs[param].classList.toggle('has-auto', automation.hasLane(lfoKey));
+      this.knobs[param].classList.toggle('lane-lfo-muted', automation.isLfoActive(lfoKey) && automation.hasLane(lfoKey));
     }
     this.seq.el.querySelector('.stepseq__title').textContent = tr.name;
     this.#refreshSoloUI();

@@ -111,12 +111,24 @@ class Automation {
    * Der Lane-Schlüssel wird erst beim Anfassen über resolveKey() gebildet —
    * so bekommt jede Spur ihre eigenen Fahrten, obwohl alle denselben
    * physischen Knob teilen.
-   */
-  registerDynamic(knob, resolveKey, applyForKey) {
+   *
+   * `getValueForKey(key)` (optional): liefert den WAHREN aktuellen Wert
+   * einer bestimmten Spur, unabhängig davon, ob sie gerade im Panel
+   * angezeigt wird (s. tracked-drum-machine.js/sampler.js -- liest direkt
+   * `this.tracks[trIdx][param]`). Ohne diesen Getter würde ein LFO, der
+   * eine NICHT ausgewählte Spur moduliert (Nutzer-Anfrage: LFO pro Sound,
+   * nicht nur maschinenweit), für seine Hand-Vorrang-Erkennung (s.
+   * modulators.js) fälschlich den Anzeigewert einer ANDEREN, gerade
+   * sichtbaren Spur vom geteilten Knob ablesen. */
+  registerDynamic(knob, resolveKey, applyForKey, getValueForKey) {
     knob.addEventListener('knob-grab', () => {
       const key = resolveKey();
       if (!this.targets.has(key)) {
-        this.targets.set(key, { knob, apply: (v) => applyForKey(key, v) });
+        this.targets.set(key, {
+          knob,
+          apply: (v) => applyForKey(key, v),
+          getValue: getValueForKey ? () => getValueForKey(key) : undefined,
+        });
       }
       this.grabbed.set(key, { lastIdx: null, startValue: knob.value });
     });
@@ -280,9 +292,10 @@ class Automation {
   }
 
   /** Applier vorregistrieren, ohne Events zu binden (z. B. damit geladene
-   *  Per-Spur-Lanes sofort abspielen, bevor der Knob je angefasst wurde). */
-  ensureTarget(key, knob, apply) {
-    if (!this.targets.has(key)) this.targets.set(key, { knob, apply });
+   *  Per-Spur-Lanes sofort abspielen, bevor der Knob je angefasst wurde).
+   *  `getValue` optional, s. registerDynamic()#getValueForKey. */
+  ensureTarget(key, knob, apply, getValue) {
+    if (!this.targets.has(key)) this.targets.set(key, { knob, apply, getValue });
   }
 
   /* ---------- Diskrete Ziele (Button-Gruppen: Chord-Typ, Intervall-Set, …) ----------
