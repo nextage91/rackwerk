@@ -180,6 +180,21 @@ export class Machine {
      *  Solo. Default offen: solange niemand jammt, keine Einschränkung. */
     this.jamGateOpen = true;
 
+    /** Verschiebt die Schritt-Zählung für sequenzergetriebene Unterklassen
+     *  (StepSequencedSynth/AcidBass/TrackedDrumMachine/Sampler, s. deren
+     *  onStep(): `idx = (globalerSchritt - stepOffset) % PatternLänge`).
+     *  Default 0 -- deckt sich exakt mit dem alten, festen `idx = Schritt %
+     *  Länge` (normale Rack-Pattern-Wiedergabe/A-B-C-D-Umschalten bleibt
+     *  unangetastet). Ausschliesslich von der Jam-Ansicht gesetzt (s. dort
+     *  promoteQueuedClip()/queueStopChange()/revertToPattern()), sobald ein
+     *  Clip neu gebunden oder eine Spur wieder hörbar wird -- macht daraus
+     *  den eigenen Takt-1 des Patterns/Clips, statt irgendwo mitten im
+     *  globalen Takt einzusteigen (Nutzer-Bugreport: "Gate startet mitten
+     *  im Clip/Takt", weil bisher JEDE Maschine ausschliesslich über den
+     *  einen geteilten globalen Schrittzähler lief, ganz ohne eigenen,
+     *  zurücksetzbaren Bezugspunkt). */
+    this.stepOffset = 0;
+
     /** @type {GainNode} Alles, was die Maschine erzeugt, läuft hier durch
      *  (Volume-Regler schreiben hierauf). */
     this.output = engine.ctx.createGain();

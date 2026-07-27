@@ -75,7 +75,11 @@ export class StepSequencedSynth extends Machine {
 
   /* ---------- Sequenzer-Anbindung (vom Transport aufgerufen) ---------- */
   onStep(step, time) {
-    const idx = step % this.pattern.length; // Pattern loopt selbst (1–8 Takte)
+    // Pattern loopt selbst (1–8 Takte), relativ zu stepOffset (s. machine.js)
+    // statt zum rohen globalen Schritt -- sonst startet ein frisch gebundener
+    // Jam-Clip irgendwo mitten in seinem eigenen Takt statt bei Schritt 0.
+    const len = this.pattern.length;
+    const idx = (((step - this.stepOffset) % len) + len) % len;
     // Shuffle/Groove: verschiebt jeden zweiten 16tel (s. transport.js#
     // shuffleTime) -- pro Maschine einstellbar (this.params.shuffle,
     // Regler in buildPatternControls() unten), Default 50 = kein Effekt.
