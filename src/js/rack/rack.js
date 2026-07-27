@@ -40,7 +40,7 @@ export class Rack {
     this.sheetEl = sheetEl;
     /** @type {import('../machines/machine.js').Machine[]} */
     this.machines = [];
-    /** @type {Map<import('../machines/machine.js').Machine, {row:HTMLElement, overlay:HTMLElement, panel:HTMLElement, muteBtn:HTMLElement, soloBtn:HTMLElement}>} */
+    /** @type {Map<import('../machines/machine.js').Machine, {row:HTMLElement, overlay:HTMLElement, panel:HTMLElement, muteBtn:HTMLElement, soloBtn:HTMLElement, moveUpBtn:HTMLElement, moveDownBtn:HTMLElement}>} */
     this.views = new Map();
 
     this.#buildAddSlot();
@@ -61,6 +61,7 @@ export class Rack {
       view?.row.remove();
       view?.overlay.remove();
       this.views.delete(machine);
+      this.#refreshMoveButtons();
 
       const MachineClass = machine.constructor;
       undo.offer(`${machine.displayName} removed`, () => {
@@ -167,6 +168,10 @@ export class Rack {
       <span class="rack-row__actions">
         <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
         <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
+        <span class="rack-row__move">
+          <button type="button" class="m-btn rack-row__move-btn" data-move="-1" aria-label="Move up">▲</button>
+          <button type="button" class="m-btn rack-row__move-btn" data-move="1" aria-label="Move down">▼</button>
+        </span>
       </span>
       <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
@@ -199,6 +204,18 @@ export class Rack {
       machine.setMuted(!machine.muted);
       muteBtn.classList.toggle('is-active', machine.muted);
     });
+    // Rack-Reihenfolge bestimmt auch die Spaltenreihenfolge in der Jam-
+    // Ansicht (renderJamView() iteriert einfach this.machines, s. dort) --
+    // "nach oben verschieben" heisst also gleichzeitig "weiter nach links
+    // in der Jam-Ansicht" (s. Chat).
+    row.querySelector('[data-move="-1"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.moveMachine(machine, -1);
+    });
+    row.querySelector('[data-move="1"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.moveMachine(machine, 1);
+    });
     // Halten -> Umbenennen-Popup (wie die anderen Halten-Menüs im Repo),
     // kurzes Antippen -> Vollbild-Editor öffnen (unverändertes Verhalten).
     // Bricht bei nennenswerter Fingerbewegung ab (MOVE_TOLERANCE) -- die
@@ -230,7 +247,53 @@ export class Rack {
     document.body.insertBefore(overlay, beforeView?.overlay ?? null);
     this.rackEl.insertBefore(row, beforeView?.row ?? this.addSlotEl);
 
-    this.views.set(machine, { row, overlay, panel, muteBtn, soloBtn });
+    const moveUpBtn = row.querySelector('[data-move="-1"]');
+    const moveDownBtn = row.querySelector('[data-move="1"]');
+    this.views.set(machine, { row, overlay, panel, muteBtn, soloBtn, moveUpBtn, moveDownBtn });
+    this.#refreshMoveButtons();
+  }
+
+  /** ▲ der ersten und ▼ der letzten Zeile deaktivieren -- muss nach JEDER
+   *  Änderung der Reihenfolge (Hinzufügen/Entfernen/Verschieben) neu
+   *  laufen, weil sich "erste"/"letzte" dabei verschieben kann. */
+  #refreshMoveButtons() {
+    this.machines.forEach((m, i) => {
+      const view = this.views.get(m);
+      if (!view) return;
+      view.moveUpBtn.disabled = i === 0;
+      view.moveDownBtn.disabled = i === this.machines.length - 1;
+    });
+  }
+
+  /** Positioniert Zeile+Overlay einer bereits gemounteten Maschine gemäss
+   *  ihrem AKTUELLEN Index in this.machines neu (kein Neubau) -- von
+   *  moveMachine() nach jedem Array-Swap aufgerufen, damit DOM-Reihenfolge
+   *  und this.machines-Reihenfolge (die Jam-Ansicht direkt davon abliest,
+   *  s. renderJamView() in jam-view.js) immer übereinstimmen. */
+  #reorderDom(machine) {
+    const view = this.views.get(machine);
+    if (!view) return;
+    const idx = this.machines.indexOf(machine);
+    const nextMachine = this.machines[idx + 1] ?? null;
+    const nextView = nextMachine ? this.views.get(nextMachine) : null;
+    document.body.insertBefore(view.overlay, nextView?.overlay ?? null);
+    this.rackEl.insertBefore(view.row, nextView?.row ?? this.addSlotEl);
+  }
+
+  /** Maschine um EINE Position nach oben (-1) oder unten (+1) verschieben.
+   *  Bestimmt gleichzeitig die Spaltenreihenfolge in der Jam-Ansicht (s.
+   *  Kommentar bei den Move-Buttons oben) -- oberste Rack-Zeile = linkeste
+   *  Jam-Spalte, unterste = rechteste, ganz ohne jam-view.js anzufassen
+   *  (die liest die Reihenfolge bei jedem Öffnen frisch aus this.machines). */
+  moveMachine(machine, dir) {
+    const idx = this.machines.indexOf(machine);
+    if (idx === -1) return;
+    const j = idx + dir;
+    if (j < 0 || j >= this.machines.length) return;
+    [this.machines[idx], this.machines[j]] = [this.machines[j], this.machines[idx]];
+    this.#reorderDom(this.machines[idx]);
+    this.#reorderDom(this.machines[j]);
+    this.#refreshMoveButtons();
   }
 
   #openFocus(machine) {
