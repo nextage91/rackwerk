@@ -1319,6 +1319,9 @@ button {
   color: var(--ink-faint);
   white-space: nowrap;
 }
+/* Anker (Pad-Mitte, s. jam-view.js#anchorFor) innerhalb der Range-Zeile
+   hervorgehoben -- das ist der Wert, zu dem die Pad-Mitte zurückkehrt. */
+.xy-picker__row-anchor { color: var(--ch-color, var(--lcd-ink)); font-size: 11px; }
 .xy-picker__row-btn {
   flex: none;
   min-width: 36px;
@@ -1365,6 +1368,10 @@ button {
   color: var(--lcd-ink);
   margin-bottom: 10px;
 }
+/* Der mittlere Wert ist der Anker (Pad-Mitte) -- optisch abgesetzt von den
+   beiden äusseren Grenzwerten, gleiche Akzentfarbe wie die Markierung im
+   Track darunter (.xy-range__anchor-mark). */
+.xy-range__val--anchor { color: var(--ch-color, var(--led-play)); }
 .xy-range__track {
   position: relative;
   height: 4px;
@@ -1378,6 +1385,19 @@ button {
   top: 0; bottom: 0;
   border-radius: 2px;
   background: var(--ch-color, var(--lcd-ink));
+}
+/* Dünner Strich an der Anker-Position (Pad-Mitte) -- rein informativ,
+   nicht ziehbar (Neu-Verankern läuft über den eigenen Button darunter,
+   s. "Set center to current value"). */
+.xy-range__anchor-mark {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  background: var(--ch-color, var(--led-play));
+  border-radius: 1px;
+  pointer-events: none;
 }
 .xy-range__thumb {
   position: absolute;

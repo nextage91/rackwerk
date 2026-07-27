@@ -157,30 +157,10 @@ function siblingMixKey(machine, key) {
   return readKnobMeta(machine, mixKey) ? mixKey : null;
 }
 
-/** Ist `key` ein "wie hörbar ist der Effekt"-Regler -- die maschinen-
- *  eigenen Send-Mengen (Delay/Reverb) oder der Mix-Regler EINES Inserts?
- *  Bei ALLEN diesen soll die Pad-MITTE (Cross) 0/trocken bedeuten und
- *  JEDE Richtung vom Zentrum weg den Effekt hörbar machen (radial, s.
- *  applyAxis/axisNorm) -- nicht nur beim automatisch mitgestackten
- *  Insert-Mix, sondern auch, wenn so ein Regler direkt aus der Liste
- *  gewählt wird oder (Delay/Reverb) schon als Vorbelegung auf dem Pad
- *  sitzt. Andere Regler (Decay, Cutoff, Damping, …) beeinflussen nur den
- *  KLANG des Effekts, nicht OB man ihn hört -- die bleiben normal
- *  Kante-zu-Kante gemappt. */
-function isMixLikeKey(key) {
-  if (key === 'sendDelay' || key === 'sendReverb') return true;
-  const m = INSERT_KEY_RE.exec(key);
-  return !!m && m[2] === 'mix';
-}
-
 /** Dieselbe Normalisierung wie <x-knob>#toNorm()/#fromNorm() (dort private,
  *  hier dupliziert statt exportiert -- kein Umbau der Komponente nötig).
  *  Sorgt dafür, dass eine Pad-Geste sich exakt so anfühlt wie dasselbe
- *  Ziel direkt am Regler zu drehen, log-Kurven eingeschlossen. Für einen
- *  Regler mit symmetrischem Bereich um einen Mittelwert (z. B. Transpose,
- *  -24..24) landet dessen Standardwert automatisch auf Norm 0.5 -- also
- *  exakt der Pad-Mitte: "0/0 in der Mitte" und "auch ins Minus" ergeben
- *  sich dadurch von selbst, ohne eigene bipolare Pad-Mathematik. */
+ *  Ziel direkt am Regler zu drehen, log-Kurven eingeschlossen. */
 function normFromValue(value, meta) {
   const min = parseFloat(meta.min), max = parseFloat(meta.max);
   if (meta.curve === 'log') return Math.log(value / min) / Math.log(max / min);
@@ -192,11 +172,30 @@ function valueFromNorm(norm, meta) {
   return meta.curve === 'log' ? min * Math.pow(max / min, n) : min + n * (max - min);
 }
 
+/** Der Wert, der in der Pad-MITTE stehen soll -- beim Zuordnen aus dem
+ *  damals aktuellen Reglerwert gemerkt (s. renderXYList/xyStateFor), NICHT
+ *  die Bereichsmitte von [from,to] (Nutzer-Anfrage: das bisher im Rack
+ *  erarbeitete Sound-Design darf durchs Zuordnen aufs Pad nicht kaputt
+ *  gehen -- die Mitte des Pads MUSS deshalb exakt dieser Ausgangswert
+ *  sein, für JEDEN Parameter, auch Sends/Insert-Mix, keine Ausnahme).
+ *  Geklemmt in [from,to] (bzw. deren tatsächliche Reihenfolge, from>to ist
+ *  erlaubt, s. xyStateFor-Kommentar) -- falls sich der Bereich nachträglich
+ *  über den Range-Editor geändert hat. Ältere, vor diesem Feld gespeicherte
+ *  Zuordnungen (kein `anchor`) fallen auf die alte Bereichsmitte zurück,
+ *  bis man sie neu zuordnet -- kein Absturz, kein Datenverlust. */
+function anchorFor(entry, meta) {
+  const lo = Math.min(entry.from, entry.to), hi = Math.max(entry.from, entry.to);
+  if (entry.anchor == null) {
+    return meta.curve === 'log' && lo > 0 ? Math.sqrt(lo * hi) : (lo + hi) / 2;
+  }
+  return Math.min(hi, Math.max(lo, entry.anchor));
+}
+
 /* ---------- X/Y-Pad-Zuordnung (Sibling-Feld machine.xyMap, s. machine.js/
  * project.js -- Nutzer-Anfrage: eine mühsam eingestellte Pad-Zuordnung soll
  * ein Neuladen/Speichern überleben, nicht bei jeder Session neu auf den
  * Delay/Reverb-Default zurückfallen, genau wie xySpring). Jede Achse trägt
- * eine LISTE von Einträgen { key, from, to } statt eines einzelnen
+ * eine LISTE von Einträgen { key, from, to, anchor } statt eines einzelnen
  * Schlüssels -- "stacken" heisst einfach: mehr als ein Eintrag in der
  * Liste, jeder bekommt beim Ziehen dieselbe normalisierte Pad-Position, nur
  * auf sein eigenes [from,to] statt auf sein volles [min,max] abgebildet
@@ -205,19 +204,22 @@ function valueFromNorm(norm, meta) {
  * dem alten, unbeschränkten Verhalten, bis jemand die Range aktiv einengt.
  * from>to ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die
  * Zuordnung einfach um (Pad nach rechts -> Wert sinkt), ganz ohne
- * Sonderfall in der Mathematik. Default deckt sich mit dem alten, festen
- * Verhalten (Delay/Reverb, je 1 Eintrag über den vollen 0..1-Bereich) --
- * BEIDE jetzt `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das
- * sind "wie hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb
- * 0/trocken bedeuten, genau wie beim automatisch mitgestackten Insert-Mix.
- * `spring` (Auto-Return) lebt bewusst NICHT hier, sondern direkt in
- * machine.xySpring -- eigenes Sibling-Feld statt Teil dieses Objekts, s.
- * buildXYPad(). */
+ * Sonderfall in der Mathematik. `anchor` (s. anchorFor() oben) ist der
+ * Wert, der beim Zuordnen gerade eingestellt war -- die Pad-MITTE gibt für
+ * JEDEN Parameter, ausnahmslos, genau diesen Wert zurück, damit ein im
+ * Rack erarbeitetes Sound-Design durchs Zuordnen aufs Pad nicht überschrieben
+ * wird (Nutzer-Anfrage). Default: Delay/Reverb-Send verankert am jeweils
+ * aktuellen Send-Wert (im Regelfall 0, wie früher fest verdrahtet -- aber
+ * eben nur dann, wenn tatsächlich noch nichts eingestellt wurde). `spring`
+ * (Auto-Return) lebt bewusst NICHT hier, sondern direkt in machine.xySpring
+ * -- eigenes Sibling-Feld statt Teil dieses Objekts, s. buildXYPad(). */
 function xyStateFor(machine) {
   if (!machine.xyMap) {
+    const delayMeta = readKnobMeta(machine, 'sendDelay');
+    const reverbMeta = readKnobMeta(machine, 'sendReverb');
     machine.xyMap = {
-      x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
-      y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
+      x: [{ key: 'sendDelay', from: 0, to: 1, anchor: parseFloat(delayMeta?.value ?? '0') }],
+      y: [{ key: 'sendReverb', from: 0, to: 1, anchor: parseFloat(reverbMeta?.value ?? '0') }],
     };
   }
   return machine.xyMap;
@@ -225,18 +227,20 @@ function xyStateFor(machine) {
 const otherAxis = (axis) => (axis === 'x' ? 'y' : 'x');
 
 /** Kurztext für eine Range-Zeile in der Mapped-Liste, z. B. "500 Hz –
- *  3000 Hz". Ganzzahlig gerundet ausser bei kleinen Bereichen (z. B. Tune
- *  0.5..2, trotz Log-Kurve, oder Resonance 0..1), wo zwei Nachkommastellen
- *  den Unterschied zwischen den Griffen überhaupt noch erkennbar machen --
+ *  **3000 Hz** – 6000 Hz" -- der fett gesetzte mittlere Wert ist der Anker
+ *  (s. anchorFor()), also der Wert, zu dem die Pad-Mitte zurückkehrt.
+ *  Ganzzahlig gerundet ausser bei kleinen Bereichen (z. B. Tune 0.5..2,
+ *  trotz Log-Kurve, oder Resonance 0..1), wo zwei Nachkommastellen den
+ *  Unterschied zwischen den Griffen überhaupt noch erkennbar machen --
  *  bewusst NICHT an der Kurve (log/lin) festgemacht: Tune ist log-kurvig,
  *  aber klein-zahlig, Cutoff ist ebenfalls log-kurvig, aber gross-zahlig.
  *  Die tatsächliche Grössenordnung des Werts entscheidet, nicht die Kurve. */
-function formatRangeText(from, to, meta) {
+function formatRangeText(from, to, anchor, meta) {
   const fmt = (v) => {
     const n = Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 100) / 100;
     return `${n}${meta.unit ? ' ' + meta.unit : ''}`;
   };
-  return `${fmt(from)} – ${fmt(to)}`;
+  return `${fmt(from)} – <strong class="xy-picker__row-anchor">${fmt(anchor)}</strong> – ${fmt(to)}`;
 }
 
 /** Achsen-Verwaltungsmenü: derselbe Popup-Baukasten wie openClipDeleteMenu
@@ -314,7 +318,7 @@ function renderXYList(machine, axis, anchorEl, onChange) {
       row.innerHTML = `
         <span class="xy-picker__row-main">
           <span class="xy-picker__row-label">${meta?.label ?? entry.key}</span>
-          <span class="xy-picker__row-range">${meta ? formatRangeText(entry.from, entry.to, meta) : ''}</span>
+          <span class="xy-picker__row-range">${meta ? formatRangeText(entry.from, entry.to, anchorFor(entry, meta), meta) : ''}</span>
         </span>
         <button type="button" class="xy-picker__row-btn" data-action="range">Range</button>
         <button type="button" class="xy-picker__row-btn xy-picker__row-btn--danger" data-action="remove">✕</button>
@@ -352,32 +356,27 @@ function renderXYList(machine, axis, anchorEl, onChange) {
     } else {
       btn.addEventListener('click', () => {
         const meta = readKnobMeta(machine, key);
-        // "Wie hörbar ist der Effekt"-Regler (Sends, Insert-Mix, s.
-        // isMixLikeKey) werden IMMER als "centered"/radial gemappt, auch
-        // wenn direkt aus dieser Liste gewählt statt automatisch mit-
-        // gestackt: in der Pad-MITTE (Cross) steht der Wert auf 0 (ganz
-        // trocken), in JEDE Richtung vom Zentrum weg steigt er zum vollen
-        // Bereich hin an (s. applyAxis/axisNorm) -- fühlt sich wie ein
-        // klassisches FX-Pad an (Mitte=aus, Rand=voll drauf). Andere
-        // Parameter (Decay, Cutoff, …) bleiben normal Kante-zu-Kante.
-        const centered = isMixLikeKey(key);
+        // Anker = der Wert, der GERADE JETZT eingestellt ist (Nutzer-
+        // Anfrage: Pad-Mitte = das bereits erarbeitete Sound-Design, für
+        // JEDEN Parameter ausnahmslos, auch Sends/Insert-Mix -- kein
+        // Sonderfall mehr wie früher, s. anchorFor()/xyStateFor-Kommentar).
         const newEntries = [...entries, {
           key,
-          from: centered ? 0 : parseFloat(meta?.min ?? '0'),
+          from: parseFloat(meta?.min ?? '0'),
           to: parseFloat(meta?.max ?? '1'),
-          ...(centered ? { centered: true } : {}),
+          anchor: parseFloat(meta?.value ?? meta?.min ?? '0'),
         }];
         // Mappt man einen Insert-Effekt-Parameter, der NICHT selbst Mix ist
         // (z. B. Reverb Decay), bleibt der Effekt bei Mix=0 unhörbar, obwohl
         // sich der Regler über die Achse bewegt -- deshalb den Mix-Regler
         // DESSELBEN Inserts automatisch mit auf dieselbe Achse stacken
-        // (ebenfalls centered), sofern er nicht schon irgendwo (dieser oder
-        // der anderen Achse) gemappt ist. Bleibt wie jeder andere Stack-
-        // Eintrag über Range/✕ manuell anpassbar/entfernbar.
+        // (ebenfalls am aktuellen Mix-Wert verankert), sofern er nicht schon
+        // irgendwo (dieser oder der anderen Achse) gemappt ist. Bleibt wie
+        // jeder andere Stack-Eintrag über Range/✕ manuell anpassbar/entfernbar.
         const mixKey = siblingMixKey(machine, key);
         if (mixKey && !newEntries.some((e) => e.key === mixKey) && !otherKeys.has(mixKey)) {
           const mixMeta = readKnobMeta(machine, mixKey);
-          newEntries.push({ key: mixKey, from: 0, to: parseFloat(mixMeta?.max ?? '1'), centered: true });
+          newEntries.push({ key: mixKey, from: 0, to: parseFloat(mixMeta?.max ?? '1'), anchor: parseFloat(mixMeta?.value ?? '0') });
         }
         st[axis] = newEntries;
         onChange();
@@ -421,10 +420,12 @@ function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
   wrap.innerHTML = `
     <div class="xy-range__readout">
       <span class="xy-range__val xy-range__val--from"></span>
+      <span class="xy-range__val xy-range__val--anchor"></span>
       <span class="xy-range__val xy-range__val--to"></span>
     </div>
     <div class="xy-range__track">
       <div class="xy-range__fill"></div>
+      <div class="xy-range__anchor-mark"></div>
       <div class="xy-range__thumb xy-range__thumb--from"></div>
       <div class="xy-range__thumb xy-range__thumb--to"></div>
     </div>
@@ -443,11 +444,29 @@ function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
   });
   xyMenu.appendChild(resetBtn);
 
+  // Anker (Pad-Mitte, s. anchorFor()) neu am AKTUELLEN Reglerwert setzen --
+  // z. B. wenn im Rack seit dem Zuordnen weitergetüftelt wurde und der
+  // neue Stand das neue "Zuhause" werden soll.
+  const anchorBtn = document.createElement('button');
+  anchorBtn.type = 'button';
+  anchorBtn.className = 'xy-picker__btn xy-range__reset';
+  anchorBtn.textContent = 'Set center to current value';
+  anchorBtn.addEventListener('click', () => {
+    // meta.value ist eine beim Öffnen des Editors eingefrorene Kopie (s.
+    // readKnobMeta) -- hier zählt der LIVE-Wert des echten Reglers, meta.knob.
+    entry.anchor = parseFloat(meta.knob.value);
+    onChange();
+    syncThumbs();
+  });
+  xyMenu.appendChild(anchorBtn);
+
   const track = wrap.querySelector('.xy-range__track');
   const fill = wrap.querySelector('.xy-range__fill');
+  const anchorMark = wrap.querySelector('.xy-range__anchor-mark');
   const fromThumb = wrap.querySelector('.xy-range__thumb--from');
   const toThumb = wrap.querySelector('.xy-range__thumb--to');
   const fromVal = wrap.querySelector('.xy-range__val--from');
+  const anchorVal = wrap.querySelector('.xy-range__val--anchor');
   const toVal = wrap.querySelector('.xy-range__val--to');
 
   function syncThumbs() {
@@ -458,8 +477,11 @@ function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
     const lo = Math.min(fromN, toN), hi = Math.max(fromN, toN);
     fill.style.left = `${lo * 100}%`;
     fill.style.width = `${(hi - lo) * 100}%`;
+    const anchorN = Math.min(1, Math.max(0, normFromValue(anchorFor(entry, meta), meta)));
+    anchorMark.style.left = `${anchorN * 100}%`;
     const oneLine = (v) => (Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 100) / 100);
     fromVal.textContent = `${oneLine(entry.from)}${meta.unit ? ' ' + meta.unit : ''}`;
+    anchorVal.textContent = `${oneLine(anchorFor(entry, meta))}${meta.unit ? ' ' + meta.unit : ''}`;
     toVal.textContent = `${oneLine(entry.to)}${meta.unit ? ' ' + meta.unit : ''}`;
   }
   syncThumbs();
@@ -913,16 +935,16 @@ function makeReorderable(clipsEl, machine) {
 }
 
 /** Frei belegbares X/Y-Pad: jede Achse trägt eine LISTE gestackter data-p-
- *  Knobs, jeweils mit einer eigenen [from,to]-Einschränkung (Tippen auf
- *  das Achsen-Label öffnet die Verwaltung, s. openXYPicker). Die
- *  Pad-Mitte entspricht dem Mittelwert des ERSTEN gestackten Eintrags
- *  innerhalb SEINES [from,to] (normFromValue/valueFromNorm, dieselbe
- *  Kurven-Mathematik wie <x-knob>) -- bei einem symmetrischen Bereich wie
- *  Transpose (-24..24), ungekürzt, landet der Neutralwert dadurch exakt
- *  in der Pad-Mitte und Ziehen nach links ergibt einen negativen Wert,
- *  ganz ohne eigene bipolare Sonderbehandlung. Default bleibt je 1
- *  Eintrag Delay/Reverb über den vollen Bereich (deckt sich mit dem
- *  alten, festen Verhalten). */
+ *  Knobs, jeweils mit einer eigenen [from,to]-Einschränkung UND einem
+ *  Anker (Tippen auf das Achsen-Label öffnet die Verwaltung, s.
+ *  openXYPicker). Die Pad-Mitte entspricht dem ERSTEN gestackten Eintrags
+ *  eigenem Anker -- dem Wert, der beim Zuordnen gerade eingestellt war
+ *  (normFromValue/valueFromNorm, dieselbe Kurven-Mathematik wie <x-knob>,
+ *  s. axisNorm/applyAxis) -- NICHT der Bereichsmitte: das im Rack bereits
+ *  erarbeitete Sound-Design darf durchs Zuordnen aufs Pad nicht verändert
+ *  werden, und Zurückziehen in die Mitte kehrt IMMER exakt dorthin zurück
+ *  (Nutzer-Anfrage). Default bleibt je 1 Eintrag Delay/Reverb, verankert
+ *  am jeweils aktuellen Send-Wert. */
 function buildXYPad(machine) {
   const wrap = document.createElement('div');
   wrap.className = 'xy-wrap';
@@ -964,22 +986,26 @@ function buildXYPad(machine) {
     xBtn.querySelector('.xy-axis-btn__label').textContent = axisLabel('x');
     yBtn.querySelector('.xy-axis-btn__label').textContent = axisLabel('y');
   };
-  // Normalisierte Pad-Position einer Achse: der ERSTE gestackte Eintrag
-  // ist der visuelle "Anker" -- bei mehreren gestackten Parametern mit
-  // ggf. unterschiedlichem aktuellem Stand liesse sich sonst kein
-  // einzelner sinnvoller Punkt mehr zeigen. Ist der Anker ausnahmsweise
-  // selbst "centered" (radial, s. applyAxis) -- z. B. wenn man den
-  // ursprünglichen Trigger-Parameter entfernt und nur das automatisch
-  // gestackte Mix übrig bleibt --, ist die Rückrechnung mehrdeutig (ein
-  // Wert kann von BEIDEN Seiten der Mitte kommen); wir zeigen dann
-  // kanonisch die rechte/obere Seite (0.5 + Auslenkung/2).
+  // Normalisierte Pad-Position einer Achse: der ERSTE gestackte Eintrag ist
+  // der visuelle "Anker" -- bei mehreren gestackten Parametern mit ggf.
+  // unterschiedlichem aktuellem Stand liesse sich sonst kein einzelner
+  // sinnvoller Punkt mehr zeigen. Zwei-Segment-Rückrechnung (s. applyAxis
+  // für die Hinrichtung): liegt der aktuelle Wert auf der from-Seite des
+  // Ankers (Segment 1 ergibt einen Fortschritt <= 1), zeigt die untere
+  // Pad-Hälfte, sonst die obere -- funktioniert unabhängig davon, ob
+  // from < anchor < to oder umgekehrt (from>to ist erlaubt, s. Kommentar
+  // bei xyStateFor).
   const axisNorm = (axis) => {
     const entry = st[axis][0];
     if (!entry) return 0.5;
     const meta = readKnobMeta(machine, entry.key);
     if (!meta) return 0.5;
-    const norm = normFromValue(parseFloat(meta.value), { ...meta, min: String(entry.from), max: String(entry.to) });
-    return entry.centered ? 0.5 + Math.min(1, Math.max(0, norm)) / 2 : norm;
+    const anchor = anchorFor(entry, meta);
+    const value = parseFloat(meta.value);
+    const tLower = normFromValue(value, { ...meta, min: String(entry.from), max: String(anchor) });
+    if (tLower <= 1) return Math.min(1, Math.max(0, tLower)) * 0.5;
+    const tUpper = normFromValue(value, { ...meta, min: String(anchor), max: String(entry.to) });
+    return 0.5 + Math.min(1, Math.max(0, tUpper)) * 0.5;
   };
   const syncDot = () => {
     const x = Math.min(1, Math.max(0, axisNorm('x')));
@@ -992,19 +1018,21 @@ function buildXYPad(machine) {
 
   // Wendet die normalisierte Pad-Position auf ALLE gestackten Einträge
   // einer Achse an -- jeder auf sein eigenes [from,to] bezogen, nicht auf
-  // sein volles [min,max] (genau das ist die Bereichs-Einschränkung).
-  // "centered" (bislang nur das automatisch gestackte Insert-Mix, s.
-  // renderXYList) faltet den Norm um die Pad-Mitte (0.5): in der Mitte
-  // steht der Wert auf `from` (bei Mix: 0, ganz trocken), an JEDER Kante
-  // (nicht nur einer) auf `to` -- fühlt sich wie ein klassisches FX-Pad an
-  // (Mitte=aus, Rand=voll drauf) statt nur an einer Ecke trocken zu sein.
+  // sein volles [min,max] (genau das ist die Bereichs-Einschränkung). Pad-
+  // Mitte (norm=0.5) liefert IMMER exakt den Anker zurück (Nutzer-Anfrage:
+  // das im Rack erarbeitete Sound-Design darf durchs Zuordnen aufs Pad
+  // nicht kaputtgehen) -- untere Pad-Hälfte interpoliert von `from` zum
+  // Anker, obere vom Anker zu `to`, beide mit derselben Kurven-Mathematik
+  // wie <x-knob> (log/linear, s. valueFromNorm). */
   const applyAxis = (axis, norm) => {
     for (const entry of st[axis]) {
       const meta = readKnobMeta(machine, entry.key);
       if (!meta) continue;
-      const effectiveNorm = entry.centered ? Math.abs(norm - 0.5) * 2 : norm;
-      const rangeMeta = { ...meta, min: String(entry.from), max: String(entry.to) };
-      nudgeParam(meta.knob, valueFromNorm(effectiveNorm, rangeMeta));
+      const anchor = anchorFor(entry, meta);
+      const value = norm <= 0.5
+        ? valueFromNorm(norm / 0.5, { ...meta, min: String(entry.from), max: String(anchor) })
+        : valueFromNorm((norm - 0.5) / 0.5, { ...meta, min: String(anchor), max: String(entry.to) });
+      nudgeParam(meta.knob, value);
     }
   };
 
@@ -1033,10 +1061,9 @@ function buildXYPad(machine) {
   // Auto-Return (.xy-spring-btn, s. oben): springt der Punkt beim Loslassen
   // sofort zurück auf die Pad-Mitte -- direkt auf 50%/50% gesetzt statt über
   // syncDot()/axisNorm() zurückgerechnet, damit es exakt die Mitte trifft
-  // (keine Rundungs-Abweichung durch die Norm<->Wert-Rückrechnung). Für
-  // "centered"-Einträge (Insert-Mix) landet der reale Reglerwert dabei
-  // exakt bei `from` (0, ganz trocken) -- der eigentliche Zweck der ganzen
-  // Funktion: kurz antippen/ziehen = Effekt hörbar, loslassen = wieder weg.
+  // (keine Rundungs-Abweichung durch die Norm<->Wert-Rückrechnung). Jeder
+  // Eintrag landet dabei exakt bei seinem Anker (s. anchorFor()) -- kurz
+  // antippen/ziehen = Ausflug vom Sound-Design, loslassen = zurück dorthin.
   const releasePad = () => {
     dragging = false;
     if (machine.xySpring) {
