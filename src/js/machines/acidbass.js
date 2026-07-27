@@ -150,7 +150,10 @@ export class AcidBass extends StepSequencedSynth {
   /** Eigener onStep() statt des ererbten -- der kennt nur {on, midi}, hier
    *  müssen zusätzlich Accent/Slide an trigger() durchgereicht werden. */
   onStep(step, time) {
-    const idx = step % this.pattern.length;
+    // Relativ zu stepOffset statt zum rohen globalen Schritt, s. machine.js
+    // und step-sequenced-synth.js#onStep() für die ausführliche Begründung.
+    const len = this.pattern.length;
+    const idx = (((step - this.stepOffset) % len) + len) % len;
     // Shuffle/Groove, s. step-sequenced-synth.js#onStep() für die
     // ausführliche Begründung -- hier dieselbe Logik, weil AcidBass sein
     // eigenes onStep() braucht (Accent/Slide).

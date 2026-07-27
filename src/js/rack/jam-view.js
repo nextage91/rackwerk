@@ -491,8 +491,17 @@ function renderXYRangeEditor(machine, axis, anchorEl, onChange, key) {
 const jamState = new WeakMap();
 function stateFor(machine) {
   let st = jamState.get(machine);
-  if (!st) { st = { activeClipId: null, queuedClipId: null, stopped: false }; jamState.set(machine, st); }
+  if (!st) { st = { activeClipId: null, queuedClipId: null, stopped: false, queuedStopped: null }; jamState.set(machine, st); }
   return st;
+}
+
+/** Der Stumm-Zustand, der als NÄCHSTES gilt -- ein bereits gequeuter
+ *  Wechsel (s. queueStopChange() unten) zählt VOR dem aktuellen `stopped`,
+ *  sonst würde ein zweiter Tap VOR dem nächsten Taktanfang sich fälschlich
+ *  gegen den noch gar nicht angewendeten alten Zustand richten, statt die
+ *  Warteschlange einfach umzudrehen. */
+function pendingStopped(st) {
+  return st.queuedStopped ?? st.stopped;
 }
 
 /** DOM-Referenzen der aktuell gerenderten Spalten — nur gültig, während
@@ -502,10 +511,11 @@ const columnEls = new WeakMap();
 let boundRack = null;
 
 /** Einmal beim App-Start aufrufen — merkt sich das Rack und registriert
- *  den EINEN globalen Takt-Listener, der Clips quantisiert umschaltet.
- *  Läuft unabhängig davon, ob das Jam-Sheet gerade sichtbar ist (wie ein
- *  echter Clip-Launcher: einmal angetippt, wird er auch dann noch am
- *  nächsten Taktanfang scharf, wenn man zwischendurch wegnavigiert). */
+ *  den EINEN globalen Takt-Listener, der Clips UND STOP/Resume quantisiert
+ *  umschaltet (s. queueStopChange()). Läuft unabhängig davon, ob das
+ *  Jam-Sheet gerade sichtbar ist (wie ein echter Clip-Launcher: einmal
+ *  angetippt, wird er auch dann noch am nächsten Taktanfang scharf, wenn
+ *  man zwischendurch wegnavigiert). */
 export function initJamView(rack) {
   boundRack = rack;
   transport.addListener({
@@ -513,19 +523,38 @@ export function initJamView(rack) {
       if (step % STEPS_PER_BAR !== 0) return;
       for (const machine of boundRack?.machines ?? []) {
         const st = stateFor(machine);
-        if (st.queuedClipId == null) continue;
-        promoteQueuedClip(machine, st);
+        if (st.queuedClipId != null) promoteQueuedClip(machine, st, step);
+        if (st.queuedStopped != null) applyStopChange(machine, st, st.queuedStopped, step);
       }
     },
   });
 }
 
-function promoteQueuedClip(machine, st) {
+/** Bindet den gequeuten Clip UND setzt machine.stepOffset auf genau diesen
+ *  (immer taktanfangs-genauen) Schritt -- macht daraus den eigenen Takt-1
+ *  des Clips (s. machine.js#stepOffset), egal wie lang er ist, statt
+ *  irgendwo mitten im globalen Takt einzusteigen. */
+function promoteQueuedClip(machine, st, step) {
   const clip = machine.clips.find((c) => c.id === st.queuedClipId);
   st.activeClipId = st.queuedClipId;
   st.queuedClipId = null;
   if (clip) machine.bindClipData(clip.data);
+  machine.stepOffset = step;
   refreshClipStates(machine);
+}
+
+/** Wendet einen STOP/Resume-Wechsel tatsächlich an -- von queueStopChange()
+ *  sofort (Transport steht) oder vom Takt-Listener oben (nächster
+ *  Taktanfang) aufgerufen. Ein Resume setzt zusätzlich stepOffset (s.
+ *  promoteQueuedClip()) auf denselben Schritt: die Spur steigt dadurch
+ *  IMMER beim eigenen Takt-1 ihres gerade gebundenen Patterns/Clips wieder
+ *  ein, nie mitten drin. */
+function applyStopChange(machine, st, stopped, step) {
+  st.stopped = stopped;
+  st.queuedStopped = null;
+  if (!stopped) machine.stepOffset = step;
+  refreshClipStates(machine);
+  refreshJamGate(machine);
 }
 
 /** Spiegelt `stopped` dieser EINEN Maschine aufs Jam-Gate — komplett
@@ -541,28 +570,38 @@ function refreshJamGates() {
   for (const m of boundRack?.machines ?? []) refreshJamGate(m);
 }
 
-/** Diese EINE Spur sofort stumm — unabhängig von allen anderen (s. Datei-
- *  kopf-Kommentar). activeClipId/queuedClipId bleiben dabei bewusst
- *  UNVERÄNDERT (anders als früher kein Rücksprung aufs normale Pattern):
- *  ein erneuter Tap auf denselben Clip, der Stop-Button selbst (Toggle,
- *  s. buildColumn), oder ein Scene-Recall macht exakt da weiter, wo die
- *  Spur stand, statt den gewählten Clip zu vergessen. */
-function haltMachine(machine) {
+/** STOP/Resume queuen (Transport läuft) oder sofort anwenden (Transport
+ *  steht -- kein Taktanfang, auf den sich warten liesse, s. playClip() für
+ *  dieselbe Ausnahme bei Clips). Quantisiert genau wie ein Clip-Antippen,
+ *  damit nichts mehr mitten im Takt ein-/ausblendet (Nutzer-Bugreport). */
+function queueStopChange(machine, stopped) {
   const st = stateFor(machine);
-  if (st.stopped) return;
-  st.stopped = true;
+  if (!transport.isPlaying) {
+    applyStopChange(machine, st, stopped, transport.currentStep);
+    return;
+  }
+  st.queuedStopped = stopped;
   refreshClipStates(machine);
-  refreshJamGate(machine);
 }
 
-/** Gegenstück zu haltMachine() — macht die Spur wieder hörbar, ohne
- *  irgendetwas an der Clip-Auswahl zu ändern. */
+/** Diese EINE Spur stumm (quantisiert, s. queueStopChange) — unabhängig
+ *  von allen anderen (s. Dateikopf-Kommentar). activeClipId/queuedClipId
+ *  bleiben dabei bewusst UNVERÄNDERT (kein Rücksprung aufs normale
+ *  Pattern): ein erneuter Tap auf denselben Clip, der Stop-Button selbst
+ *  (Toggle, s. buildColumn), oder ein Scene-Recall macht exakt da weiter,
+ *  wo die Spur stand, statt den gewählten Clip zu vergessen. */
+function haltMachine(machine) {
+  const st = stateFor(machine);
+  if (pendingStopped(st)) return;
+  queueStopChange(machine, true);
+}
+
+/** Gegenstück zu haltMachine() — macht die Spur wieder hörbar (quantisiert),
+ *  ohne irgendetwas an der Clip-Auswahl zu ändern. */
 function resumeMachine(machine) {
   const st = stateFor(machine);
-  if (!st.stopped) return;
-  st.stopped = false;
-  refreshClipStates(machine);
-  refreshJamGate(machine);
+  if (!pendingStopped(st)) return;
+  queueStopChange(machine, false);
 }
 
 /** Globaler "Stop All Clips" (Button im Sheet-Kopf) — schaltet JEDE Spur
@@ -581,22 +620,22 @@ function playClip(machine, clipId) {
   const st = stateFor(machine);
   if (!transport.isPlaying) {
     st.queuedClipId = clipId;
-    promoteQueuedClip(machine, st);
+    promoteQueuedClip(machine, st, transport.currentStep);
     return;
   }
   st.queuedClipId = clipId;
   refreshClipStates(machine);
 }
 
-/** Clip antippen: läuft er bereits UND ist die Spur hörbar, sofortiger
- *  Stop (kein Warten auf einen zweiten Taktanfang nötig, symmetrisch zum
- *  STOP-Button). Ist die Spur gerade gestoppt (auch wenn's derselbe Clip
- *  ist), macht ein Tap sie stattdessen wieder hörbar -- sonst liesse sich
- *  eine gestoppte Spur über ihren eigenen (weiterhin "aktiven") Clip gar
- *  nicht mehr reaktivieren. */
+/** Clip antippen: läuft er bereits UND ist die Spur (auch nach einem
+ *  eventuell schon gequeuten Wechsel) hörbar, sofortiger Stop (kein Warten
+ *  auf einen zweiten Taktanfang nötig, symmetrisch zum STOP-Button). Ist
+ *  die Spur gerade gestoppt (auch wenn's derselbe Clip ist), macht ein Tap
+ *  sie stattdessen wieder hörbar -- sonst liesse sich eine gestoppte Spur
+ *  über ihren eigenen (weiterhin "aktiven") Clip gar nicht reaktivieren. */
 function toggleClip(machine, clipId) {
   const st = stateFor(machine);
-  if (st.activeClipId === clipId && !st.stopped) {
+  if (st.activeClipId === clipId && !pendingStopped(st)) {
     haltMachine(machine);
     return;
   }
@@ -610,12 +649,17 @@ function refreshClipStates(machine) {
   const cols = columnEls.get(machine);
   if (!cols) return; // Sheet gerade nicht offen -- nichts zu tun
   const st = stateFor(machine);
+  // Zeigt den EFFEKTIVEN (ggf. schon gequeuten) Zustand -- derselbe Gedanke
+  // wie ein frisch angetippter Clip, der auch sofort als "queued" pulsiert,
+  // statt erst nach dem nächsten Taktanfang sichtbar zu reagieren.
+  const effectiveStopped = pendingStopped(st);
   for (const el of cols.clipsEl.querySelectorAll('.clip')) {
     const id = Number(el.dataset.clipId);
     el.dataset.state = id !== st.activeClipId ? (id === st.queuedClipId ? 'queued' : 'filled')
-      : st.stopped ? 'stopped' : 'playing';
+      : effectiveStopped ? 'stopped' : 'playing';
   }
   cols.stopBtn.classList.toggle('is-active', st.stopped);
+  cols.stopBtn.classList.toggle('is-pending', st.queuedStopped != null);
   cols.col.classList.toggle('is-stopped', st.stopped);
 }
 
@@ -630,6 +674,7 @@ function revertToPattern(machine) {
   st.activeClipId = null;
   st.queuedClipId = null;
   machine.setPatternIndex(machine.patternIndex);
+  machine.stepOffset = transport.currentStep;
   refreshClipStates(machine);
 }
 
@@ -731,7 +776,7 @@ function renderClips(machine, clipsEl) {
   const usedSlots = new Set(machine.clips.map((c) => c.sourceSlot).filter((s) => s != null));
   const clipsHtml = machine.clips.map((clip) => {
     const state = clip.id !== st.activeClipId ? (clip.id === st.queuedClipId ? 'queued' : 'filled')
-      : st.stopped ? 'stopped' : 'playing';
+      : pendingStopped(st) ? 'stopped' : 'playing';
     return `
       <div class="clip" data-clip-id="${clip.id}" data-state="${state}">
         <span class="clip__progress"></span>
@@ -1051,11 +1096,15 @@ function buildColumn(machine) {
   col.classList.toggle('is-stopped', stateFor(machine).stopped);
   const stopBtn = col.querySelector('.clip-stop');
   stopBtn.classList.toggle('is-active', stateFor(machine).stopped);
+  stopBtn.classList.toggle('is-pending', stateFor(machine).queuedStopped != null);
   // Toggle statt reinem Stop -- ein zweiter Tap auf den Button macht die
   // Spur wieder hörbar (Gegenstück zu haltMachine(), s. dort), genau wie
   // ein erneuter Tap auf ihren eigenen aktiven Clip (s. toggleClip()).
+  // Richtet sich nach dem EFFEKTIVEN (ggf. schon gequeuten) Zustand, sonst
+  // würde ein zweiter Tap vor dem nächsten Taktanfang den alten statt den
+  // gerade erst gequeuten Wechsel umkehren.
   stopBtn.addEventListener('click', () => {
-    if (stateFor(machine).stopped) resumeMachine(machine); else haltMachine(machine);
+    if (pendingStopped(stateFor(machine))) resumeMachine(machine); else haltMachine(machine);
   });
 
   const clipsEl = col.querySelector('.clips');
@@ -1182,7 +1231,7 @@ function saveScene() {
   const entries = {};
   for (const m of boundRack?.machines ?? []) {
     const st = stateFor(m);
-    if (st.activeClipId != null && !st.stopped) entries[m.id] = st.activeClipId;
+    if (st.activeClipId != null && !pendingStopped(st)) entries[m.id] = st.activeClipId;
   }
   scenes.push({ id: nextSceneId++, name: `Scene ${scenes.length + 1}`, entries });
   renderScenes();

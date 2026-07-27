@@ -1132,6 +1132,12 @@ button {
   background: linear-gradient(#5a2822, #3a1a15);
   box-shadow: 0 0 0 2px #ff8a8a inset, 0 2px 4px rgba(0,0,0,.4);
 }
+/* Ein STOP/Resume ist gequeut, wird aber erst am nächsten Taktanfang
+   wirklich angewendet (s. jam-view.js#queueStopChange) -- dieselbe
+   Puls-Optik wie ein gerade gequeuter Clip (.clip[data-state="queued"]),
+   damit sichtbar ist, dass gleich etwas passiert, statt dass der Tap
+   wirkungslos wirkt. */
+.clip-stop.is-pending { animation: clip-queue-pulse .6s ease-in-out infinite; }
 /* Ganze Spalte gedimmt, solange sie gestoppt ist -- macht auf einen Blick
    sichtbar, welche Spuren gerade schweigen, ohne jede davon einzeln
    anzuschauen (wichtig, sobald mehr als 3 Spuren im Rack sind und man

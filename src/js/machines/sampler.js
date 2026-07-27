@@ -231,7 +231,10 @@ export class Sampler extends Machine {
 
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
-    const idx = step % this.tracks[0].steps.length;
+    // Relativ zu stepOffset statt zum rohen globalen Schritt, s. machine.js
+    // und step-sequenced-synth.js#onStep() für die ausführliche Begründung.
+    const len = this.tracks[0].steps.length;
+    const idx = (((step - this.stepOffset) % len) + len) % len;
     // Shuffle/Groove -- ganzer Sampler auf einmal (s. buildAudio()/Chat),
     // nicht pro Pad, s. transport.js#shuffleTime.
     const t = shuffleTime(step, time, this.shuffle, transport.stepDuration);

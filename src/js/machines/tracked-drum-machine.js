@@ -143,7 +143,11 @@ export class TrackedDrumMachine extends Machine {
 
   /* ---------- Sequenzer ---------- */
   onStep(step, time) {
-    const idx = step % this.tracks[0].steps.length; // alle Spuren gleich lang
+    // Relativ zu stepOffset statt zum rohen globalen Schritt, s. machine.js
+    // und step-sequenced-synth.js#onStep() für die ausführliche Begründung.
+    // Alle Spuren gleich lang.
+    const len = this.tracks[0].steps.length;
+    const idx = (((step - this.stepOffset) % len) + len) % len;
     // Shuffle/Groove -- ganzes Kit auf einmal (s. buildAudio()/Chat), nicht
     // pro Spur, s. transport.js#shuffleTime.
     const t = shuffleTime(step, time, this.shuffle, transport.stepDuration);
