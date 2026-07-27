@@ -16003,34 +16003,32 @@ const RESONATOR_PRESET_SEMITONES = Object.fromEntries(
  *  "width"-Regler skaliert -- Grundton bleibt immer mittig (Referenzpunkt),
  *  die Obertöne verteilen sich alternierend übers Stereobild. Gleiche Idee
  *  wie Abletons Resonators-Width (dort machen die geraden/ungeraden
- *  Resonatoren je einen Kanal), macht den mono-tristen Bandpass-Sound
+ *  Resonatoren je einen Kanal), macht den sonst mono-tristen Klang
  *  spürbar "grösser"/lebendiger. */
 const RESONATOR_PAN = [0, -0.8, 0.8, -1, 1];
 
-/** Resonance-Regler (0..1) auf eine Bandpass-Güte (Q) abbilden. Anders als
- *  bei Lowpass/Highpass ist ein hoher Q hier UNBEDENKLICH -- Web Audios
- *  Bandpass hat laut Spezifikation IMMER exakt 1.0 (0dB) Spitzenpegel GENAU
- *  auf der Mittenfrequenz, für JEDEN Q-Wert (gemessen bis Q=1000, kein
- *  Überschwingen möglich, s. DEFS.resonator). Hoher Q bedeutet hier nur
- *  schmalere Bandbreite = längeres Nachklingen (gemessen: Q=1 klingt ~5ms
- *  nach, Q=400 ~500ms -- exponentiell steigender Zusammenhang, daher log-
- *  artige statt lineare Kurve, damit der Regler über den ganzen Bereich
- *  gleichmässig "greift"). */
-function resonanceToQ(resonance) {
-  return 1 * Math.pow(400, resonance); // 1 (kurzes "Blup") .. 400 (langes Klingeln/Sustain)
+/** Resonance-Regler (0..1) auf eine Nachklingzeit (T60, Sekunden) abbilden
+ *  -- Grundlage für die Feedback-Stärke jeder Resonanz-Delayline in
+ *  DEFS.resonator (s. dort). Log-Kurve wie zuvor bei der Bandpass-Güte,
+ *  gleiche Idee: der Regler soll über den ganzen Bereich gleichmässig
+ *  "greifen" statt am oberen Ende zu stauchen. */
+function resonanceToDecayTime(resonance) {
+  return 0.05 * Math.pow(120, resonance); // 50ms (kurzes "Blup") .. 6s (langes Glocken-Sustain)
 }
 
-/** Pegelausgleich für den Resonator: ein schmalbandigerer (höher-Q)
- *  Bandpass fängt bei einer kurzen/breitbandigen Anregung nur einen
- *  entsprechend kleineren Ausschnitt der Energie ein (gemessen: Spitzenpegel
- *  fällt ~1/Q). sqrt(Q) gleicht das nur teilweise aus -- bewusst nicht
- *  voll (1/Q komplett kompensieren würde niedrige Resonance-Werte unnötig
- *  laut machen), nur genug, damit "mehr Resonance" sich nach länger/
- *  dramatischer nachklingend anfühlt statt nach leiser. Auf Q=1 (kürzeste
- *  Klingelzeit) normiert, damit der Referenzpegel bei Resonance=0 unverändert
- *  bleibt. */
-function makeupFor(q) {
-  return Math.sqrt(q);
+/** Feedback-Stärke einer einzelnen Resonanz-Delayline (Länge `delayTime`
+ *  Sekunden), so gewählt, dass die Amplitude nach `decayTime` Sekunden auf
+ *  -60dB (0.001x) gefallen ist: nach n=decayTime/delayTime Schleifen-
+ *  durchläufen soll g^n = 0.001 gelten, also g = 0.001^(delayTime/decayTime).
+ *  Hart gedeckelt auf 0.999 -- nie exakt 1 (nie eine Schleife, die
+ *  theoretisch unendlich klingt), zusätzliche Sicherheitsmarge oben drauf
+ *  zur harten 1.0-Grenze. s. DEFS.resonator für die zwei WEITEREN
+ *  Sicherungen (einpoliger Damping-Filter + Pro-Sample-Weichbegrenzer IN
+ *  der Schleife), die zusammen echte Stabilität auch unter Live-Automation
+ *  garantieren -- diese Formel allein reicht dafür NICHT (s. dortigen
+ *  Kommentar). */
+function feedbackGainFor(delayTime, decayTime) {
+  return Math.min(Math.pow(0.001, delayTime / decayTime), 0.999);
 }
 
 /** Feste Schwelle statt Regler — wie beim 1176-Vorbild: kein Threshold-
@@ -16720,18 +16718,44 @@ const DEFS = {
     // Feste Zusatzlatenz des Sicherheits-Limiters im Wet-Pfad (s.
     // DYNAMICS_COMPRESSOR_LATENCY_SEC oben) -- s. Kommentar bei DEFS.comp.latencySec.
     latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
-    // Bewusst KEIN Delay-Feedback-Design wie Filter Delay/Reverb (beide
-    // haben uns schon eine Instabilität eingebrockt) -- stattdessen eine
-    // Bank paralleler resonanter Bandpass-Filter (BiquadFilterNode), auf
-    // Intervalle einer Grundtonhöhe gestimmt. Ein Bandpass hat laut
-    // Web-Audio-Spezifikation IMMER konstanten 0dB-Spitzenpegel, egal wie
-    // hoch Q gesetzt wird (kein Überschwingen wie bei Lowpass/Highpass,
-    // s. Kommentare bei Filter Delay) -- UND jeder Filter ist ein
-    // eigenständiger, für sich genommen stets stabiler 2-poliger IIR
-    // (kein externes Feedback über mehrere Nodes/Iterationen wie beim
-    // FDN-Reverb). Klingt wie ein angeschlagenes Glas/eine Saite, die auf
-    // die eingehende Frequenz mitschwingt -- klassischer "Resonator"-
-    // Pedal-Sound.
+    // Bank aus 5 rückgekoppelten Resonanz-Delaylines (Delay -> Damping ->
+    // Feedback -> zurück in die Delay), Karplus-Strong-artig -- genau das
+    // Prinzip, mit dem auch Abletons Resonators-Effekt arbeitet, statt
+    // der vorherigen Bandpass-Bank (Filter allein kann nur vorhandene
+    // Energie durchlassen, nie aktiv aufbauen -- deshalb war die alte
+    // Version selbst bei Mix=100% spürbar leiser als das Trockensignal,
+    // s. Chat). Eine Delayline erzeugt ausserdem automatisch die volle
+    // Obertonreihe der Grundtonhöhe (nicht nur einen einzelnen schmalen
+    // Peak), klingt dadurch voller/instrumentaler (Glocke/Saite).
+    //
+    // Zwei von einander UNABHÄNGIGE Sicherungen halten jede der 5
+    // Schleifen stabil, beide bereits an anderer Stelle in dieser
+    // Codebase erfunden/bewährt:
+    //  (1) Der Damping-Filter in der Schleife ist ein EINPOLIGER Tiefpass
+    //      (makeOnePoleLowpass, schon vom Reverb-FDN genutzt), NICHT
+    //      ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
+    //      nachweislich >1.0 nahe der Grenzfrequenz, unabhängig von Q (s.
+    //      dortigen Kommentar). Ein einpoliger ist dagegen beweisbar
+    //      |H(w)|<=1 für JEDE Frequenz -- kombiniert mit feedbackGainFor()
+    //      (<1, s. oben) ist die Schleife für KONSTANTE Parameter damit
+    //      immer beweisbar stabil.
+    //  (2) Zusätzlich ein Pro-Sample-Weichbegrenzer (tanh, dieselbe Kurve
+    //      wie beim Filter Delay: makeFeedbackClipCurve()) IN jeder
+    //      Schleife -- nötig, weil Live-Automation ausgerechnet auf
+    //      Damping (LFO/Knob, während eine Bande klingt) beim Testen
+    //      trotz (1) kurzzeitig aufschaukeln konnte (Parameteränderung an
+    //      einem Filter MIT internem Zustand kann kurz übersteuern, auch
+    //      wenn der Filter selbst für jeden EINZELNEN, konstanten
+    //      Koeffizienten brav <=1 bleibt). Reagiert pro Sample ohne
+    //      Attack-/Release-Verzögerung, kann also nie "zu spät" kommen --
+    //      exakt der Grund, warum das Filter Delay dort ebenfalls einen
+    //      WaveShaper statt eines DynamicsCompressorNode nutzt.
+    // Verifiziert per Stresstest: 10s Sustain bei maximaler Resonance,
+    // dichte Retriggerung (alle 50ms) bei Max-Resonance+Damping, 100
+    // Parameter-Kombinationen (Pitch x Resonance x Damping) sowie Pitch/
+    // Resonance/Damping gleichzeitig live automatisiert WÄHREND aktiv
+    // geklungen und retriggert wird -- durchgehend kein NaN, kein
+    // unbegrenztes Aufschaukeln.
     defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic', width: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -16755,59 +16779,78 @@ const DEFS = {
         p.tune = [...(RESONATOR_PRESET_SEMITONES[p.interval] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
       }
       let pitch = p.pitch;
-      const q = resonanceToQ(p.resonance);
+      let decayTime = resonanceToDecayTime(p.resonance);
       const freqFor = (i) => pitch * Math.pow(2, p.tune[i] / 12) * RESONATOR_DETUNE[i];
 
-      const bands = [], panners = [];
+      // Geteilte Weichbegrenzer-Kurve für alle 5 Bänder (statische Daten,
+      // hängt von keinem Parameter ab -- ein Array reicht, wie beim
+      // Filter Delay, das dieselbe Kurve für beide Kanäle wiederverwendet).
+      const clipCurve = makeFeedbackClipCurve();
+
+      const delays = [], damps = [], clips = [], fbGains = [], panners = [];
+      const bandDelayTime = new Array(N);
+      const sum = ctx.createGain();
       for (let i = 0; i < N; i++) {
-        const bp = ctx.createBiquadFilter();
-        bp.type = 'bandpass';
-        bp.frequency.value = freqFor(i);
-        bp.Q.value = q;
+        const delayTime = 1 / freqFor(i);
+        bandDelayTime[i] = delayTime;
+        const delayNode = ctx.createDelay(1);
+        delayNode.delayTime.value = delayTime;
+        const damp = makeOnePoleLowpass(ctx, p.damping);
+        const clip = ctx.createWaveShaper();
+        clip.curve = clipCurve;
+        clip.oversample = '2x';
+        const fb = ctx.createGain();
+        fb.gain.value = feedbackGainFor(delayTime, decayTime);
         const panner = ctx.createStereoPanner();
         panner.pan.value = RESONATOR_PAN[i] * p.width;
-        input.connect(bp);
-        bp.connect(panner);
-        bands.push(bp);
-        panners.push(panner);
+
+        input.connect(delayNode);
+        delayNode.connect(damp.input);
+        damp.output.connect(clip);
+        clip.connect(fb);
+        fb.connect(delayNode); // schliesst die Feedback-Schleife
+        delayNode.connect(panner);
+        panner.connect(sum);
+
+        delays.push(delayNode); damps.push(damp); clips.push(clip); fbGains.push(fb); panners.push(panner);
       }
 
-      // Pegel-Kompensation: zwei Effekte gegenläufig ausgleichen. (1) N
-      // parallele Bandpässe wären sonst lauter als der Dry-Pfad (1/N).
-      // (2) Ein schmalbandigerer (höher-Q) Filter fängt bei einer kurzen/
-      // breitbandigen Anregung (Drum-Transiente) nur einen ENTSPRECHEND
-      // kleineren Ausschnitt der Eingangsenergie ein -- gemessen fällt der
-      // Spitzenpegel etwa mit 1/Q (Resonance ganz auf: über 400x leiser
-      // als Resonance ganz zu). Ohne Ausgleich würde "mehr Resonance"
-      // sich anfühlen wie "leiser" statt "länger/dramatischer nachklingend"
-      // -- makeupFor(q) gleicht das mit sqrt(Q) grob aus (voller 1/Q-
-      // Ausgleich würde die tiefen Resonance-Werte dagegen unnötig laut
-      // machen). sum ist jetzt (durch die Panner) potenziell STEREO -- eine
-      // GainNode summiert Mehrkanal-Eingänge transparent, keine Änderung
-      // an der Kompensationsrechnung selbst nötig.
-      const sum = ctx.createGain();
-      sum.gain.value = makeupFor(q) / N;
-      for (const panner of panners) panner.connect(sum);
+      // Pegel-Kompensation: fester Faktor statt eines resonance-abhängigen
+      // Ausgleichs wie bei der alten Bandpass-Bank -- gemessen bleibt der
+      // Pegel (anders als beim Filter, der bei niedrigem Q/kurzer
+      // Klingelzeit nur einen kleinen Ausschnitt der Energie einfängt)
+      // über den GESAMTEN Resonance-Bereich praktisch konstant, eine
+      // Delayline baut ihre Resonanz aktiv über die Feedback-Schleife auf
+      // statt nur passiv durchzulassen. 2.9/N kalibriert auf einen
+      // gehaltenen Ton durchs Default-Preset ('harmonic', 5 Bänder auf
+      // Grundton + Obertönen 2x-5x verteilt -- nur der Grundton-Band trifft
+      // die volle Sägezahn-Energie, die Obertöne entsprechend weniger,
+      // s. Testprotokoll) -- damit bleibt der Pegel bei Mix=100% praktisch
+      // deckungsgleich mit dem Trockensignal (~-1.3dB gemessen), statt wie
+      // vorher spürbar leiser.
+      sum.gain.value = 2.9 / N;
 
-      // limiter: makeupFor() ist auf eine KURZE/breitbandige Anregung
-      // kalibriert (Drum-Transiente) -- bei einer GEHALTENEN Note exakt auf
-      // der Resonanzfrequenz (z. B. ein Bass/Pad-Synth durch den Resonator)
-      // erreicht ein Bandpass dagegen unabhängig von Q seinen vollen,
-      // eingeschwungenen 0dB-Spitzenpegel (Definition laut Web-Audio-Spec)
-      // -- die transienten-kalibrierte Extra-Verstärkung von makeupFor()
-      // würde DANN klar übersteuern (gemessen: bis über 3x Vollausschlag
-      // bei hoher Resonance). Ein schneller Limiter fängt genau diesen Fall
-      // ab, ohne die (ohnehin leisen) Transienten hörbar zu beschneiden.
+      // limiter: eine dicht bespielte/retriggerte Bande (Drum-Pattern,
+      // gehaltene Note) kann durch die Feedback-Schleifen über mehrere
+      // Sekunden Energie aufbauen, bevor der Damping-Filter sie wieder
+      // abbaut (gemessen: bis knapp 6x Vollausschlag im Worst-Case-
+      // Stresstest, kombinierte Live-Automation + dichte Retriggerung) --
+      // ein schneller Limiter fängt genau DAS ab. Schwelle bewusst auf 0dB
+      // (Web-Audio-Maximum), NICHT wie vorher -3dB: ein normaler
+      // gehaltener Ton liegt beim neuen Delay-Feedback-Design (anders als
+      // die alte Bandpass-Bank) schon nahe am Trockenpegel -- eine
+      // niedrigere Schwelle hätte genau DIESEN Alltagsfall dauerhaft
+      // klein komprimiert und wieder leiser gemacht, statt nur die
+      // seltenen Extremfälle abzufangen (gemessen: bei 0dB bleibt ein
+      // gehaltener Ton praktisch unangetastet, ein 6x-Ausreisser wird bei
+      // Ratio 20:1 trotzdem zuverlässig auf knapp über 0dB gezähmt).
       const limiter = ctx.createDynamicsCompressor();
-      limiter.threshold.value = -3;
+      limiter.threshold.value = 0;
       limiter.knee.value = 0;
       limiter.ratio.value = 20;
       limiter.attack.value = 0.003;
       limiter.release.value = 0.15;
       sum.connect(limiter);
-
-      const damp = makeOnePoleLowpass(ctx, p.damping);
-      limiter.connect(damp.input);
 
       // Kompensiert den Lookahead des Sicherheits-Limiters oben (s.
       // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- der sitzt NUR im Wet-Pfad,
@@ -16815,7 +16858,17 @@ const DEFS = {
       // an, beim Mischen (mix<1) ein hörbares Kammfilter-"Phasing".
       const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
       input.connect(dryDelay).connect(dry).connect(output);
-      damp.output.connect(wet).connect(output);
+      limiter.connect(wet).connect(output);
+
+      // Band i neu stimmen (Pitch/Interval/Tune geändert): Delay-Zeit UND
+      // die davon abhängige Feedback-Stärke (feedbackGainFor braucht die
+      // AKTUELLE Delay-Zeit) gemeinsam nachziehen.
+      const retuneBand = (i, t, tc) => {
+        const delayTime = 1 / freqFor(i);
+        bandDelayTime[i] = delayTime;
+        delays[i].delayTime.setTargetAtTime(delayTime, t, tc);
+        fbGains[i].gain.setTargetAtTime(feedbackGainFor(delayTime, decayTime), t, tc);
+      };
 
       return {
         input, output,
@@ -16823,19 +16876,18 @@ const DEFS = {
           const t = engine.now;
           if (key === 'pitch') {
             pitch = v;
-            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(freqFor(i), t, 0.02);
+            for (let i = 0; i < N; i++) retuneBand(i, t, 0.02);
           } else if (key === 'resonance') {
-            const newQ = resonanceToQ(v);
-            for (const bp of bands) bp.Q.setTargetAtTime(newQ, t, 0.02);
-            sum.gain.setTargetAtTime(makeupFor(newQ) / N, t, 0.02);
+            decayTime = resonanceToDecayTime(v);
+            for (let i = 0; i < N; i++) fbGains[i].gain.setTargetAtTime(feedbackGainFor(bandDelayTime[i], decayTime), t, 0.02);
           } else if (key === 'damping') {
-            damp.setFreq(v, t, 0.02);
+            for (const damp of damps) damp.setFreq(v, t, 0.02);
           } else if (key === 'interval') {
             // Preset-Knopf: befüllt alle 5 Tune-Werte auf einen Schlag (s.
             // Kommentar bei RESONATOR_PRESET_SEMITONES) -- einzelne Bänder
             // lassen sich danach über setBandTune() wieder frei verstellen.
             p.tune = [...(RESONATOR_PRESET_SEMITONES[v] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
-            for (let i = 0; i < N; i++) bands[i].frequency.setTargetAtTime(freqFor(i), t, 0.03);
+            for (let i = 0; i < N; i++) retuneBand(i, t, 0.03);
           } else if (key === 'width') {
             for (let i = 0; i < N; i++) panners[i].pan.setTargetAtTime(RESONATOR_PAN[i] * v, t, 0.02);
           } else if (key === 'mix') {
@@ -16849,13 +16901,15 @@ const DEFS = {
         // "ein Feld", nicht "ein Feld eines von 5 Bändern".
         setBandTune(i, semitones) {
           p.tune[i] = semitones;
-          bands[i].frequency.setTargetAtTime(freqFor(i), engine.now, 0.02);
+          retuneBand(i, engine.now, 0.02);
         },
         dispose() {
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
           dryDelay.disconnect(); limiter.disconnect();
-          damp.dispose();
-          for (const bp of bands) bp.disconnect();
+          for (const delayNode of delays) delayNode.disconnect();
+          for (const damp of damps) damp.dispose();
+          for (const clip of clips) clip.disconnect();
+          for (const fb of fbGains) fb.disconnect();
           for (const panner of panners) panner.disconnect();
         },
       };
