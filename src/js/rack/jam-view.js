@@ -181,43 +181,35 @@ function valueFromNorm(norm, meta) {
   return meta.curve === 'log' ? min * Math.pow(max / min, n) : min + n * (max - min);
 }
 
-/* ---------- X/Y-Pad-Zuordnung (pro Maschine, nicht persistiert -- wie
- * jamState: eine Performance-Einstellung fürs aktuelle Jammen, kein
- * Projekt-Zustand -- EINZIGE Ausnahme ist `spring`, s. dort). Jede Achse trägt jetzt eine LISTE von Einträgen
- * { key, from, to } statt eines einzelnen Schlüssels -- "stacken" heisst
- * einfach: mehr als ein Eintrag in der Liste, jeder bekommt beim Ziehen
- * dieselbe normalisierte Pad-Position, nur auf sein eigenes [from,to]
- * statt auf sein volles [min,max] abgebildet (Regler-Kurve, s.
- * normFromValue/valueFromNorm oben). from/to defaulten auf den vollen
- * Regler-Bereich (from=min, to=max) -- deckt sich exakt mit dem alten,
- * unbeschränkten Verhalten, bis jemand die Range aktiv einengt. from>to
- * ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die Zuordnung
- * einfach um (Pad nach rechts -> Wert sinkt), ganz ohne Sonderfall in der
- * Mathematik. Default deckt sich mit dem alten, festen Verhalten (Delay/
- * Reverb, je 1 Eintrag über den vollen 0..1-Bereich) -- BEIDE jetzt
- * `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das sind "wie
- * hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb 0/trocken
- * bedeuten, genau wie beim automatisch mitgestackten Insert-Mix. */
-const xyState = new WeakMap();
+/* ---------- X/Y-Pad-Zuordnung (Sibling-Feld machine.xyMap, s. machine.js/
+ * project.js -- Nutzer-Anfrage: eine mühsam eingestellte Pad-Zuordnung soll
+ * ein Neuladen/Speichern überleben, nicht bei jeder Session neu auf den
+ * Delay/Reverb-Default zurückfallen, genau wie xySpring). Jede Achse trägt
+ * eine LISTE von Einträgen { key, from, to } statt eines einzelnen
+ * Schlüssels -- "stacken" heisst einfach: mehr als ein Eintrag in der
+ * Liste, jeder bekommt beim Ziehen dieselbe normalisierte Pad-Position, nur
+ * auf sein eigenes [from,to] statt auf sein volles [min,max] abgebildet
+ * (Regler-Kurve, s. normFromValue/valueFromNorm oben). from/to defaulten
+ * auf den vollen Regler-Bereich (from=min, to=max) -- deckt sich exakt mit
+ * dem alten, unbeschränkten Verhalten, bis jemand die Range aktiv einengt.
+ * from>to ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die
+ * Zuordnung einfach um (Pad nach rechts -> Wert sinkt), ganz ohne
+ * Sonderfall in der Mathematik. Default deckt sich mit dem alten, festen
+ * Verhalten (Delay/Reverb, je 1 Eintrag über den vollen 0..1-Bereich) --
+ * BEIDE jetzt `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das
+ * sind "wie hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb
+ * 0/trocken bedeuten, genau wie beim automatisch mitgestackten Insert-Mix.
+ * `spring` (Auto-Return) lebt bewusst NICHT hier, sondern direkt in
+ * machine.xySpring -- eigenes Sibling-Feld statt Teil dieses Objekts, s.
+ * buildXYPad(). */
 function xyStateFor(machine) {
-  let st = xyState.get(machine);
-  if (!st) {
-    st = {
+  if (!machine.xyMap) {
+    machine.xyMap = {
       x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
       y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
-      // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
-      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Startwert
-      // kommt aus machine.xySpring (Sibling-Feld, s. machine.js/project.js)
-      // -- das EINZIGE Stück Jam-Pad-Zustand, das über Neuladen hinweg
-      // erhalten bleibt (Achsen-Zuordnung bleibt bewusst reine Session-
-      // Einstellung, s. Kommentar oben). Jeder Toggle schreibt sofort
-      // zurück auf machine.xySpring (s. buildXYPad()), damit es dieselbe
-      // Quelle der Wahrheit bleibt, die auch serialisiert wird.
-      spring: machine.xySpring ?? false,
     };
-    xyState.set(machine, st);
   }
-  return st;
+  return machine.xyMap;
 }
 const otherAxis = (axis) => (axis === 'x' ? 'y' : 'x');
 
@@ -852,11 +844,10 @@ function buildXYPad(machine) {
   const yBtn = wrap.querySelector('.xy-axis-btn--y');
   const springBtn = wrap.querySelector('.xy-spring-btn');
   const st = xyStateFor(machine);
-  springBtn.classList.toggle('is-active', st.spring);
+  springBtn.classList.toggle('is-active', machine.xySpring);
   springBtn.addEventListener('click', () => {
-    st.spring = !st.spring;
-    machine.xySpring = st.spring; // Sibling-Feld -- s. xyStateFor(), macht den Toggle persistent
-    springBtn.classList.toggle('is-active', st.spring);
+    machine.xySpring = !machine.xySpring;
+    springBtn.classList.toggle('is-active', machine.xySpring);
   });
 
   const axisLabel = (axis) => {
@@ -945,7 +936,7 @@ function buildXYPad(machine) {
   // Funktion: kurz antippen/ziehen = Effekt hörbar, loslassen = wieder weg.
   const releasePad = () => {
     dragging = false;
-    if (st.spring) {
+    if (machine.xySpring) {
       applyAxis('x', 0.5);
       applyAxis('y', 0.5);
       dot.style.left = '50%';

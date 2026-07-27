@@ -17,6 +17,8 @@
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
  *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
  *     fehlt in alten Projekten → Default false (aus)
+ *   - xyMap: Regler-Zuordnung der X/Y-Pad-Achsen (Basisklasse), fehlt in
+ *     alten Projekten → Default Delay/Reverb (s. jam-view.js#xyStateFor)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - masterInserts: frei bestückbare Insert-Kette auf dem Master-Bus
@@ -50,6 +52,7 @@ export function serializeProject(rack) {
       modulators: m.serializeModulators(),
       clips: m.serializeClips(),
       xySpring: m.xySpring,
+      xyMap: m.xyMap,
       lanes: automation.exportLanes(m.id),
       label: m.label,
     })),
@@ -99,6 +102,7 @@ export function loadProject(rack, data) {
       if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
+      if (md.xyMap) machine.xyMap = md.xyMap;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
@@ -140,6 +144,7 @@ export function importMachines(rack, data) {
       if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
+      if (md.xyMap) machine.xyMap = md.xyMap;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();

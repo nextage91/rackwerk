@@ -21007,12 +21007,23 @@ class Machine {
     this.clips = [];
 
     /** Auto-Return-Schalter des Jam-X/Y-Pads (s. jam-view.js#buildXYPad,
-     *  .xy-spring-btn) — anders als die restlichen Jam-Pad-Einstellungen
-     *  (Achsen-Zuordnung, s. dort) EIN Sibling-Feld wie sends/inserts/clips,
-     *  weil Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie
-     *  sie ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
+     *  .xy-spring-btn) — ein Sibling-Feld wie sends/inserts/clips, weil
+     *  Nutzer diesen Schalter bewusst dauerhaft so lassen wollen, wie sie
+     *  ihn eingestellt haben, statt bei jedem Neuladen wieder auf den
      *  Default zurückzufallen. */
     this.xySpring = false;
+
+    /** @type {{x:Array<{key:string,from:number,to:number,centered?:boolean}>,
+     *  y:Array<{key:string,from:number,to:number,centered?:boolean}>}|null}
+     *  Welche Regler auf der X/Y-Achse des Jam-Pads liegen (s. jam-view.js
+     *  #xyStateFor/#buildXYPad) — genau wie xySpring ein Sibling-Feld
+     *  (Nutzer-Anfrage: eine mühsam eingestellte Pad-Zuordnung soll ein
+     *  Neuladen/Speichern überleben, nicht auf den Delay/Reverb-Default
+     *  zurückfallen). Bleibt hier `null` (statt schon mit dem Default
+     *  belegt) -- jam-view.js#xyStateFor() legt ihn beim ersten Zugriff an,
+     *  dieselbe Lazy-Init wie zuvor über eine private WeakMap, nur jetzt
+     *  direkt auf der Maschine statt daneben, damit er serialisierbar ist. */
+    this.xyMap = null;
 
     /** Post-Fader-Sends zu den Master-Effekten — hinter Gate UND pdcDelay,
      *  damit Mute/Solo UND der Latenz-Ausgleich die Effekt-Fahnen mitnehmen
@@ -21450,6 +21461,7 @@ class Machine {
           modulators: this.serializeModulators(),
           clips: this.serializeClips(),
           xySpring: this.xySpring,
+          xyMap: this.xyMap,
           lanes: automation.exportLanes(this.id),
           label: this.label,
         };
@@ -26986,6 +26998,7 @@ class Rack {
         if (state?.modulators) restored.deserializeModulators(state.modulators);
         if (state?.clips) restored.deserializeClips(state.clips);
         if (state?.xySpring) restored.xySpring = true;
+        if (state?.xyMap) restored.xyMap = state.xyMap;
         if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
@@ -27448,43 +27461,35 @@ function valueFromNorm(norm, meta) {
   return meta.curve === 'log' ? min * Math.pow(max / min, n) : min + n * (max - min);
 }
 
-/* ---------- X/Y-Pad-Zuordnung (pro Maschine, nicht persistiert -- wie
- * jamState: eine Performance-Einstellung fürs aktuelle Jammen, kein
- * Projekt-Zustand -- EINZIGE Ausnahme ist `spring`, s. dort). Jede Achse trägt jetzt eine LISTE von Einträgen
- * { key, from, to } statt eines einzelnen Schlüssels -- "stacken" heisst
- * einfach: mehr als ein Eintrag in der Liste, jeder bekommt beim Ziehen
- * dieselbe normalisierte Pad-Position, nur auf sein eigenes [from,to]
- * statt auf sein volles [min,max] abgebildet (Regler-Kurve, s.
- * normFromValue/valueFromNorm oben). from/to defaulten auf den vollen
- * Regler-Bereich (from=min, to=max) -- deckt sich exakt mit dem alten,
- * unbeschränkten Verhalten, bis jemand die Range aktiv einengt. from>to
- * ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die Zuordnung
- * einfach um (Pad nach rechts -> Wert sinkt), ganz ohne Sonderfall in der
- * Mathematik. Default deckt sich mit dem alten, festen Verhalten (Delay/
- * Reverb, je 1 Eintrag über den vollen 0..1-Bereich) -- BEIDE jetzt
- * `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das sind "wie
- * hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb 0/trocken
- * bedeuten, genau wie beim automatisch mitgestackten Insert-Mix. */
-const xyState = new WeakMap();
+/* ---------- X/Y-Pad-Zuordnung (Sibling-Feld machine.xyMap, s. machine.js/
+ * project.js -- Nutzer-Anfrage: eine mühsam eingestellte Pad-Zuordnung soll
+ * ein Neuladen/Speichern überleben, nicht bei jeder Session neu auf den
+ * Delay/Reverb-Default zurückfallen, genau wie xySpring). Jede Achse trägt
+ * eine LISTE von Einträgen { key, from, to } statt eines einzelnen
+ * Schlüssels -- "stacken" heisst einfach: mehr als ein Eintrag in der
+ * Liste, jeder bekommt beim Ziehen dieselbe normalisierte Pad-Position, nur
+ * auf sein eigenes [from,to] statt auf sein volles [min,max] abgebildet
+ * (Regler-Kurve, s. normFromValue/valueFromNorm oben). from/to defaulten
+ * auf den vollen Regler-Bereich (from=min, to=max) -- deckt sich exakt mit
+ * dem alten, unbeschränkten Verhalten, bis jemand die Range aktiv einengt.
+ * from>to ist bewusst erlaubt (kein Vertauschen erzwungen): dreht die
+ * Zuordnung einfach um (Pad nach rechts -> Wert sinkt), ganz ohne
+ * Sonderfall in der Mathematik. Default deckt sich mit dem alten, festen
+ * Verhalten (Delay/Reverb, je 1 Eintrag über den vollen 0..1-Bereich) --
+ * BEIDE jetzt `centered: true` (s. isMixLikeKey/applyAxis/axisNorm): das
+ * sind "wie hörbar ist der Effekt"-Sends, die Pad-Mitte soll deshalb
+ * 0/trocken bedeuten, genau wie beim automatisch mitgestackten Insert-Mix.
+ * `spring` (Auto-Return) lebt bewusst NICHT hier, sondern direkt in
+ * machine.xySpring -- eigenes Sibling-Feld statt Teil dieses Objekts, s.
+ * buildXYPad(). */
 function xyStateFor(machine) {
-  let st = xyState.get(machine);
-  if (!st) {
-    st = {
+  if (!machine.xyMap) {
+    machine.xyMap = {
       x: [{ key: 'sendDelay', from: 0, to: 1, centered: true }],
       y: [{ key: 'sendReverb', from: 0, to: 1, centered: true }],
-      // "Auto-Return" -- s. buildXYPad()/.xy-spring-btn: springt der Punkt
-      // nach dem Loslassen automatisch auf die Pad-Mitte zurück? Startwert
-      // kommt aus machine.xySpring (Sibling-Feld, s. machine.js/project.js)
-      // -- das EINZIGE Stück Jam-Pad-Zustand, das über Neuladen hinweg
-      // erhalten bleibt (Achsen-Zuordnung bleibt bewusst reine Session-
-      // Einstellung, s. Kommentar oben). Jeder Toggle schreibt sofort
-      // zurück auf machine.xySpring (s. buildXYPad()), damit es dieselbe
-      // Quelle der Wahrheit bleibt, die auch serialisiert wird.
-      spring: machine.xySpring ?? false,
     };
-    xyState.set(machine, st);
   }
-  return st;
+  return machine.xyMap;
 }
 const otherAxis = (axis) => (axis === 'x' ? 'y' : 'x');
 
@@ -28119,11 +28124,10 @@ function buildXYPad(machine) {
   const yBtn = wrap.querySelector('.xy-axis-btn--y');
   const springBtn = wrap.querySelector('.xy-spring-btn');
   const st = xyStateFor(machine);
-  springBtn.classList.toggle('is-active', st.spring);
+  springBtn.classList.toggle('is-active', machine.xySpring);
   springBtn.addEventListener('click', () => {
-    st.spring = !st.spring;
-    machine.xySpring = st.spring; // Sibling-Feld -- s. xyStateFor(), macht den Toggle persistent
-    springBtn.classList.toggle('is-active', st.spring);
+    machine.xySpring = !machine.xySpring;
+    springBtn.classList.toggle('is-active', machine.xySpring);
   });
 
   const axisLabel = (axis) => {
@@ -28212,7 +28216,7 @@ function buildXYPad(machine) {
   // Funktion: kurz antippen/ziehen = Effekt hörbar, loslassen = wieder weg.
   const releasePad = () => {
     dragging = false;
-    if (st.spring) {
+    if (machine.xySpring) {
       applyAxis('x', 0.5);
       applyAxis('y', 0.5);
       dot.style.left = '50%';
@@ -28407,6 +28411,8 @@ const { serializeProject, loadProject, importMachines, newProject } = (() => {
  *     Muster wie inserts — fehlt in alten Projekten → keine Clips
  *   - xySpring: Auto-Return-Schalter des Jam-X/Y-Pads (Basisklasse),
  *     fehlt in alten Projekten → Default false (aus)
+ *   - xyMap: Regler-Zuordnung der X/Y-Pad-Achsen (Basisklasse), fehlt in
+ *     alten Projekten → Default Delay/Reverb (s. jam-view.js#xyStateFor)
  *   - fx:    Master-Effekte (Delay/Reverb) — fehlt in alten Projekten,
  *            dann bleiben die Defaults stehen
  *   - masterInserts: frei bestückbare Insert-Kette auf dem Master-Bus
@@ -28435,6 +28441,7 @@ function serializeProject(rack) {
       modulators: m.serializeModulators(),
       clips: m.serializeClips(),
       xySpring: m.xySpring,
+      xyMap: m.xyMap,
       lanes: automation.exportLanes(m.id),
       label: m.label,
     })),
@@ -28484,6 +28491,7 @@ function loadProject(rack, data) {
       if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
+      if (md.xyMap) machine.xyMap = md.xyMap;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();
@@ -28525,6 +28533,7 @@ function importMachines(rack, data) {
       if (md.modulators) machine.deserializeModulators(md.modulators);
       if (md.clips) machine.deserializeClips(md.clips);
       if (md.xySpring) machine.xySpring = true;
+      if (md.xyMap) machine.xyMap = md.xyMap;
       if (md.label) machine.setLabel(md.label);
       automation.importLanes(machine.id, md.lanes);
       machine.onLanesImported?.();

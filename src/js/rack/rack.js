@@ -77,6 +77,7 @@ export class Rack {
         if (state?.modulators) restored.deserializeModulators(state.modulators);
         if (state?.clips) restored.deserializeClips(state.clips);
         if (state?.xySpring) restored.xySpring = true;
+        if (state?.xyMap) restored.xyMap = state.xyMap;
         if (state?.label) restored.label = state.label;
         this.machines.splice(index, 0, restored);
         this.#mount(restored, this.machines[index + 1] ?? null);
