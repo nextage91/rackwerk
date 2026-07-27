@@ -18,7 +18,7 @@ import { song } from './core/song.js';
 import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack } from './rack/rack.js';
-import { initJamView, renderJamView } from './rack/jam-view.js';
+import { initJamView, renderJamView, stopAllClips } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -954,10 +954,11 @@ function wireMixerUI(rack) {
 /* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
 function wireJamViewUI() {
   const sheet = $('#jam-sheet');
-  modeOpen.jam = () => { renderJamView($('#jam-list')); sheet.hidden = false; };
+  modeOpen.jam = () => { renderJamView($('#jam-list'), $('#jam-scenes')); sheet.hidden = false; };
   sheet.querySelector('[data-close]').addEventListener('click', () => {
     sheet.hidden = true;
   });
+  $('#btn-jam-stop-all').addEventListener('click', stopAllClips);
 }
 
 /* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------

@@ -232,9 +232,13 @@
   <div class="sheet sheet--console" id="jam-sheet" hidden>
     <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Jam">
       <div class="console__head">
-        <h2 class="sheet__title">Jam</h2>
+        <div class="console__head-left">
+          <h2 class="sheet__title">Jam</h2>
+          <button class="jam-stopall-btn" id="btn-jam-stop-all" title="Stop all clips">STOP ALL</button>
+        </div>
         <button class="m-btn console__close" id="btn-jam-close" aria-label="Close jam view" data-close>✕</button>
       </div>
+      <div class="jam-scenes" id="jam-scenes"></div>
       <div class="jam-console" id="jam-list"></div>
     </div>
   </div>
