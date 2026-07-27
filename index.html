@@ -27499,6 +27499,45 @@ function nudgeParam(knob, value) {
   knob.dispatchEvent(new CustomEvent('input', { detail: { value }, bubbles: true }));
 }
 
+/** Aktualisiert den Anker (Pad-Mitte, s. anchorFor()) EINES gemappten
+ *  Parameters auf `value` -- egal auf welcher Achse er gerade sitzt (oder
+ *  gar nicht gemappt ist, dann No-Op). Nutzer-Anfrage: eine bewusste
+ *  Weiterentwicklung des Sound-Designs NACH dem Zuordnen -- ob am echten
+ *  Rack-Regler (s. trackHandDrag()) oder über den Jam-Makro-Knopf (s.
+ *  buildMacros()) -- soll automatisch die neue Pad-Mitte werden, ohne dass
+ *  man extra "Set center to current value" antippen muss. Bewusst NICHT
+ *  bei jedem generischen 'input'-Event (das würde auch LFO-/Automations-
+ *  Ticks auf demselben Regler mitreissen, s. Dateikopf/Chat) -- nur diese
+ *  zwei EXPLIZITEN, tatsächlich von Hand ausgelösten Wege rufen das hier
+ *  auf. */
+function reanchorIfMapped(machine, key, value) {
+  const st = machine.xyMap;
+  if (!st) return;
+  for (const axis of ['x', 'y']) {
+    const entry = st[axis]?.find((e) => e.key === key);
+    if (entry) entry.anchor = value;
+  }
+}
+
+/** Hängt (einmalig pro echtem Regler-Element, s. grabTrackedKnobs) einen
+ *  'knob-release'-Listener an -- das Event, das <x-knob> selbst NUR am
+ *  Ende einer echten Zieh-Geste feuert (dasselbe, das automation.js für
+ *  "Hand schlägt Automation" nutzt), nie bei einem synthetisch gesetzten
+ *  Wert (Pad, Makro-Knopf, LFO, Automation-Lane -- die schreiben alle nur
+ *  .value + ein 'input'-Event, ohne die Geste zu simulieren). Bleibt der
+ *  Listener über die gesamte Lebenszeit des Regler-Elements bestehen
+ *  (Maschinen-Panels werden nie neu gebaut, s. machine.js#render()) --
+ *  reagiert also auch dann noch, wenn ein Regler mal ent- und wieder
+ *  gemappt wird, ohne einen zweiten Listener zu brauchen. */
+const grabTrackedKnobs = new WeakSet();
+function trackHandDrag(machine, key, knob) {
+  if (!knob || grabTrackedKnobs.has(knob)) return;
+  grabTrackedKnobs.add(knob);
+  knob.addEventListener('knob-release', () => {
+    reanchorIfMapped(machine, key, parseFloat(knob.value));
+  });
+}
+
 /** Insert-Effekt-Regler haben KEIN data-p (mehrere Instanzen desselben Typs
  *  wären sonst nicht unterscheidbar) -- sie tragen stattdessen data-insert-
  *  id + data-insert-param (s. machine.js#renderInserts). Der X/Y-Pad-Key
@@ -27791,7 +27830,9 @@ function renderXYList(machine, axis, anchorEl, onChange) {
         if (mixKey && !newEntries.some((e) => e.key === mixKey) && !otherKeys.has(mixKey)) {
           const mixMeta = readKnobMeta(machine, mixKey);
           newEntries.push({ key: mixKey, from: 0, to: parseFloat(mixMeta?.max ?? '1'), anchor: parseFloat(mixMeta?.value ?? '0') });
+          trackHandDrag(machine, mixKey, mixMeta?.knob);
         }
+        trackHandDrag(machine, key, meta?.knob);
         st[axis] = newEntries;
         onChange();
         renderXYMenu(machine, axis, anchorEl, onChange);
@@ -28383,6 +28424,15 @@ function buildXYPad(machine) {
   const yBtn = wrap.querySelector('.xy-axis-btn--y');
   const springBtn = wrap.querySelector('.xy-spring-btn');
   const st = xyStateFor(machine);
+  // Hand-Drag-Tracking (s. trackHandDrag()) für ALLE aktuell gemappten
+  // Einträge sicherstellen -- deckt insbesondere aus einem gespeicherten
+  // Projekt geladene Zuordnungen ab, die nie über renderXYList()s Add-
+  // Button liefen (dort wird zusätzlich sofort getrackt, s. dort).
+  for (const axis of ['x', 'y']) {
+    for (const entry of st[axis]) {
+      trackHandDrag(machine, entry.key, readKnobMeta(machine, entry.key)?.knob);
+    }
+  }
   springBtn.classList.toggle('is-active', machine.xySpring);
   springBtn.addEventListener('click', () => {
     machine.xySpring = !machine.xySpring;
@@ -28512,7 +28562,13 @@ function buildMacros(machine) {
     if (meta.curve) knob.setAttribute('curve', meta.curve);
     if (meta.unit) knob.setAttribute('unit', meta.unit);
     knob.setAttribute('value', meta.value);
-    knob.addEventListener('input', (e) => nudgeParam(meta.knob, e.detail.value));
+    knob.addEventListener('input', (e) => {
+      nudgeParam(meta.knob, e.detail.value);
+      // Bewusstes Nachjustieren über den Jam-Makro-Knopf zählt genau wie
+      // ein echter Rack-Regler-Drag (s. trackHandDrag()) -- der Anker
+      // zieht mit, falls dieser Parameter gerade aufs X/Y-Pad gemappt ist.
+      reanchorIfMapped(machine, key, e.detail.value);
+    });
     wrap.appendChild(knob);
   }
   return wrap;
