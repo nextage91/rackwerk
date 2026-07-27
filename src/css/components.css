@@ -208,6 +208,25 @@
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset;
 }
 
+/* PsySynth: die Swirl-LFO-Zeile genauso von den übrigen Reglern absetzen
+   wie AcidBashs Devil-Fish-Zeile (s. dort) -- signalisiert "das ist der
+   dauerhaft laufende Hintergrund-Modulator, kein Anschlags-Regler". */
+.psysynth__swirl {
+  padding: 8px 8px 10px;
+  margin: 4px -8px 0;
+  border-radius: 8px;
+  background: var(--m-color-tint, rgba(255,255,255,.03));
+  box-shadow: -3px 0 0 var(--m-color, transparent) inset;
+}
+.psysynth__swirl-label {
+  flex: 1 0 100%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--m-color, var(--ink-dim));
+}
+
 /* ===================== Knob (x-knob) ===================== */
 x-knob {
   display: grid;
