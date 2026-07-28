@@ -135,6 +135,7 @@ export function renderModulationChain(listEl, owner) {
           ${mod.params.division === 'free' ? knobHtml('Rate', 'rateHz', 0.05, 20, { curve: 'log', unit: 'Hz' }) : ''}
           ${knobHtml('Depth', 'depth', 0, 1)}
           ${knobHtml('Offset', 'offset', 0, 1)}
+          ${mod.params.division !== 'free' ? knobHtml('Swing', 'swing', 50, 75, { unit: '%' }) : ''}
         </div>
       `;
     } else {

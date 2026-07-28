@@ -110,7 +110,7 @@ const ARP_DIVISION_STEPS = { '1/16': 1, '1/8': 2, '1/4': 4, '1/2': 8, '1': 16 };
 const MOD_DEFS = {
   lfo: {
     name: 'LFO',
-    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1, offset: 0 },
+    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1, offset: 0, swing: 50 },
     build(owner, p) {
       let timer = null;
       let phaseAcc = 0;
@@ -166,7 +166,7 @@ const MOD_DEFS = {
           lastT = now;
           phase = phaseAcc;
         } else {
-          phase = transport.phaseOver(Number(p.division));
+          phase = transport.phaseOverShuffled(Number(p.division), p.swing);
         }
         if (p.wave === 'random' && phase < lastPhase) sh.value = Math.random();
         lastPhase = phase;

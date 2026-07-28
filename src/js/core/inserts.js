@@ -52,7 +52,7 @@ function makeDriveCurve(amount) {
  *  dichte Retriggerung bei extrem hohem Feedback abzufangen (gemessen: Peak
  *  > 2.6 trotz Limiter, auch mit sehr schnellem Attack/Release). Ein
  *  WaveShaper reagiert dagegen pro Sample, ganz ohne Attack-/Release-Zeit. */
-function makeFeedbackClipCurve() {
+export function makeFeedbackClipCurve() {
   const n = 1024;
   const curve = new Float32Array(n);
   for (let i = 0; i < n; i++) {
@@ -719,7 +719,7 @@ const DEFS = {
     // meldet sich hier aber genauso an).
     defaults: {
       time: 0.35, feedback: 0.4, filterFreq: 2000, filterType: 'lowpass', mix: 0.35,
-      pingPong: false, division: 'free',
+      pingPong: false, division: 'free', swing: 50,
     },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -739,9 +739,22 @@ const DEFS = {
       const computeTime = () => (p.division === 'free'
         ? p.time
         : transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 1));
+      // Swing (nur bei Tempo-Sync sinnvoll, s. UI_PARAMS.filterDelay): delayR
+      // bekommt zusätzlich zur Basiszeit einen festen Versatz von bis zu
+      // einem halben 16tel-Step (dieselbe Formel wie shuffleTime()). Da
+      // delayL/delayR eine Kreuz-Feedback-Schleife bilden (delayL -> ... ->
+      // delayR -> ... -> delayL, s. Kommentar oben), wechseln sich die
+      // Wiederholungsabstände dadurch OHNE jedes Scheduling automatisch
+      // zwischen delayL- und delayR-Zeit ab -- exakt der "swingt jede zweite
+      // Wiederholung" -Effekt, rein aus der bestehenden Topologie heraus.
+      // swing=50 (Default) ergibt delayR===delayL, mathematisch identisch
+      // zum bisherigen Verhalten (s. Kommentar oben zur pingPong-Äquivalenz).
+      const computeSwingShift = () => (p.division === 'free' || p.swing <= 50
+        ? 0
+        : (p.swing - 50) / 50 * transport.stepDuration);
       const t0 = computeTime();
       delayL.delayTime.value = t0;
-      delayR.delayTime.value = t0;
+      delayR.delayTime.value = t0 + computeSwingShift();
 
       // Feedback-Schleife: delay -> filter -> feedback -> zurück in delay.
       // Der WET-Abgriff sitzt NACH dem Filter, nicht am rohen Delay-Ausgang
@@ -797,12 +810,20 @@ const DEFS = {
       filterR.connect(feedbackR).connect(clipR).connect(delayL);
       wet.connect(output);
 
+      // Setzt delayL auf die gerade Basiszeit und delayR auf Basiszeit+Swing
+      // -- einziger Ort, der beide Delay-Zeiten anfasst, damit time/division/
+      // swing/BPM-Änderungen nie auseinanderlaufen können.
+      const applyTimes = () => {
+        const time = computeTime();
+        const t = engine.now;
+        delayL.delayTime.setTargetAtTime(time, t, 0.02);
+        delayR.delayTime.setTargetAtTime(time + computeSwingShift(), t, 0.02);
+      };
+
       const bpmListener = {
         onTransport(event) {
           if (event !== 'bpm' || p.division === 'free') return;
-          const time = computeTime();
-          delayL.delayTime.setTargetAtTime(time, engine.now, 0.02);
-          delayR.delayTime.setTargetAtTime(time, engine.now, 0.02);
+          applyTimes();
         },
       };
       transport.addListener(bpmListener);
@@ -812,10 +833,7 @@ const DEFS = {
         setParam(key, v) {
           const t = engine.now;
           if (key === 'time') {
-            if (p.division === 'free') {
-              delayL.delayTime.setTargetAtTime(v, t, 0.02);
-              delayR.delayTime.setTargetAtTime(v, t, 0.02);
-            }
+            if (p.division === 'free') applyTimes();
           } else if (key === 'feedback') {
             feedbackL.gain.setTargetAtTime(v, t, 0.01);
             feedbackR.gain.setTargetAtTime(v, t, 0.01);
@@ -830,10 +848,8 @@ const DEFS = {
           } else if (key === 'pingPong') {
             pannerL.pan.setTargetAtTime(v ? -1 : 0, t, 0.02);
             pannerR.pan.setTargetAtTime(v ? 1 : 0, t, 0.02);
-          } else if (key === 'division') {
-            const time = computeTime();
-            delayL.delayTime.setTargetAtTime(time, t, 0.02);
-            delayR.delayTime.setTargetAtTime(time, t, 0.02);
+          } else if (key === 'division' || key === 'swing') {
+            applyTimes();
           }
         },
         dispose() {
@@ -1676,6 +1692,10 @@ export const UI_PARAMS = {
     { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
     { key: 'filterFreq', label: 'Filter', min: 200, max: 8000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+    // Nur bei Tempo-Sync sinnvoll (s. DEFS.filterDelay#computeSwingShift) --
+    // wie 'time' oben wird sie in insert-chain.js abhängig von `division`
+    // ein-/ausgeblendet, nur mit umgekehrter Bedingung.
+    { key: 'swing', label: 'Swing', min: 50, max: 75, unit: '%' },
   ],
   reverb: [
     { key: 'size', label: 'Size', min: 0.3, max: 3, curve: 'log', unit: '' },

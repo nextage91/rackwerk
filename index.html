@@ -16005,7 +16005,7 @@ return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } = (() => {
+const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -16724,7 +16724,7 @@ const DEFS = {
     // meldet sich hier aber genauso an).
     defaults: {
       time: 0.35, feedback: 0.4, filterFreq: 2000, filterType: 'lowpass', mix: 0.35,
-      pingPong: false, division: 'free',
+      pingPong: false, division: 'free', swing: 50,
     },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -16744,9 +16744,22 @@ const DEFS = {
       const computeTime = () => (p.division === 'free'
         ? p.time
         : transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 1));
+      // Swing (nur bei Tempo-Sync sinnvoll, s. UI_PARAMS.filterDelay): delayR
+      // bekommt zusätzlich zur Basiszeit einen festen Versatz von bis zu
+      // einem halben 16tel-Step (dieselbe Formel wie shuffleTime()). Da
+      // delayL/delayR eine Kreuz-Feedback-Schleife bilden (delayL -> ... ->
+      // delayR -> ... -> delayL, s. Kommentar oben), wechseln sich die
+      // Wiederholungsabstände dadurch OHNE jedes Scheduling automatisch
+      // zwischen delayL- und delayR-Zeit ab -- exakt der "swingt jede zweite
+      // Wiederholung" -Effekt, rein aus der bestehenden Topologie heraus.
+      // swing=50 (Default) ergibt delayR===delayL, mathematisch identisch
+      // zum bisherigen Verhalten (s. Kommentar oben zur pingPong-Äquivalenz).
+      const computeSwingShift = () => (p.division === 'free' || p.swing <= 50
+        ? 0
+        : (p.swing - 50) / 50 * transport.stepDuration);
       const t0 = computeTime();
       delayL.delayTime.value = t0;
-      delayR.delayTime.value = t0;
+      delayR.delayTime.value = t0 + computeSwingShift();
 
       // Feedback-Schleife: delay -> filter -> feedback -> zurück in delay.
       // Der WET-Abgriff sitzt NACH dem Filter, nicht am rohen Delay-Ausgang
@@ -16802,12 +16815,20 @@ const DEFS = {
       filterR.connect(feedbackR).connect(clipR).connect(delayL);
       wet.connect(output);
 
+      // Setzt delayL auf die gerade Basiszeit und delayR auf Basiszeit+Swing
+      // -- einziger Ort, der beide Delay-Zeiten anfasst, damit time/division/
+      // swing/BPM-Änderungen nie auseinanderlaufen können.
+      const applyTimes = () => {
+        const time = computeTime();
+        const t = engine.now;
+        delayL.delayTime.setTargetAtTime(time, t, 0.02);
+        delayR.delayTime.setTargetAtTime(time + computeSwingShift(), t, 0.02);
+      };
+
       const bpmListener = {
         onTransport(event) {
           if (event !== 'bpm' || p.division === 'free') return;
-          const time = computeTime();
-          delayL.delayTime.setTargetAtTime(time, engine.now, 0.02);
-          delayR.delayTime.setTargetAtTime(time, engine.now, 0.02);
+          applyTimes();
         },
       };
       transport.addListener(bpmListener);
@@ -16817,10 +16838,7 @@ const DEFS = {
         setParam(key, v) {
           const t = engine.now;
           if (key === 'time') {
-            if (p.division === 'free') {
-              delayL.delayTime.setTargetAtTime(v, t, 0.02);
-              delayR.delayTime.setTargetAtTime(v, t, 0.02);
-            }
+            if (p.division === 'free') applyTimes();
           } else if (key === 'feedback') {
             feedbackL.gain.setTargetAtTime(v, t, 0.01);
             feedbackR.gain.setTargetAtTime(v, t, 0.01);
@@ -16835,10 +16853,8 @@ const DEFS = {
           } else if (key === 'pingPong') {
             pannerL.pan.setTargetAtTime(v ? -1 : 0, t, 0.02);
             pannerR.pan.setTargetAtTime(v ? 1 : 0, t, 0.02);
-          } else if (key === 'division') {
-            const time = computeTime();
-            delayL.delayTime.setTargetAtTime(time, t, 0.02);
-            delayR.delayTime.setTargetAtTime(time, t, 0.02);
+          } else if (key === 'division' || key === 'swing') {
+            applyTimes();
           }
         },
         dispose() {
@@ -17681,6 +17697,10 @@ const UI_PARAMS = {
     { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
     { key: 'filterFreq', label: 'Filter', min: 200, max: 8000, curve: 'log', unit: 'Hz' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+    // Nur bei Tempo-Sync sinnvoll (s. DEFS.filterDelay#computeSwingShift) --
+    // wie 'time' oben wird sie in insert-chain.js abhängig von `division`
+    // ein-/ausgeblendet, nur mit umgekehrter Bedingung.
+    { key: 'swing', label: 'Swing', min: 50, max: 75, unit: '%' },
   ],
   reverb: [
     { key: 'size', label: 'Size', min: 0.3, max: 3, curve: 'log', unit: '' },
@@ -17887,7 +17907,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS };
+return { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve };
 })();
 
 /* ===== js/core/transport.js ===== */
@@ -17984,6 +18004,40 @@ class Transport {
     const total = STEPS_PER_BAR * bars;
     const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
     return (((stepFloat % total) + total) % total) / total;
+  }
+
+  /**
+   * Wie phaseOver(), aber mit Swing (s. shuffleTime() unten) -- der LFO
+   * (s. modulators.js) nutzt das statt phaseOver(), wenn sein eigener
+   * Swing-Regler über 50% steht. Jeder ZWEITE Zyklus (ganzzahliger
+   * Vielfacher von `bars`, nicht jeder zweite 16tel-Step -- ein Zyklus
+   * kann ja mehrere Steps lang sein) beginnt um denselben festen Betrag
+   * verzögert, den shuffleTime() für einen Notentrigger verwenden würde
+   * (bis zu einem halben 16tel-Step, UNABHÄNGIG von der Zykluslänge selbst
+   * -- bei kurzen, step-nahen Zyklen wie 1/16 oder 1/8 darum deutlich
+   * hörbar, bei mehrtaktigen Zyklen proportional kaum, genau wie bei
+   * echter Hardware). Gerade Zyklen bleiben exakt auf dem Raster (wie ein
+   * ungeswingter Step) -- ungerade Zyklen halten bis zum verzögerten Start
+   * auf "1" (der Endwert des VORHERIGEN, geraden Zyklus, s. `waveValue()`
+   * in modulators.js) und durchlaufen ihre eigene Form danach gestaucht in
+   * der verbleibenden Zeit, damit der NÄCHSTE gerade Zyklus trotzdem exakt
+   * pünktlich beginnt -- exakt dieselbe "verzögert + dafür kürzer"-Logik,
+   * die auch shuffleTime() für einen einzelnen Notentrigger anwendet.
+   */
+  phaseOverShuffled(bars, amount) {
+    if (!this.isPlaying) return 0;
+    const total = STEPS_PER_BAR * bars;
+    const shiftSteps = amount > 50 ? (amount - 50) / 50 : 0;
+    if (!shiftSteps) return this.phaseOver(bars);
+
+    const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
+    const cycleIndex = Math.floor(stepFloat / total);
+    const cyclePos = (((stepFloat % total) + total) % total);
+    if ((((cycleIndex % 2) + 2) % 2) === 1) {
+      if (cyclePos < shiftSteps) return 1;
+      return (cyclePos - shiftSteps) / (total - shiftSteps);
+    }
+    return cyclePos / total;
   }
 
   /** Aktuelle Position im 1-Takt-Loop (0..1). */
@@ -18750,7 +18804,7 @@ const ARP_DIVISION_STEPS = { '1/16': 1, '1/8': 2, '1/4': 4, '1/2': 8, '1': 16 };
 const MOD_DEFS = {
   lfo: {
     name: 'LFO',
-    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1, offset: 0 },
+    defaults: { target: '', wave: 'sine', division: '1', rateHz: 2, depth: 1, offset: 0, swing: 50 },
     build(owner, p) {
       let timer = null;
       let phaseAcc = 0;
@@ -18806,7 +18860,7 @@ const MOD_DEFS = {
           lastT = now;
           phase = phaseAcc;
         } else {
-          phase = transport.phaseOver(Number(p.division));
+          phase = transport.phaseOverShuffled(Number(p.division), p.swing);
         }
         if (p.wave === 'random' && phase < lastPhase) sh.value = Math.random();
         lastPhase = phase;
@@ -19639,7 +19693,9 @@ function renderInsertChain(listEl, owner) {
       // ohne dass es wirkt), blendet ihn eine gefilterte Knob-Liste
       // komplett aus, solange division nicht "free" ist.
       const synced = insert.params.division !== 'free';
-      const delayKnobsHtml = paramDefs.filter((d) => d.key !== 'time' || !synced).map(knobHtml).join('');
+      const delayKnobsHtml = paramDefs
+        .filter((d) => (d.key !== 'time' || !synced) && (d.key !== 'swing' || synced))
+        .map(knobHtml).join('');
       bodyHtml = `
         <div class="seg">
           ${DELAY_SYNC_BUTTONS.map((s) => `
@@ -20042,6 +20098,7 @@ function renderModulationChain(listEl, owner) {
           ${mod.params.division === 'free' ? knobHtml('Rate', 'rateHz', 0.05, 20, { curve: 'log', unit: 'Hz' }) : ''}
           ${knobHtml('Depth', 'depth', 0, 1)}
           ${knobHtml('Offset', 'offset', 0, 1)}
+          ${mod.params.division !== 'free' ? knobHtml('Swing', 'swing', 50, 75, { unit: '%' }) : ''}
         </div>
       `;
     } else {
@@ -20211,6 +20268,7 @@ const FX_DEFAULTS = {
   feedback: 0.45,
   tone: 4500,        // Hz — Tiefpass in der Feedback-Schleife
   delayLevel: 0.5,
+  swing: 50,         // 50 = gerade (kein Effekt), bis 75 -- wie shuffleTime()/UI_PARAMS.filterDelay
   revSize: 1.0,      // Dattorro "size" -- Raumgrösse/Echodichte
   revDecay: 0.3,     // Dattorro "decay" (0..REV_DECAY_MAX), s. Grenzen oben
   revDamp: 6000,     // Hz -- Dattorro "damping" (REV_DAMPING_MIN..MAX)
@@ -20257,7 +20315,7 @@ class MasterFX {
   /** Nach engine.unlock() aufrufen — baut die Effekt-Ketten an die Busse. */
   init() {
     const ctx = engine.ctx;
-    if (!ctx || this.delay) return;
+    if (!ctx || this.delayA) return;
 
     // Gemeinsame Rückführung beider Effekte — schließt bei "niemand hörbar"
     // (s. Kommentar oben), sonst identisch zu einer direkten Verbindung.
@@ -20270,28 +20328,59 @@ class MasterFX {
 
     // Delay-Zeit folgt dem Tempo (auch bei BPM vom Jam-Host) — einmalig
     // registriert, überlebt spätere flushTails()-Neuaufbauten unverändert
-    // (liest bei jedem Aufruf das JEWEILS aktuelle this.delay).
+    // (liest bei jedem Aufruf die JEWEILS aktuellen this.delayA/-B).
     transport.addListener({
       onTransport: (ev) => { if (ev === 'bpm') this.#applyDelayTime(); },
     });
   }
 
-  /** Delay: Bus → Delay → Ton-Filter → (Feedback zurück | Level → Return) */
+  /**
+   * Delay: Bus → delayA → Filter A ─┬→ Level → Return
+   *                                 └→ Feedback → delayB → Filter B ─┬→ Level → Return
+   *                                                                  └→ Feedback → delayA → …
+   * Zwei Verzögerungsleitungen im Kreuz-Feedback statt einer einzelnen --
+   * exakt dieselbe Topologie wie DEFS.filterDelay in inserts.js (s. dortiger
+   * Kommentar für die ausführliche Herleitung/den Äquivalenzbeweis). Bei
+   * swing=50 (Default) sind beide Zeiten identisch, mathematisch GENAU das
+   * alte Einzelleitungs-Delay (jedes Echo durchläuft dieselbe Anzahl Filter-/
+   * Feedback-Stufen wie zuvor, nur auf zwei Knoten verteilt) -- erst ein
+   * Swing-Wert über 50 versetzt delayB gegenüber delayA, wodurch sich die
+   * Abstände aufeinanderfolgender Wiederholungen automatisch abwechseln,
+   * ganz ohne eigenes Scheduling. Weichbegrenzer (wie beim Filter Delay)
+   * neu dazugekommen, weil die Kreuz-Feedback-Topologie anders reagiert als
+   * die alte Einzelschleife -- ohne ihn wäre das bisher unbegrenzt sichere
+   * Feedback von bis zu 0.85 hier nicht mehr automatisch garantiert sicher.
+   */
   #buildDelayChain(ctx) {
-    this.delay = ctx.createDelay(4); // reicht bis 1/2 bei 40 BPM (3 s)
-    this.toneFilter = ctx.createBiquadFilter();
-    this.toneFilter.type = 'lowpass';
-    this.toneFilter.frequency.value = this.params.tone;
-    this.fb = ctx.createGain();
-    this.fb.gain.value = this.params.feedback;
+    this.delayA = ctx.createDelay(4); // reicht bis 1/2 bei 40 BPM (3 s)
+    this.delayB = ctx.createDelay(4);
+    this.filterA = ctx.createBiquadFilter();
+    this.filterB = ctx.createBiquadFilter();
+    for (const f of [this.filterA, this.filterB]) {
+      f.type = 'lowpass';
+      f.frequency.value = this.params.tone;
+    }
+    this.fbA = ctx.createGain();
+    this.fbB = ctx.createGain();
+    this.fbA.gain.value = this.params.feedback;
+    this.fbB.gain.value = this.params.feedback;
+    this.clipA = ctx.createWaveShaper();
+    this.clipB = ctx.createWaveShaper();
+    const clipCurve = makeFeedbackClipCurve();
+    this.clipA.curve = clipCurve;
+    this.clipB.curve = clipCurve;
+    this.clipA.oversample = '2x';
+    this.clipB.oversample = '2x';
     this.delayOut = ctx.createGain();
     this.delayOut.gain.value = this.params.delayLevel;
 
-    engine.delayBus.connect(this.delay);
-    this.delay.connect(this.toneFilter);
-    this.toneFilter.connect(this.fb);
-    this.fb.connect(this.delay);
-    this.toneFilter.connect(this.delayOut);
+    engine.delayBus.connect(this.delayA);
+    this.delayA.connect(this.filterA);
+    this.filterA.connect(this.delayOut);
+    this.filterA.connect(this.fbA).connect(this.clipA).connect(this.delayB);
+    this.delayB.connect(this.filterB);
+    this.filterB.connect(this.delayOut);
+    this.filterB.connect(this.fbB).connect(this.clipB).connect(this.delayA);
     this.delayOut.connect(this.returnGate);
     this.#applyDelayTime();
   }
@@ -20326,16 +20415,19 @@ class MasterFX {
    * disconnect() auf bereits ersetzten Knoten.
    */
   flushTails() {
-    if (!this.delay) return; // init() noch nicht gelaufen
+    if (!this.delayA) return; // init() noch nicht gelaufen
     const ctx = engine.ctx;
     clearTimeout(this.#flushTimer);
     this.returnGate.gain.cancelScheduledValues(engine.now);
     this.returnGate.gain.setTargetAtTime(0, engine.now, 0.008);
     this.#flushTimer = setTimeout(() => {
       this.#flushTimer = null;
-      this.delay.disconnect(); this.toneFilter.disconnect();
-      this.fb.disconnect(); this.delayOut.disconnect();
-      engine.delayBus.disconnect(this.delay);
+      this.delayA.disconnect(); this.delayB.disconnect();
+      this.filterA.disconnect(); this.filterB.disconnect();
+      this.fbA.disconnect(); this.fbB.disconnect();
+      this.clipA.disconnect(); this.clipB.disconnect();
+      this.delayOut.disconnect();
+      engine.delayBus.disconnect(this.delayA);
       engine.reverbBus.disconnect(this.reverbInsert.input);
       this.reverbInsert.dispose(); this.revOut.disconnect();
       this.#buildDelayChain(ctx);
@@ -20347,10 +20439,17 @@ class MasterFX {
     }, 60);
   }
 
+  /** delayA bleibt auf der geraden, taktbezogenen Zeit; delayB bekommt bei
+   *  swing>50 zusätzlich einen festen Versatz (dieselbe Formel wie
+   *  shuffleTime()/DEFS.filterDelay) -- s. Kommentar bei #buildDelayChain
+   *  für die Herleitung, wieso das automatisch alternierende Wieder-
+   *  holungsabstände ergibt. */
   #applyDelayTime() {
-    if (!this.delay) return;
-    const t = transport.stepDuration * this.params.delaySteps;
-    this.delay.delayTime.setTargetAtTime(Math.min(4, t), engine.now, 0.03);
+    if (!this.delayA) return;
+    const straight = Math.min(4, transport.stepDuration * this.params.delaySteps);
+    const shift = this.params.swing > 50 ? (this.params.swing - 50) / 50 * transport.stepDuration : 0;
+    this.delayA.delayTime.setTargetAtTime(straight, engine.now, 0.03);
+    this.delayB.delayTime.setTargetAtTime(Math.min(4, straight + shift), engine.now, 0.03);
   }
 
   /* ---------- Insert-FX (Master-Bus) ---------- */
@@ -20458,8 +20557,15 @@ class MasterFX {
     const t = engine.now;
     switch (key) {
       case 'delaySteps': this.#applyDelayTime(); break;
-      case 'feedback':   this.fb?.gain.setTargetAtTime(val, t, 0.02); break;
-      case 'tone':       this.toneFilter?.frequency.setTargetAtTime(val, t, 0.02); break;
+      case 'swing':      this.#applyDelayTime(); break;
+      case 'feedback':
+        this.fbA?.gain.setTargetAtTime(val, t, 0.02);
+        this.fbB?.gain.setTargetAtTime(val, t, 0.02);
+        break;
+      case 'tone':
+        this.filterA?.frequency.setTargetAtTime(val, t, 0.02);
+        this.filterB?.frequency.setTargetAtTime(val, t, 0.02);
+        break;
       case 'delayLevel': this.delayOut?.gain.setTargetAtTime(val, t, 0.02); break;
       case 'revLevel':   this.revOut?.gain.setTargetAtTime(val, t, 0.02); break;
       case 'revSize':    this.reverbInsert?.setParam('size', val); break;
@@ -20473,10 +20579,12 @@ class MasterFX {
   deserialize(state) {
     if (!state) return;
     Object.assign(this.params, state);
-    if (this.delay) {
+    if (this.delayA) {
       this.#applyDelayTime();
-      this.fb.gain.value = this.params.feedback;
-      this.toneFilter.frequency.value = this.params.tone;
+      this.fbA.gain.value = this.params.feedback;
+      this.fbB.gain.value = this.params.feedback;
+      this.filterA.frequency.value = this.params.tone;
+      this.filterB.frequency.value = this.params.tone;
       this.delayOut.gain.value = this.params.delayLevel;
       this.revOut.gain.value = this.params.revLevel;
       // Geklemmt statt direkt übernommen -- ein VOR diesem Umbau gespeichertes
@@ -20522,6 +20630,7 @@ class MasterFX {
           <x-knob label="Feedb." min="0" max="0.85" value="0.45" data-p="feedback"></x-knob>
           <x-knob label="Tone" min="500" max="12000" value="4500" curve="log" unit="Hz" data-p="tone"></x-knob>
           <x-knob label="Level" min="0" max="1" value="0.5" data-p="delayLevel"></x-knob>
+          <x-knob label="Swing" min="50" max="75" value="50" unit="%" data-p="swing"></x-knob>
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Reverb</span>

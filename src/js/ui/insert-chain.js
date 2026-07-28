@@ -601,7 +601,9 @@ export function renderInsertChain(listEl, owner) {
       // ohne dass es wirkt), blendet ihn eine gefilterte Knob-Liste
       // komplett aus, solange division nicht "free" ist.
       const synced = insert.params.division !== 'free';
-      const delayKnobsHtml = paramDefs.filter((d) => d.key !== 'time' || !synced).map(knobHtml).join('');
+      const delayKnobsHtml = paramDefs
+        .filter((d) => (d.key !== 'time' || !synced) && (d.key !== 'swing' || synced))
+        .map(knobHtml).join('');
       bodyHtml = `
         <div class="seg">
           ${DELAY_SYNC_BUTTONS.map((s) => `
