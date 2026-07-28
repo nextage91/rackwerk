@@ -251,7 +251,7 @@
   <!-- ===== Tutorial (einmalig beim allerersten Start, danach jederzeit
        über "Show Tutorial" im Projects-Sheet erneut aufrufbar) ===== -->
   <div class="sheet" id="onboarding-sheet" hidden>
-    <div class="sheet__backdrop" data-close></div>
+    <div class="sheet__backdrop"></div>
     <div class="sheet__panel" role="dialog" aria-label="How RackWerk works">
       <div class="sheet__grip"></div>
       <div class="tut__head">
@@ -259,11 +259,10 @@
         <span class="tut__count" data-tut-count>1/9</span>
       </div>
       <p class="tut__body" data-tut-body></p>
-      <div class="tut__dots" data-tut-dots></div>
       <div class="tut__nav">
-        <button class="m-btn" data-tut-back>◀ Back</button>
-        <button class="m-btn m-btn--wide" data-tut-next>Next ▶</button>
-        <button class="m-btn m-btn--wide" data-tut-done data-close hidden>Got it</button>
+        <button class="m-btn" data-tut-skip>Skip Tour</button>
+        <button class="m-btn m-btn--wide" data-tut-next>Start ▶</button>
+        <button class="m-btn m-btn--wide" data-tut-done hidden>Finish</button>
       </div>
     </div>
   </div>

@@ -395,35 +395,63 @@ button {
   color: var(--ink-dim);
 }
 .tut__body b { color: var(--lcd-ink); }
-.tut__dots {
-  display: flex;
-  justify-content: center;
-  gap: 2px;
-  margin-bottom: 12px;
-}
-/* Grössere unsichtbare Tippfläche (28px) um den kleinen sichtbaren Punkt
-   (::before, 7px) -- ein reiner .m-btn wäre mit min-width:var(--tap-min)
-   viel zu breit für 9 Punkte in einer Reihe auf einem schmalen Handy. */
-.tut__dot {
-  position: relative;
-  width: 28px; height: 28px;
-  min-width: 0; min-height: 0;
-  padding: 0;
-  background: none;
-  box-shadow: none;
-}
-.tut__dot::before {
-  content: "";
-  position: absolute;
-  top: 50%; left: 50%;
-  width: 7px; height: 7px;
-  margin: -3.5px 0 0 -3.5px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-}
-.tut__dot.is-active::before { background: var(--lcd-ink); }
 .tut__nav { display: flex; gap: 8px; }
-.tut__nav [data-tut-back] { flex: 0 0 auto; min-width: 88px; }
+.tut__nav [data-tut-skip] { flex: 0 0 auto; min-width: 88px; }
+
+/* ---- Interaktive Tour: Spotlight + Sprechblase (main.js#wireOnboardingUI) ----
+   Über allem (Sheets z-index:50, Machine-Focus z-index:55, Unlock z-index:100),
+   damit die reale Ziel-Aktion auch bei geöffnetem Mixer/Sampler/Machine-Editor
+   sichtbar bleibt. box-shadow-Trick statt einer echten Ausstanzung: die
+   riesige, transparente "Lochkante" dunkelt alles AUSSER dem Zielrechteck ab,
+   ohne Klicks dort zu blockieren (pointer-events:none). */
+.tut-spotlight {
+  position: fixed;
+  z-index: 200;
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.68);
+  outline: 2px solid var(--lcd-ink);
+  outline-offset: 2px;
+  pointer-events: none;
+  transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease;
+}
+.tut-spotlight[hidden] { display: none; }
+.tut-callout {
+  position: fixed;
+  z-index: 201;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  border: 1px solid var(--ink-faint);
+  box-shadow: 0 8px 28px rgba(0,0,0,.5);
+}
+.tut-callout[hidden] { display: none; }
+.tut-callout__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.tut-callout__count {
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.tut-callout__skip {
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  font-size: 12px;
+  padding: 4px;
+  min-width: 0; min-height: 0;
+  box-shadow: none;
+  text-decoration: underline;
+}
+.tut-callout__title { margin: 0 0 4px; font-size: 15px; }
+.tut-callout__body { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
+.tut-callout__body b { color: var(--lcd-ink); }
 
 /* ===================== Audio-Unlock ===================== */
 .unlock {
