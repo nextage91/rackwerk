@@ -27,4 +27,13 @@ export const undo = {
     entry.run();
   },
   onChange(fn) { listeners.add(fn); },
+  /** Slot ohne Ausführen des Revert-Callbacks leeren -- für Grenzfälle, wo
+   *  der bestehende Eintrag auf Zustand zeigt, der gerade verworfen wird
+   *  (z. B. Sandbox-Session des interaktiven Tutorials), ein "Undo" dort
+   *  also ohnehin ins Leere liefe bzw. Falsches wiederherstellen würde. */
+  clear() {
+    if (!last) return;
+    last = null;
+    notify();
+  },
 };

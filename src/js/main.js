@@ -17,15 +17,25 @@ import { masterFX } from './core/fx.js';
 import { song } from './core/song.js';
 import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
-import { Rack } from './rack/rack.js';
+import { Rack, REGISTRY } from './rack/rack.js';
 import { initJamView, renderJamView, stopAllClips } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
+const SAMPLER_CLASS = REGISTRY.find((M) => M.meta.type === 'sampler');
 
 /** Öffnen-Funktionen für Mix/Song/Jam, von wireMixerUI/wireSongUI/
  *  wireJamViewUI befüllt -- die Bottom-Bar (wireBottomBar) ruft sie auf,
  *  ohne die jeweilige Sheet-Logik zu duplizieren. */
 const modeOpen = {};
+
+/** Während des interaktiven Tutorials (s. wireOnboardingUI) läuft eine
+ *  eigene Wegwerf-Session im selben `rack` -- Autosave (boot()) UND das
+ *  Projekte-Sheet (wireProjectUI) müssen das wissen, um NICHT versehentlich
+ *  Demo-Inhalt über die echte Session zu schreiben (Autosave-Slot bzw.
+ *  ein benanntes gespeichertes Projekt). Modulweites Flag statt Parameter-
+ *  Durchreichen, weil beide Stellen unabhängig voneinander in main.js
+ *  verdrahtet werden. */
+let tutorialActive = false;
 
 /* ---------- 1) Audio-Unlock (Pflicht-Geste auf iOS/Android) ---------- */
 $('#btn-unlock').addEventListener('click', async () => {
@@ -126,7 +136,7 @@ function boot() {
   wireJamViewUI();
   wireBottomBar(); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
   wireUndoUI();
-  wireOnboardingUI();
+  wireOnboardingUI(rack);
 
   // Per Kamera-Scan geöffnet? (#jam=Code in der URL) → direkt beitreten.
   // Hash sofort entfernen, damit ein Reload nicht erneut beitritt.
@@ -137,8 +147,11 @@ function boot() {
     jam.joinWithCode(jamCode[1]);
   }
 
-  // Autosave: alle 3 s den kompletten Zustand sichern
+  // Autosave: alle 3 s den kompletten Zustand sichern -- pausiert während
+  // der Tutorial-Sandbox (s. tutorialActive), sonst würde die Wegwerf-Demo-
+  // Session den echten Autosave-Slot überschreiben.
   setInterval(() => {
+    if (tutorialActive) return;
     try {
       store.set('autosave', JSON.stringify(serializeProject(rack)));
     } catch (err) {
@@ -164,6 +177,17 @@ function wireProjectUI(rack) {
   // wiederhergestellt hatte (Nutzer-Feedback, s. Chat).
   nameInput.value = store.get('currentProjectName') ?? '';
 
+  // Während der Tutorial-Sandbox zeigt `rack` Demo-Inhalt statt der echten
+  // Session (s. tutorialActive) -- Speichern/Laden/Import/Export hier
+  // gesperrt, sonst könnte Speichern versehentlich ein echtes gespeichertes
+  // Projekt mit Demo-Daten überschreiben (Löschen bestehender Projekte
+  // bleibt erlaubt, betrifft nur den Store, nicht den Sandbox-Inhalt).
+  const blockedDuringTutorial = () => {
+    if (!tutorialActive) return false;
+    showHintToast('Finish the tour first — Save/Load is disabled during the demo.');
+    return true;
+  };
+
   const refreshList = () => {
     list.innerHTML = '';
     const names = store.keys()
@@ -182,6 +206,7 @@ function wireProjectUI(rack) {
         <button class="project__delete" aria-label="Delete project">✕</button>
       `;
       item.querySelector('.project__load').addEventListener('click', () => {
+        if (blockedDuringTutorial()) return;
         // Snapshot der laufenden Session VOR dem Laden -- loadProject()
         // leert das Rack sofort (rack.clear()); scheitert das Parsen/
         // Deserialisieren mittendrin, bliebe ohne Rollback ein halb
@@ -216,6 +241,7 @@ function wireProjectUI(rack) {
   });
 
   $('#btn-save-project').addEventListener('click', () => {
+    if (blockedDuringTutorial()) return;
     const name = nameInput.value.trim() || 'Untitled';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
     store.set('currentProjectName', name);
@@ -224,6 +250,7 @@ function wireProjectUI(rack) {
   });
 
   $('#btn-new-session').addEventListener('click', () => {
+    if (blockedDuringTutorial()) return;
     // Verwirft die aktuelle Session (Autosave überschreibt sie gleich) —
     // deshalb einmal nachfragen.
     if (!window.confirm('Start a new session? The current setup will be ' +
@@ -275,6 +302,7 @@ function wireProjectUI(rack) {
   };
 
   $('#btn-export').addEventListener('click', async () => {
+    if (blockedDuringTutorial()) return;
     const name = (nameInput.value.trim() || 'session').replace(/[^\wäöüÄÖÜß-]+/g, '_');
     const data = serializeProject(rack);
     await embedSamplerSamples(data);
@@ -289,6 +317,7 @@ function wireProjectUI(rack) {
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
     if (!file) return;
+    if (blockedDuringTutorial()) { fileInput.value = ''; return; }
     const reader = new FileReader();
     reader.onload = () => {
       // Snapshot VOR dem Import -- bei "replace" leert loadProject() das
@@ -1112,74 +1141,308 @@ function wireUndoUI() {
   });
 }
 
-/* ---------- Tutorial-Sheet (einmalig + jederzeit erneut aufrufbar) ---------- */
-/** Mehrschrittiger Überblick über die wichtigsten Bereiche der App --
- *  ergänzt die kontextuellen Einzel-Hinweise (REC, Long-Press, …), die
- *  erst im jeweiligen Moment greifen, um eine Gesamtübersicht direkt am
- *  Anfang. Reiner Text+Klick-Ablauf (Weiter/Zurück/Punkte), kein Zeigen
- *  auf echte UI-Elemente -- das würde bedeuten, im Hintergrund gleich-
- *  zeitig die jeweils passende Ansicht (Mix/Song/Jam/...) zu öffnen, ein
- *  deutlich grösserer Umbau für wenig Zusatznutzen gegenüber kurzer Text-
- *  Erklärung pro Schritt. */
-const TUTORIAL_STEPS = [
-  { title: 'Welcome to RackWerk', body: 'Build a chain of synths, drum machines, samplers and effects. Tap <b>+ Add Machine</b> in the Rack to get started.' },
-  { title: 'Step Sequencer', body: '<b>Tap</b> a step to turn it on or off. <b>Drag</b> a step up/down to set its pitch, or switch to <b>Roll</b> view for a full piano-roll grid.' },
-  { title: 'Sampler', body: '<b>Hold</b> a pad to record from the mic or load a file. Hold a loaded pad again to trim it, shape its envelope/filter, or clear it. Save/load whole kits from the Sampler panel.' },
-  { title: 'REC', body: '<b>REC</b> arms two things at once: turn a knob to record its movement as automation, or play a note/pad to write it live into the pattern.' },
-  { title: 'Pattern Bank', body: 'Each machine has 4 patterns (A–D). <b>Hold</b> a letter for more options — copy, paste, or turn it into a Jam clip.' },
-  { title: 'Mix', body: 'The <b>Mix</b> view shows level, pan, sends and mute/solo for every machine at a glance.' },
-  { title: 'Song', body: '<b>Song</b> records pattern switches over time — arm it, then switch patterns while the transport plays to build an arrangement.' },
-  { title: 'Jam', body: '<b>Jam</b> launches clips live per track, with an X/Y pad for hands-on macro control while performing.' },
-  { title: 'Projects', body: 'Save your work by name anytime from here. RackWerk also remembers your last session automatically, so Save just updates it.' },
+/* ---------- Tutorial: interaktive Tour in einer Wegwerf-Sandbox ----------
+ * Statt einer reinen Text-Übersicht zeigt die Tour jetzt auf echte
+ * UI-Elemente (Spotlight + Sprechblase) und verlangt die echte Aktion
+ * (antippen, Modus wechseln, …), bevor es weitergeht -- "einmal durch die
+ * App navigieren" statt nur lesen (s. Chat). Damit dabei NIE die echte
+ * Session riskiert wird, läuft die Tour auf einer eigenen, temporären
+ * Besetzung desselben `rack`-Objekts (BeatBox + SubSynth + Sampler, s.
+ * enterSandbox) -- ein zweites Rack-Objekt ist nicht möglich, Rack ist an
+ * die festen DOM-Container gebunden (s. rack.js). Backup/Restore nutzt
+ * denselben serializeProject/loadProject-Weg wie das Laden im
+ * Projects-Sheet. */
+const TOUR_STEPS = [
+  {
+    title: 'Welcome to RackWerk',
+    body: 'This short tour walks you through the app step by step, on a throwaway demo setup — nothing you do here touches your own project. Perform the highlighted action on each screen to move on.',
+  },
+  {
+    title: 'Step Sequencer',
+    body: 'Every machine has a step pattern. <b>Tap any step</b> in the grid to turn it on.',
+    run(ctx) {
+      const panel = ctx.openMachine(0); // BeatBox
+      const grid = panel?.querySelector('.stepseq__grid');
+      if (!grid) return null;
+      return { el: grid, container: grid, selector: '.cell', eventType: 'pointerdown' };
+    },
+  },
+  {
+    title: 'Sampler',
+    body: '<b>Tap any pad</b> to trigger it. Hold a pad to record or load a sample, then hold it again to trim/shape it or clear it.',
+    run(ctx) {
+      const panel = ctx.openMachine(2); // Sampler (nach BeatBox+SubSynth angehängt)
+      const pads = panel?.querySelector('.pads');
+      if (!pads) return null;
+      return { el: pads, container: pads, selector: '.pad', eventType: 'pointerdown' };
+    },
+  },
+  {
+    title: 'REC',
+    body: '<b>Tap REC</b> to arm it — turn a knob to record automation, or play a note/pad to write it live into the pattern.',
+    run(ctx) {
+      ctx.closeAllSheets();
+      const el = $('#btn-rec');
+      return { el, container: el, selector: '#btn-rec', eventType: 'click' };
+    },
+  },
+  {
+    title: 'Pattern Bank',
+    body: 'Each machine has 4 patterns (A–D). <b>Tap a letter</b> to switch — hold one for copy/paste/Jam-clip options.',
+    run(ctx) {
+      const panel = ctx.openMachine(0); // BeatBox
+      const bank = panel?.querySelector('.patbank');
+      if (!bank) return null;
+      return { el: bank, container: bank, selector: '.patbank__btn', eventType: 'click' };
+    },
+  },
+  {
+    title: 'Mix',
+    body: '<b>Tap Mix</b> to see level, pan, sends and mute/solo for every machine at a glance.',
+    run(ctx) {
+      ctx.closeAllSheets();
+      const el = document.querySelector('.bb-mode[data-mode="mix"]');
+      return { el, container: el, selector: '.bb-mode[data-mode="mix"]', eventType: 'click' };
+    },
+  },
+  {
+    title: 'Song',
+    body: '<b>Tap Song</b> — it records pattern switches over time so you can build an arrangement.',
+    run(ctx) {
+      ctx.closeAllSheets();
+      const el = document.querySelector('.bb-mode[data-mode="song"]');
+      return { el, container: el, selector: '.bb-mode[data-mode="song"]', eventType: 'click' };
+    },
+  },
+  {
+    title: 'Jam',
+    body: '<b>Tap Jam</b> — launch clips live per track, with an X/Y pad for hands-on macro control while performing.',
+    run(ctx) {
+      ctx.closeAllSheets();
+      const el = document.querySelector('.bb-mode[data-mode="jam"]');
+      return { el, container: el, selector: '.bb-mode[data-mode="jam"]', eventType: 'click' };
+    },
+  },
+  {
+    title: 'Projects',
+    body: '<b>Tap PRJ</b> — this is where you save your work by name anytime.',
+    run(ctx) {
+      ctx.closeAllSheets();
+      const el = $('#btn-projects');
+      return { el, container: el, selector: '#btn-projects', eventType: 'click' };
+    },
+    isLast: true,
+  },
 ];
 
-function wireOnboardingUI() {
+function wireOnboardingUI(rack) {
   const sheet = $('#onboarding-sheet');
   const titleEl = sheet.querySelector('[data-tut-title]');
   const bodyEl = sheet.querySelector('[data-tut-body]');
   const countEl = sheet.querySelector('[data-tut-count]');
-  const dotsEl = sheet.querySelector('[data-tut-dots]');
-  const backBtn = sheet.querySelector('[data-tut-back]');
   const nextBtn = sheet.querySelector('[data-tut-next]');
   const doneBtn = sheet.querySelector('[data-tut-done]');
+  const skipBtn = sheet.querySelector('[data-tut-skip]');
 
-  dotsEl.innerHTML = TUTORIAL_STEPS.map((_, i) =>
-    `<button type="button" class="tut__dot" data-dot="${i}" aria-label="Step ${i + 1}"></button>`).join('');
-  const dots = [...dotsEl.querySelectorAll('[data-dot]')];
+  // Spotlight (abgedunkelter Hintergrund mit "Loch" ums Ziel) + Sprechblase
+  // (Titel/Text + Skip) -- über ALLEM (Sheets z-index:50, Machine-Focus
+  // z-index:55), damit die reale Aktion auch bei geöffnetem Mixer/Sampler/…
+  // sichtbar bleibt. Bewusst pointer-events:none auf dem Spotlight selbst:
+  // eine echte Ausstanzung bräuchte eine zweite Maske/SVG-Clip-Path für
+  // wenig zusätzlichen Nutzen -- die Sandbox macht ein Daneben-Tippen ohnehin
+  // folgenlos.
+  const spotlight = document.createElement('div');
+  spotlight.className = 'tut-spotlight';
+  spotlight.hidden = true;
+  const callout = document.createElement('div');
+  callout.className = 'tut-callout';
+  callout.hidden = true;
+  callout.innerHTML = `
+    <div class="tut-callout__head">
+      <span class="tut-callout__count" data-cnt></span>
+      <button type="button" class="tut-callout__skip" data-skip>Skip Tour ✕</button>
+    </div>
+    <h3 class="tut-callout__title" data-title></h3>
+    <p class="tut-callout__body" data-body></p>
+  `;
+  document.body.append(spotlight, callout);
 
   let step = 0;
-  const render = () => {
-    const s = TUTORIAL_STEPS[step];
+  let cleanupStep = null;
+  let posTimer = null;
+  let calloutTarget = null;
+  let tourBackup = null;
+
+  const stopPositioning = () => { clearInterval(posTimer); posTimer = null; };
+
+  const positionOverlay = () => {
+    if (!calloutTarget || !document.body.contains(calloutTarget)) return;
+    const r = calloutTarget.getBoundingClientRect();
+    const pad = 6;
+    spotlight.style.left = `${Math.max(0, r.left - pad)}px`;
+    spotlight.style.top = `${Math.max(0, r.top - pad)}px`;
+    spotlight.style.width = `${r.width + pad * 2}px`;
+    spotlight.style.height = `${r.height + pad * 2}px`;
+
+    const vh = window.innerHeight;
+    const below = r.bottom < vh / 2;
+    if (below) {
+      callout.style.top = `${r.bottom + 14}px`;
+      callout.style.bottom = '';
+    } else {
+      callout.style.top = '';
+      callout.style.bottom = `${vh - r.top + 14}px`;
+    }
+  };
+
+  const closeAllSheets = () => {
+    $('#project-sheet').hidden = true;
+    $('#mixer-sheet').hidden = true;
+    $('#song-sheet').hidden = true;
+    $('#jam-sheet').hidden = true;
+    $('#machine-sheet').hidden = true;
+    for (const view of rack.views.values()) view.overlay.hidden = true;
+  };
+
+  const openMachine = (idx) => {
+    const m = rack.machines[idx];
+    const view = m && rack.views.get(m);
+    if (!view) return null;
+    closeAllSheets();
+    view.overlay.hidden = false;
+    view.panel.scrollTop = 0;
+    return view.panel;
+  };
+
+  const ctx = { closeAllSheets, openMachine };
+
+  const endInteractiveStep = () => {
+    cleanupStep?.();
+    cleanupStep = null;
+    stopPositioning();
+    calloutTarget = null;
+    spotlight.hidden = true;
+    callout.hidden = true;
+  };
+
+  const armAction = (container, selector, eventType, onDone) => {
+    const handler = (e) => {
+      if (!e.target.closest(selector)) return;
+      container.removeEventListener(eventType, handler);
+      onDone();
+    };
+    // Bewusst Bubble-Phase (kein capture:true): bei Zielen, die selbst
+    // schon einen Klick-Handler haben (REC, Mix/Song/Jam, Projects), MUSS
+    // der echte Handler zuerst laufen -- sonst würde z. B. am letzten
+    // Schritt finishTour() (schliesst alle Sheets) VOR dem Öffnen des
+    // Projects-Sheets laufen und dieses gleich wieder zulassen. Capture-
+    // Phase-Listener feuern browserübergreifend IMMER vor Bubble-Phase-
+    // Listenern auf demselben Ziel, unabhängig von der Registrierreihen-
+    // folge (empirisch geprüft) -- genau das würde hier die Reihenfolge
+    // kaputt machen.
+    container.addEventListener(eventType, handler);
+    return () => container.removeEventListener(eventType, handler);
+  };
+
+  const showWelcome = () => {
+    endInteractiveStep();
+    closeAllSheets();
+    const s = TOUR_STEPS[0];
     titleEl.textContent = s.title;
     bodyEl.innerHTML = s.body;
-    countEl.textContent = `${step + 1}/${TUTORIAL_STEPS.length}`;
-    dots.forEach((d, i) => d.classList.toggle('is-active', i === step));
-    backBtn.disabled = step === 0;
-    const last = step === TUTORIAL_STEPS.length - 1;
-    nextBtn.hidden = last;
-    doneBtn.hidden = !last;
-  };
-  const goTo = (i) => {
-    step = Math.min(TUTORIAL_STEPS.length - 1, Math.max(0, i));
-    render();
+    countEl.textContent = `1/${TOUR_STEPS.length}`;
+    nextBtn.hidden = false;
+    doneBtn.hidden = true;
+    sheet.hidden = false;
   };
 
-  backBtn.addEventListener('click', () => goTo(step - 1));
-  nextBtn.addEventListener('click', () => goTo(step + 1));
-  dots.forEach((d, i) => d.addEventListener('click', () => goTo(i)));
-  sheet.querySelectorAll('[data-close]').forEach((el) =>
-    el.addEventListener('click', () => { sheet.hidden = true; }));
+  const showStep = (i) => {
+    endInteractiveStep();
+    sheet.hidden = true;
+    closeAllSheets();
+    const s = TOUR_STEPS[i];
+    const found = s.run(ctx);
+    step = i;
+    if (!found?.el) { advance(); return; } // Ziel nicht gefunden (z. B. Layout-Sonderfall) -- nicht hängenbleiben
+    calloutTarget = found.el;
+    callout.querySelector('[data-cnt]').textContent = `${i + 1}/${TOUR_STEPS.length}`;
+    callout.querySelector('[data-title]').textContent = s.title;
+    callout.querySelector('[data-body]').innerHTML = s.body;
+    spotlight.hidden = false;
+    callout.hidden = false;
+    positionOverlay();
+    posTimer = setInterval(positionOverlay, 200);
+    // Kein "smooth" -- eine noch laufende Scroll-Animation würde die
+    // Ziel-Koordinaten für einen Tipp kurzzeitig verschieben (das Element
+    // "läuft vor dem Finger davon"); sofortiges Springen ist hier
+    // vorhersagbarer als der optische Komfort einer Animation.
+    found.el.scrollIntoView?.({ block: 'center' });
+    cleanupStep = armAction(found.container, found.selector, found.eventType, () => {
+      if (s.isLast) { finishTour(); return; }
+      advance();
+    });
+  };
 
-  render();
-  hintOnce('onboarding-sheet', () => { sheet.hidden = false; });
+  const advance = () => {
+    const next = step + 1;
+    if (next >= TOUR_STEPS.length) { finishTour(); return; }
+    showStep(next);
+  };
+
+  const finishTour = () => {
+    endInteractiveStep();
+    closeAllSheets();
+    step = TOUR_STEPS.length - 1;
+    titleEl.textContent = 'All done!';
+    bodyEl.innerHTML = 'You’ve toured every part of RackWerk. Tap Finish to leave the demo and return to your own project.';
+    countEl.textContent = `${TOUR_STEPS.length}/${TOUR_STEPS.length}`;
+    nextBtn.hidden = true;
+    doneBtn.hidden = false;
+    sheet.hidden = false;
+  };
+
+  // ---- Sandbox-Lebenszyklus ----
+  const enterSandbox = () => {
+    tourBackup = serializeProject(rack);
+    tutorialActive = true;
+    undo.clear(); // kein Undo-Eintrag darf über die Sandbox-Grenze hinweg überleben
+    newProject(rack); // Werkseinstellung: BeatBox + SubSynth
+    rack.addMachine(SAMPLER_CLASS); // + Sampler, damit dieser Schritt immer etwas zum Antippen hat
+  };
+  const exitSandbox = () => {
+    if (!tutorialActive) return;
+    loadProject(rack, tourBackup);
+    tourBackup = null;
+    tutorialActive = false;
+    undo.clear();
+  };
+
+  const startTour = () => {
+    if (!tutorialActive) enterSandbox();
+    step = 0;
+    showWelcome();
+  };
+  const endTour = () => {
+    endInteractiveStep();
+    sheet.hidden = true;
+    exitSandbox();
+  };
+
+  nextBtn.addEventListener('click', () => showStep(1));
+  doneBtn.addEventListener('click', endTour);
+  skipBtn.addEventListener('click', endTour);
+  callout.querySelector('[data-skip]').addEventListener('click', endTour);
+
+  hintOnce('onboarding-sheet', () => startTour());
 
   // "Show Tutorial" im Projects-Sheet -- bewusst NICHT über hintOnce (das
   // Flag ist ja längst gesetzt, ein zweiter hintOnce()-Aufruf wäre also
-  // ein No-Op) -- öffnet stattdessen direkt, immer bei Schritt 1. Projects
-  // vorher schliessen, sonst lägen zwei volle .sheet-Overlays übereinander.
+  // ein No-Op) -- startet die Tour direkt. Läuft die Tour schon (z. B.
+  // versehentlicher Doppel-Tap), NICHT den Backup nochmal einfangen -- das
+  // würde sonst den aktuellen Demo-Zustand statt der echten Session als
+  // Rückkehrpunkt festschreiben.
   $('#btn-show-tutorial').addEventListener('click', () => {
     $('#project-sheet').hidden = true;
-    goTo(0);
-    sheet.hidden = false;
+    startTour();
   });
 }
