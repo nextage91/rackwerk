@@ -155,6 +155,15 @@ function wireProjectUI(rack) {
 
   $('#project-hint').hidden = store.persistent;
 
+  // Merkt sich, unter welchem Namen zuletzt gespeichert/geladen wurde --
+  // unabhängig vom Autosave (eigener, fester Speicherplatz, kennt keinen
+  // Namen) UND unabhängig vom Namensfeld selbst (nur eine DOM-Eigenschaft,
+  // beim Neuladen der Seite weg). Ohne das musste man nach jedem Neustart
+  // den Namen erneut eintippen, nur um das gewohnte Projekt zu
+  // überschreiben -- selbst wenn der Autosave denselben Inhalt schon
+  // wiederhergestellt hatte (Nutzer-Feedback, s. Chat).
+  nameInput.value = store.get('currentProjectName') ?? '';
+
   const refreshList = () => {
     list.innerHTML = '';
     const names = store.keys()
@@ -182,6 +191,7 @@ function wireProjectUI(rack) {
         try {
           loadProject(rack, JSON.parse(store.get(`project:${name}`)));
           nameInput.value = name;
+          store.set('currentProjectName', name);
           sheet.hidden = true;
         } catch (err) {
           console.error('Project could not be loaded:', err);
@@ -208,7 +218,9 @@ function wireProjectUI(rack) {
   $('#btn-save-project').addEventListener('click', () => {
     const name = nameInput.value.trim() || 'Untitled';
     store.set(`project:${name}`, JSON.stringify(serializeProject(rack)));
+    store.set('currentProjectName', name);
     refreshList();
+    showHintToast(`Saved: ${name}`, 2000);
   });
 
   $('#btn-new-session').addEventListener('click', () => {
@@ -218,6 +230,12 @@ function wireProjectUI(rack) {
       'discarded (unsaved changes will be lost).')) return;
     newProject(rack);
     nameInput.value = '';
+    // Bewusst gelöscht statt nur das Feld zu leeren: ohne das würde ein
+    // Reload direkt nach "New Session" den alten Namen wieder ins Feld
+    // zurückholen (s. oben) -- eine frische Session soll beim nächsten
+    // Speichern wieder nach einem Namen fragen, nicht versehentlich das
+    // vorherige Projekt überschreiben.
+    store.remove('currentProjectName');
     sheet.hidden = true;
   });
 
