@@ -1152,6 +1152,32 @@ function wireUndoUI() {
  * die festen DOM-Container gebunden (s. rack.js). Backup/Restore nutzt
  * denselben serializeProject/loadProject-Weg wie das Laden im
  * Projects-Sheet. */
+
+/** Winziges, synthetisches WAV (kurzer gedämpfter 440Hz-Blip, 8kHz mono) --
+ *  dient einzig als vorab geladenes Demo-Sample fürs Sampler-Pad in der
+ *  Sandbox (s. enterSandbox), damit der Sample-Editor-Schritt der Tour
+ *  wirklich etwas zum Editieren hat. `Sampler.assignRecording()` erwartet
+ *  einen echten dekodierbaren Audio-Blob (dieselbe Stelle, die auch eine
+ *  Mikro-Aufnahme verarbeitet) -- ein von Hand gebautes WAV ist dafür der
+ *  einfachste Weg, ganz ohne Mikro-Berechtigung oder Dateiauswahl. */
+function makeDemoSampleBlob() {
+  const sr = 8000;
+  const n = Math.round(sr * 0.15);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const view = new DataView(buf);
+  const writeStr = (offset, s) => { for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sr, true); view.setUint32(28, sr * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const s = Math.sin(2 * Math.PI * 440 * t) * Math.exp(-t * 12);
+    view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, s)) * 32767, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
 const TOUR_STEPS = [
   {
     title: 'Welcome to RackWerk',
@@ -1168,13 +1194,43 @@ const TOUR_STEPS = [
     },
   },
   {
+    // Jede Maschine öffnet ihre Vollansicht auf demselben Weg -- ein Tipp
+    // auf ihre Zeile im Rack. Am Sampler gezeigt (statt automatisch für den
+    // Nutzer geöffnet wie bei BeatBox oben), weil das die einzige Stelle in
+    // der Tour ist, an der diese grundlegende Navigation selbst geübt wird
+    // (s. Chat-Feedback).
     title: 'Sampler',
-    body: '<b>Tap any pad</b> to trigger it. Hold a pad to record or load a sample, then hold it again to trim/shape it or clear it.',
+    body: 'Every device opens its full view the same way — <b>tap its row in the Rack</b>. Try it on the Sampler.',
     run(ctx) {
-      const panel = ctx.openMachine(2); // Sampler (nach BeatBox+SubSynth angehängt)
-      const pads = panel?.querySelector('.pads');
-      if (!pads) return null;
-      return { el: pads, container: pads, selector: '.pad', eventType: 'pointerdown' };
+      ctx.closeAllSheets();
+      const row = ctx.rowFor(2); // Sampler (nach BeatBox+SubSynth angehängt)
+      if (!row) return null;
+      return { el: row, container: row, selector: '.rack-row', eventType: 'click' };
+    },
+    next: {
+      body: '<b>Tap any pad</b> to trigger it.',
+      run() {
+        const pads = document.querySelector('.machine-focus:not([hidden]) .pads');
+        if (!pads) return null;
+        return { el: pads, container: pads, selector: '.pad', eventType: 'pointerdown' };
+      },
+      // Dritte Phase: erst ein echtes Öffnen des Sample-Editors zeigt die
+      // eigentliche Klangformung (Trim/Hüllkurve/Filter), nicht nur den Pad-
+      // Tap (s. Chat-Feedback) -- die Sandbox lädt dafür in enterSandbox()
+      // vorab ein winziges Demo-Sample auf Pad 1, sonst gäbe es dort noch
+      // nichts zu editieren. `retry:true`: das Menü existiert erst NACH der
+      // Halten-Geste, deshalb wird alle 200ms erneut nachgeschaut, statt
+      // nur einmal zu prüfen und aufzugeben.
+      next: {
+        body: '<b>Hold the pad</b> to open its menu, then tap <b>✏️ Edit</b> to see the sample editor (trim, envelope, filter).',
+        retry: true,
+        run() {
+          const menu = document.querySelector('.pat-chip');
+          const editBtn = menu && [...menu.querySelectorAll('.pat-chip__btn')].find((b) => b.textContent.includes('Edit'));
+          if (!editBtn) return null;
+          return { el: editBtn, container: editBtn, selector: '.pat-chip__btn', eventType: 'click' };
+        },
+      },
     },
   },
   {
@@ -1232,6 +1288,17 @@ const TOUR_STEPS = [
         const list = $('#jam-list');
         if (!list) return null;
         return { el: list, container: list, selector: '.clip, .proto-clip', eventType: 'click' };
+      },
+      // Dritte Phase: Scenes sind der andere Kernteil von Jam (ganze
+      // Song-Abschnitte auf einen Tipp wiederherstellen), bisher in der Tour
+      // gar nicht gezeigt worden (s. Chat-Feedback).
+      next: {
+        body: 'Scenes remember which clip is playing on every track at once, so you can jump back to a whole song section with one tap. <b>Tap "+ Save Scene"</b> to save the current state as one.',
+        run() {
+          const btn = document.querySelector('#jam-scenes .jam-scene-chip--add');
+          if (!btn) return null;
+          return { el: btn, container: btn, selector: '.jam-scene-chip--add', eventType: 'click' };
+        },
       },
     },
   },
@@ -1326,7 +1393,15 @@ function wireOnboardingUI(rack) {
     return view.panel;
   };
 
-  const ctx = { closeAllSheets, openMachine };
+  /** DOM-Zeile einer Maschine im Rack -- fürs "Vollansicht per Rack-Tipp
+   *  öffnen"-Beispiel (s. TOUR_STEPS.Sampler), das den echten Zeilen-Klick
+   *  verlangt statt die Maschine wie sonst automatisch zu öffnen. */
+  const rowFor = (idx) => {
+    const m = rack.machines[idx];
+    return m && rack.views.get(m)?.row;
+  };
+
+  const ctx = { closeAllSheets, openMachine, rowFor };
 
   const endInteractiveStep = () => {
     cleanupStep?.();
@@ -1375,21 +1450,45 @@ function wireOnboardingUI(rack) {
     showPhase(TOUR_STEPS[i], TOUR_STEPS[i]);
   };
 
-  /** Ein Schritt kann aus mehreren Phasen bestehen (s. TOUR_STEPS.Jam.next):
-   *  z. B. erst die Jam-Ansicht öffnen, DANN einen echten Clip antippen --
-   *  beide zeigen denselben Zähler ("8/9"), nur Zieltext/Ziel-Element
-   *  wechseln zwischen den Phasen. */
+  const renderCalloutText = (s, phase) => {
+    callout.querySelector('[data-cnt]').textContent = `${step + 1}/${TOUR_STEPS.length}`;
+    callout.querySelector('[data-title]').textContent = s.title;
+    callout.querySelector('[data-body]').innerHTML = phase.body ?? s.body;
+  };
+
+  /** Ein Schritt kann aus mehreren Phasen bestehen (s. TOUR_STEPS.Jam/
+   *  Sampler .next): z. B. erst die Jam-Ansicht öffnen, DANN einen echten
+   *  Clip antippen -- alle Phasen zeigen denselben Zähler ("8/9"), nur
+   *  Zieltext/Ziel-Element wechseln zwischen ihnen. */
   const showPhase = (s, phase) => {
     endInteractiveStep();
+    attemptPhase(s, phase);
+  };
+
+  /** Von showPhase() einmal aufgerufen, danach von sich selbst erneut --
+   *  aber NUR im retry-Fall (phase.retry), wenn das Ziel erst nach einer
+   *  Geste entsteht, die nicht als DOM-Event abwartbar ist (z. B. das
+   *  Pad-Menü, das erst nach einer Halten-Geste erscheint, s. TOUR_STEPS.
+   *  Sampler). endInteractiveStep() läuft deshalb bewusst nur in
+   *  showPhase(), nicht hier -- sonst würde jeder Poll-Tick die gerade
+   *  gezeigte Sprechblase kurz verschwinden lassen. */
+  const attemptPhase = (s, phase) => {
     const found = phase.run(ctx);
-    if (!found?.el) { // Ziel nicht gefunden (z. B. Layout-Sonderfall) -- nicht hängenbleiben
+    if (!found?.el) {
+      if (phase.retry) {
+        renderCalloutText(s, phase);
+        callout.hidden = false;
+        spotlight.hidden = true;
+        posTimer = setTimeout(() => attemptPhase(s, phase), 200);
+        return;
+      }
+      // Ziel nicht gefunden und kein retry (z. B. Layout-Sonderfall) --
+      // nicht hängenbleiben, direkt weiter.
       if (phase.next) showPhase(s, phase.next); else advance();
       return;
     }
     calloutTarget = found.el;
-    callout.querySelector('[data-cnt]').textContent = `${step + 1}/${TOUR_STEPS.length}`;
-    callout.querySelector('[data-title]').textContent = s.title;
-    callout.querySelector('[data-body]').innerHTML = phase.body ?? s.body;
+    renderCalloutText(s, phase);
     spotlight.hidden = false;
     callout.hidden = false;
     positionOverlay();
@@ -1425,12 +1524,17 @@ function wireOnboardingUI(rack) {
   };
 
   // ---- Sandbox-Lebenszyklus ----
-  const enterSandbox = () => {
+  const enterSandbox = async () => {
     tourBackup = serializeProject(rack);
     tutorialActive = true;
     undo.clear(); // kein Undo-Eintrag darf über die Sandbox-Grenze hinweg überleben
     newProject(rack); // Werkseinstellung: BeatBox + SubSynth
-    rack.addMachine(SAMPLER_CLASS); // + Sampler, damit dieser Schritt immer etwas zum Antippen hat
+    const sampler = rack.addMachine(SAMPLER_CLASS); // + Sampler, damit dieser Schritt immer etwas zum Antippen hat
+    // Pad 1 bekommt vorab ein winziges Demo-Sample -- sonst gäbe es im
+    // Sample-Editor-Schritt (s. TOUR_STEPS.Sampler) nichts zum Editieren,
+    // "Hold pad -> Edit" braucht ein bereits geladenes Sample (s. sampler.js
+    // #openPadMenu, der Edit-Button existiert nur bei tr.buffer).
+    await sampler.assignRecording(0, makeDemoSampleBlob());
   };
   const exitSandbox = () => {
     if (!tutorialActive) return;
@@ -1440,8 +1544,8 @@ function wireOnboardingUI(rack) {
     undo.clear();
   };
 
-  const startTour = () => {
-    if (!tutorialActive) enterSandbox();
+  const startTour = async () => {
+    if (!tutorialActive) await enterSandbox();
     step = 0;
     showWelcome();
   };
