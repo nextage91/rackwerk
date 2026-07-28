@@ -1112,14 +1112,74 @@ function wireUndoUI() {
   });
 }
 
-/* ---------- Erste-Hilfe-Sheet (einmalig) ---------- */
-/** Kurzer Überblick über die wichtigsten Gesten, einmalig beim aller-
- *  ersten Start gezeigt (hintOnce-Flag) — ergänzt die kontextuellen
- *  Einzel-Hinweise (REC, Long-Press), die erst im jeweiligen Moment
- *  greifen, um eine Gesamtübersicht direkt am Anfang. */
+/* ---------- Tutorial-Sheet (einmalig + jederzeit erneut aufrufbar) ---------- */
+/** Mehrschrittiger Überblick über die wichtigsten Bereiche der App --
+ *  ergänzt die kontextuellen Einzel-Hinweise (REC, Long-Press, …), die
+ *  erst im jeweiligen Moment greifen, um eine Gesamtübersicht direkt am
+ *  Anfang. Reiner Text+Klick-Ablauf (Weiter/Zurück/Punkte), kein Zeigen
+ *  auf echte UI-Elemente -- das würde bedeuten, im Hintergrund gleich-
+ *  zeitig die jeweils passende Ansicht (Mix/Song/Jam/...) zu öffnen, ein
+ *  deutlich grösserer Umbau für wenig Zusatznutzen gegenüber kurzer Text-
+ *  Erklärung pro Schritt. */
+const TUTORIAL_STEPS = [
+  { title: 'Welcome to RackWerk', body: 'Build a chain of synths, drum machines, samplers and effects. Tap <b>+ Add Machine</b> in the Rack to get started.' },
+  { title: 'Step Sequencer', body: '<b>Tap</b> a step to turn it on or off. <b>Drag</b> a step up/down to set its pitch, or switch to <b>Roll</b> view for a full piano-roll grid.' },
+  { title: 'Sampler', body: '<b>Hold</b> a pad to record from the mic or load a file. Hold a loaded pad again to trim it, shape its envelope/filter, or clear it. Save/load whole kits from the Sampler panel.' },
+  { title: 'REC', body: '<b>REC</b> arms two things at once: turn a knob to record its movement as automation, or play a note/pad to write it live into the pattern.' },
+  { title: 'Pattern Bank', body: 'Each machine has 4 patterns (A–D). <b>Hold</b> a letter for more options — copy, paste, or turn it into a Jam clip.' },
+  { title: 'Mix', body: 'The <b>Mix</b> view shows level, pan, sends and mute/solo for every machine at a glance.' },
+  { title: 'Song', body: '<b>Song</b> records pattern switches over time — arm it, then switch patterns while the transport plays to build an arrangement.' },
+  { title: 'Jam', body: '<b>Jam</b> launches clips live per track, with an X/Y pad for hands-on macro control while performing.' },
+  { title: 'Projects', body: 'Save your work by name anytime from here. RackWerk also remembers your last session automatically, so Save just updates it.' },
+];
+
 function wireOnboardingUI() {
   const sheet = $('#onboarding-sheet');
+  const titleEl = sheet.querySelector('[data-tut-title]');
+  const bodyEl = sheet.querySelector('[data-tut-body]');
+  const countEl = sheet.querySelector('[data-tut-count]');
+  const dotsEl = sheet.querySelector('[data-tut-dots]');
+  const backBtn = sheet.querySelector('[data-tut-back]');
+  const nextBtn = sheet.querySelector('[data-tut-next]');
+  const doneBtn = sheet.querySelector('[data-tut-done]');
+
+  dotsEl.innerHTML = TUTORIAL_STEPS.map((_, i) =>
+    `<button type="button" class="tut__dot" data-dot="${i}" aria-label="Step ${i + 1}"></button>`).join('');
+  const dots = [...dotsEl.querySelectorAll('[data-dot]')];
+
+  let step = 0;
+  const render = () => {
+    const s = TUTORIAL_STEPS[step];
+    titleEl.textContent = s.title;
+    bodyEl.innerHTML = s.body;
+    countEl.textContent = `${step + 1}/${TUTORIAL_STEPS.length}`;
+    dots.forEach((d, i) => d.classList.toggle('is-active', i === step));
+    backBtn.disabled = step === 0;
+    const last = step === TUTORIAL_STEPS.length - 1;
+    nextBtn.hidden = last;
+    doneBtn.hidden = !last;
+  };
+  const goTo = (i) => {
+    step = Math.min(TUTORIAL_STEPS.length - 1, Math.max(0, i));
+    render();
+  };
+
+  backBtn.addEventListener('click', () => goTo(step - 1));
+  nextBtn.addEventListener('click', () => goTo(step + 1));
+  dots.forEach((d, i) => d.addEventListener('click', () => goTo(i)));
   sheet.querySelectorAll('[data-close]').forEach((el) =>
     el.addEventListener('click', () => { sheet.hidden = true; }));
+
+  render();
   hintOnce('onboarding-sheet', () => { sheet.hidden = false; });
+
+  // "Show Tutorial" im Projects-Sheet -- bewusst NICHT über hintOnce (das
+  // Flag ist ja längst gesetzt, ein zweiter hintOnce()-Aufruf wäre also
+  // ein No-Op) -- öffnet stattdessen direkt, immer bei Schritt 1. Projects
+  // vorher schliessen, sonst lägen zwei volle .sheet-Overlays übereinander.
+  $('#btn-show-tutorial').addEventListener('click', () => {
+    $('#project-sheet').hidden = true;
+    goTo(0);
+    sheet.hidden = false;
+  });
 }

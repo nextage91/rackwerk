@@ -469,19 +469,58 @@ button {
 .sheet__name { font-weight: 600; font-size: 15px; }
 .sheet__desc { font-size: 12px; color: var(--ink-dim); }
 
-/* Erste-Hilfe-Sheet: kurze Gesten-Übersicht beim allerersten Start */
-.onboard-list {
+/* Tutorial-Sheet: mehrschrittiger Überblick, beim allerersten Start
+   gezeigt und jederzeit über "Show Tutorial" im Projects-Sheet erneut
+   aufrufbar (s. main.js#wireOnboardingUI). */
+.tut__head {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0 0 16px;
-  padding: 0;
-  list-style: none;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.tut__head .sheet__title { margin: 0; }
+.tut__count {
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.tut__body {
+  min-height: 84px;
+  margin: 8px 0 16px;
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
   color: var(--ink-dim);
 }
-.onboard-list b { color: var(--lcd-ink); }
+.tut__body b { color: var(--lcd-ink); }
+.tut__dots {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+/* Grössere unsichtbare Tippfläche (28px) um den kleinen sichtbaren Punkt
+   (::before, 7px) -- ein reiner .m-btn wäre mit min-width:var(--tap-min)
+   viel zu breit für 9 Punkte in einer Reihe auf einem schmalen Handy. */
+.tut__dot {
+  position: relative;
+  width: 28px; height: 28px;
+  min-width: 0; min-height: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+.tut__dot::before {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 7px; height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.tut__dot.is-active::before { background: var(--lcd-ink); }
+.tut__nav { display: flex; gap: 8px; }
+.tut__nav [data-tut-back] { flex: 0 0 auto; min-width: 88px; }
 
 /* ===================== Audio-Unlock ===================== */
 .unlock {
@@ -3249,6 +3288,11 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
       </div>
       <div id="rec-result"></div>
 
+      <h3 class="sheet__sub">Help</h3>
+      <div class="filerow">
+        <button class="m-btn m-btn--wide" id="btn-show-tutorial">▶ Show Tutorial</button>
+      </div>
+
       <p class="sheet__hint" id="project-hint" hidden>
         ⚠︎ Persistent storage isn't available here — projects only last for this session.
       </p>
@@ -3303,19 +3347,23 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
     </div>
   </div>
 
-  <!-- ===== Erste Hilfe (einmalig beim allerersten Start) ===== -->
+  <!-- ===== Tutorial (einmalig beim allerersten Start, danach jederzeit
+       über "Show Tutorial" im Projects-Sheet erneut aufrufbar) ===== -->
   <div class="sheet" id="onboarding-sheet" hidden>
     <div class="sheet__backdrop" data-close></div>
     <div class="sheet__panel" role="dialog" aria-label="How RackWerk works">
       <div class="sheet__grip"></div>
-      <h2 class="sheet__title">How it works</h2>
-      <ul class="onboard-list">
-        <li><b>Tap</b> a step — turn a sound on or off</li>
-        <li><b>Drag</b> a step up/down — set its pitch</li>
-        <li><b>REC</b> — turn a knob or play a note/pad to record it</li>
-        <li><b>Hold</b> a pattern letter or a knob — more options (copy/paste, remove automation)</li>
-      </ul>
-      <button class="m-btn m-btn--wide" id="btn-onboarding-close" data-close>Got it</button>
+      <div class="tut__head">
+        <h2 class="sheet__title" data-tut-title>How it works</h2>
+        <span class="tut__count" data-tut-count>1/9</span>
+      </div>
+      <p class="tut__body" data-tut-body></p>
+      <div class="tut__dots" data-tut-dots></div>
+      <div class="tut__nav">
+        <button class="m-btn" data-tut-back>◀ Back</button>
+        <button class="m-btn m-btn--wide" data-tut-next>Next ▶</button>
+        <button class="m-btn m-btn--wide" data-tut-done data-close hidden>Got it</button>
+      </div>
     </div>
   </div>
 
@@ -30522,16 +30570,76 @@ function wireUndoUI() {
   });
 }
 
-/* ---------- Erste-Hilfe-Sheet (einmalig) ---------- */
-/** Kurzer Überblick über die wichtigsten Gesten, einmalig beim aller-
- *  ersten Start gezeigt (hintOnce-Flag) — ergänzt die kontextuellen
- *  Einzel-Hinweise (REC, Long-Press), die erst im jeweiligen Moment
- *  greifen, um eine Gesamtübersicht direkt am Anfang. */
+/* ---------- Tutorial-Sheet (einmalig + jederzeit erneut aufrufbar) ---------- */
+/** Mehrschrittiger Überblick über die wichtigsten Bereiche der App --
+ *  ergänzt die kontextuellen Einzel-Hinweise (REC, Long-Press, …), die
+ *  erst im jeweiligen Moment greifen, um eine Gesamtübersicht direkt am
+ *  Anfang. Reiner Text+Klick-Ablauf (Weiter/Zurück/Punkte), kein Zeigen
+ *  auf echte UI-Elemente -- das würde bedeuten, im Hintergrund gleich-
+ *  zeitig die jeweils passende Ansicht (Mix/Song/Jam/...) zu öffnen, ein
+ *  deutlich grösserer Umbau für wenig Zusatznutzen gegenüber kurzer Text-
+ *  Erklärung pro Schritt. */
+const TUTORIAL_STEPS = [
+  { title: 'Welcome to RackWerk', body: 'Build a chain of synths, drum machines, samplers and effects. Tap <b>+ Add Machine</b> in the Rack to get started.' },
+  { title: 'Step Sequencer', body: '<b>Tap</b> a step to turn it on or off. <b>Drag</b> a step up/down to set its pitch, or switch to <b>Roll</b> view for a full piano-roll grid.' },
+  { title: 'Sampler', body: '<b>Hold</b> a pad to record from the mic or load a file. Hold a loaded pad again to trim it, shape its envelope/filter, or clear it. Save/load whole kits from the Sampler panel.' },
+  { title: 'REC', body: '<b>REC</b> arms two things at once: turn a knob to record its movement as automation, or play a note/pad to write it live into the pattern.' },
+  { title: 'Pattern Bank', body: 'Each machine has 4 patterns (A–D). <b>Hold</b> a letter for more options — copy, paste, or turn it into a Jam clip.' },
+  { title: 'Mix', body: 'The <b>Mix</b> view shows level, pan, sends and mute/solo for every machine at a glance.' },
+  { title: 'Song', body: '<b>Song</b> records pattern switches over time — arm it, then switch patterns while the transport plays to build an arrangement.' },
+  { title: 'Jam', body: '<b>Jam</b> launches clips live per track, with an X/Y pad for hands-on macro control while performing.' },
+  { title: 'Projects', body: 'Save your work by name anytime from here. RackWerk also remembers your last session automatically, so Save just updates it.' },
+];
+
 function wireOnboardingUI() {
   const sheet = $('#onboarding-sheet');
+  const titleEl = sheet.querySelector('[data-tut-title]');
+  const bodyEl = sheet.querySelector('[data-tut-body]');
+  const countEl = sheet.querySelector('[data-tut-count]');
+  const dotsEl = sheet.querySelector('[data-tut-dots]');
+  const backBtn = sheet.querySelector('[data-tut-back]');
+  const nextBtn = sheet.querySelector('[data-tut-next]');
+  const doneBtn = sheet.querySelector('[data-tut-done]');
+
+  dotsEl.innerHTML = TUTORIAL_STEPS.map((_, i) =>
+    `<button type="button" class="tut__dot" data-dot="${i}" aria-label="Step ${i + 1}"></button>`).join('');
+  const dots = [...dotsEl.querySelectorAll('[data-dot]')];
+
+  let step = 0;
+  const render = () => {
+    const s = TUTORIAL_STEPS[step];
+    titleEl.textContent = s.title;
+    bodyEl.innerHTML = s.body;
+    countEl.textContent = `${step + 1}/${TUTORIAL_STEPS.length}`;
+    dots.forEach((d, i) => d.classList.toggle('is-active', i === step));
+    backBtn.disabled = step === 0;
+    const last = step === TUTORIAL_STEPS.length - 1;
+    nextBtn.hidden = last;
+    doneBtn.hidden = !last;
+  };
+  const goTo = (i) => {
+    step = Math.min(TUTORIAL_STEPS.length - 1, Math.max(0, i));
+    render();
+  };
+
+  backBtn.addEventListener('click', () => goTo(step - 1));
+  nextBtn.addEventListener('click', () => goTo(step + 1));
+  dots.forEach((d, i) => d.addEventListener('click', () => goTo(i)));
   sheet.querySelectorAll('[data-close]').forEach((el) =>
     el.addEventListener('click', () => { sheet.hidden = true; }));
+
+  render();
   hintOnce('onboarding-sheet', () => { sheet.hidden = false; });
+
+  // "Show Tutorial" im Projects-Sheet -- bewusst NICHT über hintOnce (das
+  // Flag ist ja längst gesetzt, ein zweiter hintOnce()-Aufruf wäre also
+  // ein No-Op) -- öffnet stattdessen direkt, immer bei Schritt 1. Projects
+  // vorher schliessen, sonst lägen zwei volle .sheet-Overlays übereinander.
+  $('#btn-show-tutorial').addEventListener('click', () => {
+    $('#project-sheet').hidden = true;
+    goTo(0);
+    sheet.hidden = false;
+  });
 }
 
 })();
