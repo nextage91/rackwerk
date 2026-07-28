@@ -602,6 +602,8 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 6px;
   margin-bottom: 8px;
 }
 .stepseq__title {
@@ -609,6 +611,70 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--ink-dim);
+}
+.stepseq__ctrl {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  row-gap: 6px;
+}
+/* Grid/Roll-Umschalter -- dieselbe m-btn-Höhe wie die übrigen Kopfzeilen-
+   Knöpfe, damit die Reihe nicht uneinheitlich hoch wirkt; aktive Farbe
+   wie der Segment-Umschalter anderswo (z. B. Filtertyp). */
+.stepseq__ctrl [data-mode].is-active {
+  color: var(--m-color, var(--m-subsynth));
+  box-shadow: 0 0 0 2px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 2px 4px rgba(0,0,0,.4);
+}
+
+/* Roll-Modus: Oktave-Zeile (wiederverwendet exakt das Keybed-Aussehen,
+   s. .keybed__oct-btn/-label) + das 13×8-Tonhöhe×Zeit-Raster selbst. */
+.stepseq__rollbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.stepseq__roll {
+  display: grid;
+  grid-auto-rows: 24px;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0,0,0,.3);
+  box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
+  touch-action: manipulation;
+}
+/* [hidden] hat dieselbe Spezifität wie die Klassen oben und käme im
+   Stylesheet NACH der UA-Regel [hidden]{display:none} -- ohne diese
+   Regel würde display:grid/flex das Verstecken wieder aufheben. */
+.stepseq__rollbar[hidden], .stepseq__roll[hidden] { display: none; }
+.roll-label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  font-family: var(--font-lcd);
+  font-size: 9px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.roll-cell {
+  border-radius: 4px;
+  background: #332d23;
+  box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.3);
+}
+.roll-cell.cell--beat { box-shadow: 0 1px 0 var(--edge-light) inset, 0 2px 4px rgba(0,0,0,.3), 2px 0 0 rgba(255,255,255,.08) inset; }
+.roll-cell.is-on {
+  background: var(--m-color-dim, rgba(77,195,255,.22));
+  box-shadow: 0 0 8px var(--m-color-glow, rgba(77,195,255,.45)) inset,
+              0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+.roll-cell.is-play {
+  background: var(--lcd-ink);
+  box-shadow: 0 0 8px var(--lcd-glow);
 }
 
 .stepseq__grid {
@@ -621,6 +687,11 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
   touch-action: none;                    /* Pitch-Drag statt Scroll */
 }
+/* Roll-Modus versteckt das Grid per [hidden] (s. step-seq.js) -- ohne
+   diese Regel würde das display:grid oben (gleiche Spezifität, später im
+   Stylesheet als die UA-Regel [hidden]{display:none}) das Verstecken
+   wieder aufheben. */
+.stepseq__grid[hidden] { display: none; }
 
 .cell {
   min-height: 52px;

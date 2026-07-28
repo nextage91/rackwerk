@@ -159,6 +159,7 @@ export class StepSequencedSynth extends Machine {
 
     this.seq = new StepSeq(this.pattern, {
       accentSlide,
+      defaultMidi: this.constructor.DEFAULT_MIDI,
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
         this.seq.setPattern(this.pattern);
