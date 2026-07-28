@@ -7,9 +7,20 @@
  * Maschine selbst (opts.onLengthChange), weil z. B. die BeatBox dabei
  * alle 8 Spuren gleichzeitig anpassen muss.
  *
- * Bedienung:
+ * Bedienung (Grid-Modus):
  * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
  * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
+ *
+ * Roll-Modus (nur pitchMode, s. #buildRoll()): echtes Tonhöhe×Zeit-Raster
+ * als Alternative zum reinen Live-Aufnehmen -- Zeilen = Tonhöhen (eine
+ * Oktave + Grundton, gleicher Ausschnitt wie das Keybed, mit denselben
+ * Oktave-Tasten), Spalten = Steps (8 pro Seite, kleiner als die 16 im
+ * Grid-Modus, damit die Zellen auf dem Handy noch treffsicher bleiben).
+ * Antippen setzt/löscht die Note an genau dieser Tonhöhe+Zeit direkt --
+ * ohne live zu spielen. Beide Modi bearbeiten dieselbe pattern-Referenz,
+ * nichts geht beim Umschalten verloren; Live-Aufnahme (REC + Keybed/Arp)
+ * bleibt in beiden Modi aktiv und aktualisiert sichtbar, welcher Modus
+ * auch gerade offen ist (s. refreshStep()).
  */
 import { undo } from '../core/undo.js';
 
@@ -23,10 +34,18 @@ const MIDI_MAX = 84;
 const BAR_STEPS = 16;
 const BAR_CHOICES = [1, 2, 4, 8];
 
+// Roll-Modus: 13 Tonhöhen sichtbar (eine Oktave + Grundton), gleicher
+// Ausschnitt wie createKeybed() -- vertraute Bedienung, dieselben Oktave-
+// Tasten wie beim Live-Spielen dieser Maschine. Nur 8 statt 16 Steps pro
+// Seite (schmalere Spalten wären auf dem Handy neben 13 Zeilen zu klein
+// zum treffsicheren Antippen).
+const ROLL_ROWS = 13;
+const ROLL_STEPS_PER_PAGE = 8;
+
 export class StepSeq {
   /**
    * @param {{on:boolean, midi?:number, accent?:boolean, slide?:boolean}[]} pattern  Daten der Maschine (Referenz)
-   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean}} [opts]
+   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean, defaultMidi?:number}} [opts]
    */
   constructor(pattern, opts = {}) {
     this.pattern = pattern;
@@ -40,12 +59,30 @@ export class StepSeq {
     this.accentSlide = opts.accentSlide ?? false;
     this.page = 0;
 
+    // Roll-Modus (s. Dateikopf) -- nur bei pitchMode UND ohne Accent/Slide
+    // sinnvoll (der AcidBass bräuchte eigene Accent/Slide-Zonen PRO Zeile,
+    // das ist bewusst nicht Teil dieser ersten Version). 'grid' bleibt der
+    // Standard, damit sich am Verhalten aller bisherigen Aufrufer nichts
+    // ändert, die den neuen Modus nicht kennen.
+    this.rollEnabled = this.pitchMode && !this.accentSlide;
+    this.mode = 'grid';
+    this.rollPage = 0;
+    // Unterste sichtbare Tonhöhe im Roll-Raster -- startet so, dass der
+    // Standardton der Maschine ungefähr mittig im 13-Zeilen-Ausschnitt
+    // liegt (gleicher Ausschnitt-Gedanke wie createKeybed()'s baseMidi).
+    this.rollBase = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
+      Math.max(MIDI_MIN, (opts.defaultMidi ?? 60) - 6));
+
     this.el = document.createElement('div');
     this.el.className = 'stepseq' + (this.pitchMode ? ' stepseq--pitch' : '') + (this.accentSlide ? ' stepseq--accent-slide' : '');
     this.el.innerHTML = `
       <div class="stepseq__bar">
         <span class="stepseq__title">Pattern</span>
         <span class="stepseq__ctrl">
+          ${this.rollEnabled ? `
+            <button class="m-btn" data-mode="grid" aria-label="Grid view">Grid</button>
+            <button class="m-btn" data-mode="roll" aria-label="Roll view">Roll</button>
+          ` : ''}
           <button class="m-btn" data-page="-1" aria-label="Previous bar">◀</button>
           <span class="stepseq__page" data-pagelabel>1/1</span>
           <button class="m-btn" data-page="1" aria-label="Next bar">▶</button>
@@ -53,7 +90,15 @@ export class StepSeq {
           <button class="m-btn" data-clear>Clear</button>
         </span>
       </div>
+      ${this.rollEnabled ? `
+        <div class="stepseq__rollbar" hidden>
+          <button class="keybed__oct-btn" data-roll-oct="-1" aria-label="Octave down">−</button>
+          <span class="keybed__oct-label" data-rolloctlabel></span>
+          <button class="keybed__oct-btn" data-roll-oct="1" aria-label="Octave up">+</button>
+        </div>
+      ` : ''}
       <div class="stepseq__grid"></div>
+      ${this.rollEnabled ? '<div class="stepseq__roll" hidden></div>' : ''}
     `;
 
     this.grid = this.el.querySelector('.stepseq__grid');
@@ -111,7 +156,11 @@ export class StepSeq {
     this.el.querySelectorAll('[data-page]').forEach((btn) =>
       btn.addEventListener('click', () => {
         const dir = parseInt(btn.dataset.page, 10);
-        this.page = Math.min(this.bars - 1, Math.max(0, this.page + dir));
+        if (this.mode === 'roll') {
+          this.rollPage = Math.min(this.rollPages - 1, Math.max(0, this.rollPage + dir));
+        } else {
+          this.page = Math.min(this.bars - 1, Math.max(0, this.page + dir));
+        }
         this.#renderAll();
       }));
 
@@ -124,13 +173,45 @@ export class StepSeq {
 
     this.#wirePointer();
     if (this.accentSlide) this.#wireAccentSlide();
+    if (this.rollEnabled) {
+      this.rollBar = this.el.querySelector('.stepseq__rollbar');
+      this.rollEl = this.el.querySelector('.stepseq__roll');
+      this.#buildRoll();
+      this.#wireRollPointer();
+
+      this.el.querySelectorAll('[data-mode]').forEach((btn) =>
+        btn.addEventListener('click', () => {
+          this.mode = btn.dataset.mode;
+          this.grid.hidden = this.mode !== 'grid';
+          this.rollEl.hidden = this.mode !== 'roll';
+          this.rollBar.hidden = this.mode !== 'roll';
+          this.el.querySelectorAll('[data-mode]').forEach((b) =>
+            b.classList.toggle('is-active', b.dataset.mode === this.mode));
+          this.#renderAll();
+        }));
+      this.el.querySelector('[data-mode="grid"]').classList.add('is-active');
+
+      const rollOctDown = this.el.querySelector('[data-roll-oct="-1"]');
+      const rollOctUp = this.el.querySelector('[data-roll-oct="1"]');
+      const shiftRollOctave = (dir) => {
+        this.rollBase = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
+          Math.max(MIDI_MIN, this.rollBase + dir * 12));
+        this.#renderRollAll();
+      };
+      rollOctDown.addEventListener('click', () => shiftRollOctave(-1));
+      rollOctUp.addEventListener('click', () => shiftRollOctave(1));
+    }
     this.#renderAll();
   }
 
   get bars() { return Math.max(1, Math.round(this.pattern.length / BAR_STEPS)); }
+  get rollPages() { return Math.max(1, Math.ceil(this.pattern.length / ROLL_STEPS_PER_PAGE)); }
 
   /** Zell-Index (0..15) → Index im Pattern-Array. */
   #patIdx(c) { return this.page * BAR_STEPS + c; }
+
+  /** Roll-Spalten-Index (0..7) → Index im Pattern-Array. */
+  #rollPatIdx(c) { return this.rollPage * ROLL_STEPS_PER_PAGE + c; }
 
   /* ---------- Rendering ---------- */
   #renderCell(c) {
@@ -144,10 +225,35 @@ export class StepSeq {
     }
   }
 
+  /** Ein Roll-Raster-Feld (Zeile row 0..12, Spalte c 0..7) neu zeichnen. */
+  #renderRollCell(row, c) {
+    const st = this.pattern[this.#rollPatIdx(c)];
+    const pitch = this.rollBase + (ROLL_ROWS - 1 - row);
+    const cell = this.rollCells[row][c];
+    cell.classList.toggle('is-on', !!st?.on && st.midi === pitch);
+  }
+
+  #renderRollAll() {
+    if (!this.rollEnabled) return;
+    for (let row = 0; row < ROLL_ROWS; row++) {
+      for (let c = 0; c < ROLL_STEPS_PER_PAGE; c++) this.#renderRollCell(row, c);
+    }
+    for (let row = 0; row < ROLL_ROWS; row++) {
+      this.rollLabels[row].textContent = noteLabel(this.rollBase + (ROLL_ROWS - 1 - row));
+    }
+    const label = noteLabel(this.rollBase);
+    this.el.querySelector('[data-rolloctlabel]').textContent = label;
+    this.el.querySelector('[data-roll-oct="-1"]').disabled = this.rollBase - 12 < MIDI_MIN;
+    this.el.querySelector('[data-roll-oct="1"]').disabled = this.rollBase + 12 > MIDI_MAX - (ROLL_ROWS - 1);
+  }
+
   #renderAll() {
     for (let c = 0; c < BAR_STEPS; c++) this.#renderCell(c);
-    const multi = this.bars > 1;
-    this.el.querySelector('[data-pagelabel]').textContent = `${this.page + 1}/${this.bars}`;
+    if (this.rollEnabled) this.#renderRollAll();
+
+    const multi = this.mode === 'roll' ? this.rollPages > 1 : this.bars > 1;
+    const pageLabel = this.mode === 'roll' ? `${this.rollPage + 1}/${this.rollPages}` : `${this.page + 1}/${this.bars}`;
+    this.el.querySelector('[data-pagelabel]').textContent = pageLabel;
     this.el.querySelectorAll('[data-page]').forEach((b) => (b.style.display = multi ? '' : 'none'));
     this.el.querySelector('[data-pagelabel]').style.display = multi ? '' : 'none';
     this.lenBtn.textContent = `${this.bars}B`;
@@ -157,6 +263,7 @@ export class StepSeq {
   setPattern(pattern) {
     this.pattern = pattern;
     this.page = Math.min(this.page, this.bars - 1);
+    if (this.rollEnabled) this.rollPage = Math.min(this.rollPage, this.rollPages - 1);
     this.#renderAll();
   }
 
@@ -164,27 +271,99 @@ export class StepSeq {
    * Einzelnen Step neu zeichnen, nachdem die Maschine ihn extern verändert
    * hat (Live-Aufnahme via REC — s. Machine.liveStepIndex). patternIdx ist
    * der Index im GESAMTEN Pattern; ohne Wirkung, wenn die Seite gerade
-   * nicht sichtbar ist.
+   * nicht sichtbar ist. Zeichnet BEIDE Darstellungen nach, egal welche
+   * gerade sichtbar ist -- damit ein Umschalten später sofort den
+   * aktuellen Stand zeigt, ohne dass hier bekannt sein muss, welcher
+   * Modus gleich als nächstes aktiv wird.
    */
   refreshStep(patternIdx) {
-    if (Math.floor(patternIdx / BAR_STEPS) !== this.page) return;
-    this.#renderCell(patternIdx % BAR_STEPS);
+    if (Math.floor(patternIdx / BAR_STEPS) === this.page) this.#renderCell(patternIdx % BAR_STEPS);
+    if (this.rollEnabled && Math.floor(patternIdx / ROLL_STEPS_PER_PAGE) === this.rollPage) {
+      const c = patternIdx % ROLL_STEPS_PER_PAGE;
+      for (let row = 0; row < ROLL_ROWS; row++) this.#renderRollCell(row, c);
+    }
   }
 
   /* ---------- Playhead ---------- */
   /** patternIdx ist der Index im GESAMTEN Pattern; sichtbar nur auf seiner Seite. */
   flashStep(patternIdx, delayMs, durMs) {
     setTimeout(() => {
-      if (Math.floor(patternIdx / BAR_STEPS) !== this.page) return;
-      const cell = this.cells[patternIdx % BAR_STEPS];
-      if (!cell) return;
-      cell.classList.add('is-play');
-      setTimeout(() => cell.classList.remove('is-play'), durMs);
+      if (Math.floor(patternIdx / BAR_STEPS) === this.page) {
+        const cell = this.cells[patternIdx % BAR_STEPS];
+        if (cell) {
+          cell.classList.add('is-play');
+          setTimeout(() => cell.classList.remove('is-play'), durMs);
+        }
+      }
+      // Roll-Modus: die ganze Spalte kurz aufleuchten lassen (klassischer
+      // Piano-Roll-Playhead, "wir sind jetzt bei diesem Zeitpunkt") statt
+      // nur der einen Zelle mit aktiver Note wie im Grid.
+      if (this.rollEnabled && Math.floor(patternIdx / ROLL_STEPS_PER_PAGE) === this.rollPage) {
+        const c = patternIdx % ROLL_STEPS_PER_PAGE;
+        for (let row = 0; row < ROLL_ROWS; row++) {
+          const cell = this.rollCells[row][c];
+          cell.classList.add('is-play');
+          setTimeout(() => cell.classList.remove('is-play'), durMs);
+        }
+      }
     }, Math.max(0, delayMs));
   }
 
   clearPlayhead() {
     for (const c of this.cells) c.classList.remove('is-play');
+    if (this.rollEnabled) {
+      for (const row of this.rollCells) for (const c of row) c.classList.remove('is-play');
+    }
+  }
+
+  /** Baut das 13×8-Roll-Raster einmalig auf (Zeilen = Tonhöhen, höchste
+   *  oben, Spalten = Steps) -- eine Beschriftungs-Spalte links, damit
+   *  erkennbar bleibt, welche Zeile welcher Ton ist. */
+  #buildRoll() {
+    this.rollEl.style.gridTemplateColumns = `34px repeat(${ROLL_STEPS_PER_PAGE}, 1fr)`;
+    this.rollCells = [];
+    this.rollLabels = [];
+    for (let row = 0; row < ROLL_ROWS; row++) {
+      const label = document.createElement('span');
+      label.className = 'roll-label';
+      this.rollEl.appendChild(label);
+      this.rollLabels.push(label);
+
+      const rowCells = [];
+      for (let c = 0; c < ROLL_STEPS_PER_PAGE; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'roll-cell' + (c % 4 === 0 ? ' cell--beat' : '');
+        cell.dataset.row = row;
+        cell.dataset.col = c;
+        this.rollEl.appendChild(cell);
+        rowCells.push(cell);
+      }
+      this.rollCells.push(rowCells);
+    }
+  }
+
+  /** Antippen setzt/löscht die Note direkt an dieser Tonhöhe+Zeit -- kein
+   *  Ziehen nötig (die Zeile IST schon die Tonhöhe), deshalb reicht ein
+   *  einfacher Klick wie bei den Accent-/Slide-Zonen oben. */
+  #wireRollPointer() {
+    this.rollEl.addEventListener('click', (e) => {
+      const cell = e.target.closest('.roll-cell');
+      if (!cell) return;
+      const row = parseInt(cell.dataset.row, 10);
+      const c = parseInt(cell.dataset.col, 10);
+      const idx = this.#rollPatIdx(c);
+      const pitch = this.rollBase + (ROLL_ROWS - 1 - row);
+      const st = this.pattern[idx];
+      if (!st) return;
+      if (st.on && st.midi === pitch) {
+        st.on = false;
+      } else {
+        st.on = true;
+        st.midi = pitch;
+      }
+      for (let r = 0; r < ROLL_ROWS; r++) this.#renderRollCell(r, c);
+      this.onChange?.();
+    });
   }
 
   /** Multi-Touch: pointerId → { idx, startY, startMidi, moved } je Geste
