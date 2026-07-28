@@ -93,6 +93,40 @@ class Transport {
     return (((stepFloat % total) + total) % total) / total;
   }
 
+  /**
+   * Wie phaseOver(), aber mit Swing (s. shuffleTime() unten) -- der LFO
+   * (s. modulators.js) nutzt das statt phaseOver(), wenn sein eigener
+   * Swing-Regler über 50% steht. Jeder ZWEITE Zyklus (ganzzahliger
+   * Vielfacher von `bars`, nicht jeder zweite 16tel-Step -- ein Zyklus
+   * kann ja mehrere Steps lang sein) beginnt um denselben festen Betrag
+   * verzögert, den shuffleTime() für einen Notentrigger verwenden würde
+   * (bis zu einem halben 16tel-Step, UNABHÄNGIG von der Zykluslänge selbst
+   * -- bei kurzen, step-nahen Zyklen wie 1/16 oder 1/8 darum deutlich
+   * hörbar, bei mehrtaktigen Zyklen proportional kaum, genau wie bei
+   * echter Hardware). Gerade Zyklen bleiben exakt auf dem Raster (wie ein
+   * ungeswingter Step) -- ungerade Zyklen halten bis zum verzögerten Start
+   * auf "1" (der Endwert des VORHERIGEN, geraden Zyklus, s. `waveValue()`
+   * in modulators.js) und durchlaufen ihre eigene Form danach gestaucht in
+   * der verbleibenden Zeit, damit der NÄCHSTE gerade Zyklus trotzdem exakt
+   * pünktlich beginnt -- exakt dieselbe "verzögert + dafür kürzer"-Logik,
+   * die auch shuffleTime() für einen einzelnen Notentrigger anwendet.
+   */
+  phaseOverShuffled(bars, amount) {
+    if (!this.isPlaying) return 0;
+    const total = STEPS_PER_BAR * bars;
+    const shiftSteps = amount > 50 ? (amount - 50) / 50 : 0;
+    if (!shiftSteps) return this.phaseOver(bars);
+
+    const stepFloat = this.#step - (this.#nextStepTime - engine.now) / this.stepDuration;
+    const cycleIndex = Math.floor(stepFloat / total);
+    const cyclePos = (((stepFloat % total) + total) % total);
+    if ((((cycleIndex % 2) + 2) % 2) === 1) {
+      if (cyclePos < shiftSteps) return 1;
+      return (cyclePos - shiftSteps) / (total - shiftSteps);
+    }
+    return cyclePos / total;
+  }
+
   /** Aktuelle Position im 1-Takt-Loop (0..1). */
   get phase() { return this.phaseOver(1); }
 
