@@ -1266,6 +1266,24 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   color: var(--ink-dim);
   text-align: center;
 }
+/* Live Freq/Gain-Anzeige übers Ziehen eines Bands (s. insert-chain.js#
+   setupEq8Graph) -- fixed statt Teil des Graphen, damit es über dem Finger
+   schwebt statt vom Graph-Ausschnitt begrenzt zu werden; pointer-events:none,
+   sonst würde es selbst Zeiger-Events vom Graphen darunter abfangen. */
+.eq8__readout {
+  position: fixed;
+  z-index: 70;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(10,11,14,.92);
+  border: 1px solid rgba(255,255,255,.18);
+  color: var(--lcd-ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,.5);
+}
 
 /* Insert-Effekt-Picker liegt ÜBER dem Vollbild-Editor der Maschine
    (.machine-focus, z-index 55) — sonst könnte man ihn dort nicht öffnen. */

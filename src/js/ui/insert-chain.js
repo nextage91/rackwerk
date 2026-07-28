@@ -329,6 +329,36 @@ function setupEq8Graph(row, insert) {
   let downPos = null, downClient = null, moved = false, holdTimer = null, holdFired = false;
   const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
 
+  // Doppel-Tipp auf ein bestehendes Band löscht es direkt -- schnellerer Weg
+  // für ein versehentlich erstelltes Band als erst das Halten-Menü zu öffnen
+  // (s. Chat-Feedback). Dieselbe Zeitschwelle wie das Löschen an anderen
+  // Stellen der App wäre hier zu lang/kurz -- 350ms ist der übliche Wert für
+  // einen echten Doppeltipp (deutlich unter der 500ms-Halten-Schwelle oben,
+  // damit sich beide Gesten nicht überschneiden).
+  const DOUBLE_TAP_MS = 350;
+  let lastTapNode = -1, lastTapTime = 0;
+
+  // Live-Frequenz/Gain-Anzeige über dem Finger während des Ziehens -- ohne
+  // die feinen Gitterlinien allein war kaum ablesbar, bei welchem Wert man
+  // gerade steht (s. Chat-Feedback). Eigenes, fixed-positioniertes Element
+  // (wie eq8Menu), nicht Teil des SVG -- muss über dem Finger schweben,
+  // unabhängig vom Graph-Ausschnitt.
+  let readoutEl = null;
+  const fmtFreq = (hz) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 1 : 2)} kHz` : `${Math.round(hz)} Hz`);
+  const fmtGain = (db) => `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+  const showReadout = (clientX, clientY, freq, gain) => {
+    if (!readoutEl) {
+      readoutEl = document.createElement('div');
+      readoutEl.className = 'eq8__readout';
+      document.body.appendChild(readoutEl);
+    }
+    readoutEl.textContent = `${fmtFreq(freq)} · ${fmtGain(gain)}`;
+    const left = Math.max(8, Math.min(window.innerWidth - readoutEl.offsetWidth - 8, clientX - readoutEl.offsetWidth / 2));
+    readoutEl.style.left = `${left}px`;
+    readoutEl.style.top = `${Math.max(8, clientY - 40)}px`;
+  };
+  const hideReadout = () => { readoutEl?.remove(); readoutEl = null; };
+
   graph.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     // Pointer-Capture: hält pointermove/pointerup am Graphen fest, auch
@@ -392,6 +422,7 @@ function setupEq8Graph(row, insert) {
         insert.setBand(dragNode, 'freq');
         insert.setBand(dragNode, 'gain');
         redrawSettled();
+        showReadout(e.clientX, e.clientY, b.freq, b.gain);
       }
     } else if (activePointers.size === 2 && qNode >= 0) {
       const pts = [...activePointers.values()];
@@ -406,13 +437,28 @@ function setupEq8Graph(row, insert) {
   const onUp = (e) => {
     activePointers.delete(e.pointerId);
     clearHold();
+    hideReadout();
     if (activePointers.size === 0) {
       if (!moved && !holdFired) {
         if (dragNode >= 0) {
-          // Tap auf ein bestehendes Band -- selektieren (erneutes Tippen
-          // auf das schon selektierte Band hebt die Auswahl wieder auf).
-          selectedBand = selectedBand === dragNode ? -1 : dragNode;
-          redraw();
+          const now = performance.now();
+          if (dragNode === lastTapNode && now - lastTapTime < DOUBLE_TAP_MS) {
+            // Doppel-Tipp auf dasselbe Band -- direkt löschen, kein Umweg
+            // übers Halten-Menü (s. Kommentar bei DOUBLE_TAP_MS oben).
+            const b = insert.params.bands[dragNode];
+            b.active = false;
+            insert.setBand(dragNode, 'active');
+            if (selectedBand === dragNode) selectedBand = -1;
+            lastTapNode = -1;
+            redraw();
+          } else {
+            // Tap auf ein bestehendes Band -- selektieren (erneutes Tippen
+            // auf das schon selektierte Band hebt die Auswahl wieder auf).
+            selectedBand = selectedBand === dragNode ? -1 : dragNode;
+            redraw();
+            lastTapNode = dragNode;
+            lastTapTime = now;
+          }
         } else if (qNode < 0 && downPos) {
           // Tap auf leere Fläche -- erstes noch inaktives Band an dieser
           // Stelle aktivieren (alle 8 Bänder existieren fest, s. inserts.js)
