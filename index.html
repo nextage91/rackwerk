@@ -30716,6 +30716,18 @@ const TOUR_STEPS = [
       const el = document.querySelector('.bb-mode[data-mode="jam"]');
       return { el, container: el, selector: '.bb-mode[data-mode="jam"]', eventType: 'click' };
     },
+    // Zweite Phase desselben Schritts: das Öffnen der Jam-Ansicht allein
+    // zeigt noch nicht die eigentliche Jam-Funktion (Clips live starten) --
+    // erst ein echter Clip-Tap demonstriert das (s. Chat-Feedback). Läuft
+    // auf dem frisch von der ersten Phase geöffneten #jam-list weiter.
+    next: {
+      body: 'Every pattern can launch live, even without being turned into a saved clip first. <b>Tap a clip letter</b> (A–D) in any column to fire it.',
+      run() {
+        const list = $('#jam-list');
+        if (!list) return null;
+        return { el: list, container: list, selector: '.clip, .proto-clip', eventType: 'click' };
+      },
+    },
   },
   {
     title: 'Projects',
@@ -30851,17 +30863,27 @@ function wireOnboardingUI(rack) {
   };
 
   const showStep = (i) => {
-    endInteractiveStep();
+    step = i;
     sheet.hidden = true;
     closeAllSheets();
-    const s = TOUR_STEPS[i];
-    const found = s.run(ctx);
-    step = i;
-    if (!found?.el) { advance(); return; } // Ziel nicht gefunden (z. B. Layout-Sonderfall) -- nicht hängenbleiben
+    showPhase(TOUR_STEPS[i], TOUR_STEPS[i]);
+  };
+
+  /** Ein Schritt kann aus mehreren Phasen bestehen (s. TOUR_STEPS.Jam.next):
+   *  z. B. erst die Jam-Ansicht öffnen, DANN einen echten Clip antippen --
+   *  beide zeigen denselben Zähler ("8/9"), nur Zieltext/Ziel-Element
+   *  wechseln zwischen den Phasen. */
+  const showPhase = (s, phase) => {
+    endInteractiveStep();
+    const found = phase.run(ctx);
+    if (!found?.el) { // Ziel nicht gefunden (z. B. Layout-Sonderfall) -- nicht hängenbleiben
+      if (phase.next) showPhase(s, phase.next); else advance();
+      return;
+    }
     calloutTarget = found.el;
-    callout.querySelector('[data-cnt]').textContent = `${i + 1}/${TOUR_STEPS.length}`;
+    callout.querySelector('[data-cnt]').textContent = `${step + 1}/${TOUR_STEPS.length}`;
     callout.querySelector('[data-title]').textContent = s.title;
-    callout.querySelector('[data-body]').innerHTML = s.body;
+    callout.querySelector('[data-body]').innerHTML = phase.body ?? s.body;
     spotlight.hidden = false;
     callout.hidden = false;
     positionOverlay();
@@ -30872,6 +30894,7 @@ function wireOnboardingUI(rack) {
     // vorhersagbarer als der optische Komfort einer Animation.
     found.el.scrollIntoView?.({ block: 'center' });
     cleanupStep = armAction(found.container, found.selector, found.eventType, () => {
+      if (phase.next) { showPhase(s, phase.next); return; }
       if (s.isLast) { finishTour(); return; }
       advance();
     });
