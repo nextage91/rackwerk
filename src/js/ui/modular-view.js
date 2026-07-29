@@ -64,6 +64,7 @@ import { MODULE_TYPES, MODULE_PORTS, MODULE_UI_PARAMS, OSCILLATOR_WAVES, FILTER_
 export function renderModularRack(container, machine) {
   const patch = machine.patch;
   let face = 'front';
+  let zoom = 1; // Pinch-Zoom-Stufe der Steckfläche (Rückseite), s. weiter unten
 
   const root = document.createElement('div');
   root.className = 'modrack';
@@ -218,19 +219,39 @@ export function renderModularRack(container, machine) {
   /** Steckfläche mindestens so gross wie das Sichtfenster, sonst genau so
    *  gross, dass jede Kachel (+ etwas Rand) hineinpasst -- damit man auch
    *  weit verschobene Module per natives Scrollen erreichen kann. Läuft
-   *  nach jedem Render UND nach jedem Verschieben (s. Zieh-Logik unten). */
+   *  nach jedem Render UND nach jedem Verschieben (s. Zieh-Logik unten).
+   *
+   *  box.offsetWidth/offsetHeight und m.x/m.y sind IMMER unskalierte
+   *  Modell-Pixel (offsetWidth ignoriert CSS-transform per Definition) --
+   *  der benötigte Platz wird deshalb erst am Ende mit `zoom`
+   *  multipliziert, s. applyZoom(). */
   function updateCanvasSize() {
     const wrapRect = jacksWrapEl.getBoundingClientRect();
-    let right = wrapRect.width;
-    let bottom = wrapRect.height;
+    let right = 0;
+    let bottom = 0;
     for (const box of jacksEl.querySelectorAll('.modrack__mod-box')) {
       const m = patch.modules.get(Number(box.dataset.moduleId));
       if (!m) continue;
       right = Math.max(right, m.x + box.offsetWidth + 40);
       bottom = Math.max(bottom, m.y + box.offsetHeight + 40);
     }
-    canvasEl.style.width = `${right}px`;
-    canvasEl.style.height = `${bottom}px`;
+    canvasEl.style.width = `${Math.max(wrapRect.width, right * zoom)}px`;
+    canvasEl.style.height = `${Math.max(wrapRect.height, bottom * zoom)}px`;
+  }
+
+  /** Zoomstufe anwenden -- skaliert NUR die Kachel-Ebene (.modrack__boxes),
+   *  NICHT .modrack__canvas selbst: das Kabel-SVG hängt als Geschwister
+   *  DANEBEN (nicht als Kind der skalierten Ebene), sonst würde es doppelt
+   *  skaliert (einmal, weil updateCables() bereits die echten,
+   *  BILDSCHIRM-Koordinaten der (skaliert gerenderten) Ports misst, ein
+   *  zweites Mal, weil das SVG selbst zusätzlich denselben Transform vom
+   *  Elternelement geerbt hätte). transform-origin 0/0 (s. CSS) hält die
+   *  linke obere Ecke fest, damit Modul-x/y weiterhin direkt (nur mit
+   *  `zoom` multipliziert) der Bildschirmposition entsprechen. */
+  function applyZoom() {
+    jacksEl.style.transform = `scale(${zoom})`;
+    updateCanvasSize();
+    updateCables();
   }
 
   /** Zeichnet alle Kabel als Bezier-Kurven direkt zwischen den echten
@@ -296,6 +317,8 @@ export function renderModularRack(container, machine) {
   const GHOST_OFFSET_Y = 44;
   const SNAP_RADIUS = 60;
   const TAP_MOVE_TOLERANCE = 8;
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 2;
 
   let armedFrom = null; // { moduleId, port } -- per Tap scharf geschalteter Ausgang
   let dragFrom = null; // { moduleId, port } -- währenddessen evtl. gezogener Ausgang
@@ -305,6 +328,14 @@ export function renderModularRack(container, machine) {
   let pendingCablePath = null;
   let moveFrom = null; // { id, startX, startY, origX, origY } -- gerade per Kopfzeile verschobenes Modul
   let moveMoved = false;
+  // Zwei-Finger-Pinch-Zoom (Chat: "mit zwei fingern rein und raus zoomen").
+  // activePointers zählt gleichzeitig aufliegende Finger unabhängig vom
+  // Rest der Zieh-/Verbinden-Logik oben -- sobald ein ZWEITER Finger dazu-
+  // kommt, wird jede laufende Einzelfinger-Geste abgebrochen und auf
+  // Pinch umgeschaltet (s. pointerdown unten).
+  const activePointers = new Map(); // pointerId -> {x, y}
+  let pinchStartDist = 0;
+  let pinchStartZoom = 1;
 
   function setArmed(from) {
     jacksEl.querySelector('.port--armed')?.classList.remove('port--armed');
@@ -320,7 +351,30 @@ export function renderModularRack(container, machine) {
     snapTarget = null;
   }
 
-  jacksEl.addEventListener('pointerdown', (e) => {
+  // Auf jacksWrapEl (die GESAMTE Steckfläche inkl. leerer Fläche zwischen
+  // Kacheln) statt nur jacksEl (die Kachel-Ebene) -- ein Pinch fängt meist
+  // gerade auf leerem Grund an, nicht auf einer kleinen Kachel, muss also
+  // schon dort erkannt werden, nicht erst innerhalb der Kachel-Ebene.
+  jacksWrapEl.addEventListener('pointerdown', (e) => {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 2) {
+      // Zweiter Finger dazugekommen -- ab jetzt Pinch-Zoom statt
+      // Einzelfinger-Geste. Eine evtl. schon laufende Verschiebe-/Zieh-
+      // Geste wird abgebrochen, sonst würden beide Interpretationen um
+      // denselben ersten Finger konkurrieren.
+      dragFrom = null; dragMoved = false; clearSnapTarget(); pendingCablePath = null;
+      moveFrom = null; moveMoved = false;
+      const pts = [...activePointers.values()];
+      pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartZoom = zoom;
+      for (const id of activePointers.keys()) {
+        try { jacksWrapEl.setPointerCapture(id); } catch { /* Testumgebung */ }
+      }
+      updateCables();
+      return;
+    }
+    if (activePointers.size > 2) return; // ein dritter Finger -- ignorieren
+
     // Ports und der Trennen-Button haben Vorrang -- erst DANACH gilt ein
     // Antippen als "Modul verschieben" (s. unten). Reihenfolge ist
     // wichtig: ohne das würde ein Tap auf einen Port als Verschiebe-
@@ -354,7 +408,7 @@ export function renderModularRack(container, machine) {
       dragFrom = { moduleId: Number(outPort.dataset.moduleId), port: outPort.dataset.portKey };
       dragMoved = false;
       dragStartX = e.clientX; dragStartY = e.clientY;
-      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
       e.stopPropagation();
       return;
     }
@@ -374,14 +428,22 @@ export function renderModularRack(container, machine) {
       if (!m) return;
       moveFrom = { id, startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y };
       moveMoved = false;
-      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
       e.stopPropagation();
       return;
     }
     // Leere Fläche angetippt -- eine offene Auswahl verwerfen.
     if (armedFrom) setArmed(null);
   });
-  jacksEl.addEventListener('pointermove', (e) => {
+  jacksWrapEl.addEventListener('pointermove', (e) => {
+    if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 2 && pinchStartDist > 0) {
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchStartZoom * (dist / pinchStartDist)));
+      applyZoom();
+      return;
+    }
     if (moveFrom) {
       const dx = e.clientX - moveFrom.startX;
       const dy = e.clientY - moveFrom.startY;
@@ -389,8 +451,11 @@ export function renderModularRack(container, machine) {
         if (Math.hypot(dx, dy) <= TAP_MOVE_TOLERANCE) return;
         moveMoved = true;
       }
-      const nx = Math.max(0, moveFrom.origX + dx);
-      const ny = Math.max(0, moveFrom.origY + dy);
+      // dx/dy sind reale Bildschirm-Pixel (Fingerbewegung) -- durch `zoom`
+      // teilen, um sie in Modell-Pixel umzurechnen, sonst würde ein
+      // gezoomtes Modul schneller/langsamer laufen als der Finger.
+      const nx = Math.max(0, moveFrom.origX + dx / zoom);
+      const ny = Math.max(0, moveFrom.origY + dy / zoom);
       const box = jacksEl.querySelector(`.modrack__mod-box[data-module-id="${moveFrom.id}"]`);
       if (box) { box.style.left = `${nx}px`; box.style.top = `${ny}px`; }
       // Sofort im Modell nachziehen (nicht erst bei pointerup) -- Kabel
@@ -445,7 +510,9 @@ export function renderModularRack(container, machine) {
     pendingCablePath = null;
     renderBack();
   };
-  jacksEl.addEventListener('pointerup', (e) => {
+  jacksWrapEl.addEventListener('pointerup', (e) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchStartDist = 0; // Pinch endet, sobald ein Finger loslässt
     if (moveFrom) {
       // Ein blosses Antippen der Kopfzeile (kein nennenswerter Zug) ist
       // kein Verschieben -- verwirft dann wie ein Tap auf leere Fläche
@@ -456,7 +523,9 @@ export function renderModularRack(container, machine) {
     }
     finishCableDrag();
   });
-  jacksEl.addEventListener('pointercancel', () => {
+  jacksWrapEl.addEventListener('pointercancel', (e) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchStartDist = 0;
     if (moveFrom) { moveFrom = null; moveMoved = false; return; }
     dragFrom = null; dragMoved = false;
     clearSnapTarget();
