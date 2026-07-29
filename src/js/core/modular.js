@@ -309,6 +309,169 @@ const MODULE_DEFS = {
     },
   },
 
+  /** Ringmodulator -- multipliziert zwei Audiosignale (A * B), klassische
+   *  metallische/glockenartige Klänge. Der übliche Web-Audio-Trick dafür
+   *  (kein natives "Multiply"-Node nötig): B hängt direkt an der
+   *  gain-AudioParam eines GainNode statt an dessen Signal-Eingang, dessen
+   *  eigener Grundpegel bleibt bei 0 -- der Knoten liefert dann rein
+   *  A(t) * (0 + B(t)) = A(t) * B(t), keine additive Grundlautstärke wie
+   *  bei normaler Amplitudenmodulation. */
+  ringmod: {
+    name: 'Ring Mod',
+    defaults: {},
+    build(ctx) {
+      const ring = ctx.createGain();
+      ring.gain.value = 0; // rein multiplikativ, s. Kommentar oben
+      const inA = ctx.createGain(); // eigener Knoten für A, damit B exklusiv die gain-AudioParam bekommt
+      inA.connect(ring);
+      const output = safeOutput(ctx, ring);
+      return {
+        inputs: { a: inA, b: ring.gain },
+        outputs: { audio: output },
+        setParam() {},
+        dispose() { inA.disconnect(); ring.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  /** Sample & Hold -- tastet den `signal`-Eingang bei jedem Notenanschlag
+   *  ab und hält den Wert bis zum nächsten (klassisch: zufällige Tonhöhen-/
+   *  Filtersprünge, z. B. Noise -> S&H -> Oszillator-Pitch). Anders als ein
+   *  frei patchbarer Audiorate-Trigger (bräuchte einen eigenen
+   *  AudioWorklet-DSP-Kern, s. acidbass-worklet.js für den Aufwand, der
+   *  dafür nötig wäre) hier bewusst am NOTENANSCHLAG getaktet -- passt
+   *  genau in dieses sequenzergetriebene Environment (jede Note kann einen
+   *  neuen Zufallswert ziehen) und bleibt synchron aufbaubar wie jedes
+   *  andere Modul. Liest den Eingang über einen AnalyserNode aus (dieselbe
+   *  Technik, mit der auch die Offline-Tests dieser Datei Signale
+   *  auslesen) -- eine echte, tatsächlich anliegende Momentaufnahme, keine
+   *  Schätzung. */
+  samplehold: {
+    name: 'S&H',
+    defaults: {},
+    build(ctx) {
+      const input = ctx.createGain();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 32; // kleinstmöglich -- nur eine Momentaufnahme nötig, keine Spektralanalyse
+      input.connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+      const held = ctx.createConstantSource();
+      held.offset.value = 0;
+      held.start();
+      const output = safeOutput(ctx, held);
+      return {
+        inputs: { signal: input },
+        outputs: { cv: output },
+        trigger(t) {
+          analyser.getFloatTimeDomainData(buf);
+          held.offset.setValueAtTime(buf[buf.length - 1], t);
+        },
+        setParam() {},
+        dispose() { input.disconnect(); analyser.disconnect(); held.stop(); held.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  /** Slew Limiter (Glide) -- glättet abrupte CV-/Audiosprünge zu sanften
+   *  Übergängen, meist hinter Sample & Hold oder für Portamento auf
+   *  Oszillator-Pitch. Technisch dieselbe Schaltung wie ein echtes
+   *  analoges Glide-Circuit: ein simples RC-Tiefpassglied -- hier ein
+   *  Tiefpassfilter, dessen Grenzfrequenz aus der gewünschten Gleitzeit
+   *  berechnet wird (klassische RC-Zeitkonstante 1/(2π·t)), keine
+   *  "angenäherte" Lösung, sondern dieselbe Physik wie das Original. */
+  slew: {
+    name: 'Slew',
+    defaults: { time: 0.1 },
+    build(ctx, p) {
+      const timeToHz = (t) => Math.min(2000, Math.max(0.3, 1 / (2 * Math.PI * Math.max(0.001, t))));
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.Q.value = 0.707; // Butterworth-neutral, kein Überschwingen im Glide
+      filter.frequency.value = timeToHz(p.time);
+      const output = safeOutput(ctx, filter);
+      return {
+        inputs: { in: filter },
+        outputs: { audio: output },
+        setParam(key, v) {
+          if (key === 'time') { p.time = v; filter.frequency.value = timeToHz(v); }
+        },
+        dispose() { filter.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  /** Utility -- Dämpfen/Verstärken UND Invertieren (Attenuverter) plus
+   *  Offset eines CV-/Audiosignals, das kleine "Schweizer Taschenmesser"-
+   *  Werkzeug jedes Modularsystems (z. B. Doepfer A-183-1). Fehlte bisher
+   *  komplett: keines der anderen Module kann ein Signal umkehren oder
+   *  einen konstanten Versatz draufaddieren. */
+  util: {
+    name: 'Utility',
+    defaults: { amount: 1, offset: 0 },
+    build(ctx, p) {
+      const scale = ctx.createGain();
+      scale.gain.value = p.amount;
+      const offsetSrc = ctx.createConstantSource();
+      offsetSrc.offset.value = p.offset;
+      offsetSrc.start();
+      const sum = ctx.createGain();
+      scale.connect(sum);
+      offsetSrc.connect(sum);
+      const output = safeOutput(ctx, sum);
+      return {
+        inputs: { in: scale },
+        outputs: { audio: output },
+        setParam(key, v) {
+          if (key === 'amount') { p.amount = v; scale.gain.value = v; }
+          else if (key === 'offset') { p.offset = v; offsetSrc.offset.value = v; }
+        },
+        dispose() { scale.disconnect(); offsetSrc.stop(); offsetSrc.disconnect(); sum.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  /** Delay/Echo -- eigene patchbare Verzögerung mit Rückkopplung, getrennt
+   *  vom Insert-Chain-Delay (das sitzt hinter der ganzen Maschine, nicht
+   *  INNERHALB eines Patches). Die Rückkopplungsschleife läuft durch
+   *  denselben geteilten Weichbegrenzer wie safeOutput() (clipCurve()),
+   *  damit hohe Feedback-Werte nicht aufschaukeln -- zusätzlich zur
+   *  Feedback-Obergrenze (0.9) im Regler selbst. Ausgang ist trocken +
+   *  verzögert gemischt (klassisches Echo-Modul), kein separater Dry/Wet-
+   *  Regler nötig, da der trockene Anteil ohnehin schon durchläuft. */
+  delay: {
+    name: 'Delay',
+    defaults: { time: 0.3, feedback: 0.3 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const delayNode = ctx.createDelay(2);
+      delayNode.delayTime.value = p.time;
+      const fbShaper = ctx.createWaveShaper();
+      fbShaper.curve = clipCurve();
+      const fbGain = ctx.createGain();
+      fbGain.gain.value = Math.min(0.9, p.feedback);
+      input.connect(delayNode);
+      delayNode.connect(fbShaper);
+      fbShaper.connect(fbGain);
+      fbGain.connect(delayNode);
+      const mix = ctx.createGain();
+      input.connect(mix);
+      delayNode.connect(mix);
+      const output = safeOutput(ctx, mix);
+      return {
+        inputs: { audio: input },
+        outputs: { audio: output },
+        setParam(key, v) {
+          if (key === 'time') { p.time = v; delayNode.delayTime.setTargetAtTime(v, engine.now, 0.02); }
+          else if (key === 'feedback') { p.feedback = Math.min(0.9, v); fbGain.gain.value = p.feedback; }
+        },
+        dispose() {
+          input.disconnect(); delayNode.disconnect(); fbShaper.disconnect(); fbGain.disconnect(); mix.disconnect();
+          disposeOutput(output);
+        },
+      };
+    },
+  },
+
   /** Fester Endpunkt jedes Patches -- die Modular-Maschine verbindet dessen
    *  Ausgang einmalig, dauerhaft an ihren eigenen this.output (s.
    *  machines/modular.js). Reine Durchleitung, kein eigener Regler. */
@@ -347,6 +510,11 @@ export const MODULE_PORTS = {
   envelope: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
   lfo: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
   vca: { inputs: [{ key: 'audio', label: 'In' }, { key: 'gain', label: 'Gain' }], outputs: [{ key: 'audio', label: 'Out' }] },
+  ringmod: { inputs: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }], outputs: [{ key: 'audio', label: 'Out' }] },
+  samplehold: { inputs: [{ key: 'signal', label: 'Signal' }], outputs: [{ key: 'cv', label: 'CV' }] },
+  slew: { inputs: [{ key: 'in', label: 'In' }], outputs: [{ key: 'audio', label: 'Out' }] },
+  util: { inputs: [{ key: 'in', label: 'In' }], outputs: [{ key: 'audio', label: 'Out' }] },
+  delay: { inputs: [{ key: 'audio', label: 'In' }], outputs: [{ key: 'audio', label: 'Out' }] },
   output: { inputs: [{ key: 'audio', label: 'In' }], outputs: [] },
 };
 
@@ -376,6 +544,17 @@ export const MODULE_UI_PARAMS = {
     { key: 'depth', label: 'Depth', min: 0, max: 1, unit: '' },
   ],
   vca: [{ key: 'level', label: 'Level', min: 0, max: 1, unit: '' }],
+  ringmod: [],
+  samplehold: [],
+  slew: [{ key: 'time', label: 'Time', min: 0.001, max: 2, curve: 'log', unit: 's' }],
+  util: [
+    { key: 'amount', label: 'Amount', min: -1, max: 1, unit: '' },
+    { key: 'offset', label: 'Offset', min: -1, max: 1, unit: '' },
+  ],
+  delay: [
+    { key: 'time', label: 'Time', min: 0.02, max: 1.5, curve: 'log', unit: 's' },
+    { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
+  ],
   output: [],
 };
 
