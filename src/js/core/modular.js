@@ -126,6 +126,52 @@ const MODULE_DEFS = {
     },
   },
 
+  /** Mono-Summierer für mehrere Audioquellen (z. B. mehrere Oszillatoren),
+   *  je ein eigener Pegel pro Eingang -- wie ein kleiner Modular-Mixer
+   *  (Doepfer A-138, Intellijel Mixup), nicht wie ein grosser Performance-
+   *  Mixer mit Stereo-Bus: KEIN Pan, das passiert schon eine Ebene höher
+   *  am Maschinen-Ausgang (jede Maschine hat ihren eigenen StereoPanner,
+   *  s. machines/machine.js). Nötig geworden erst durch die exklusiven
+   *  Eingänge (s. ModularPatch#connect): zwei Oszillatoren liessen sich
+   *  vorher direkt in denselben Filter-/VCA-Eingang stecken (Web Audio
+   *  summiert automatisch alle Verbindungen an einem Ziel) -- seit jeder
+   *  Eingang nur noch EIN Kabel annimmt, geht das nicht mehr, ein
+   *  dediziertes Mix-Modul mit VIER eigenen Eingängen schon (Chat: "ich
+   *  brauche im modular einen mixer für die oszilatoren"). */
+  mixer: {
+    name: 'Mixer',
+    defaults: { level1: 1, level2: 1, level3: 1, level4: 1 },
+    build(ctx, p) {
+      const sum = ctx.createGain();
+      const makeInput = (level) => {
+        const g = ctx.createGain();
+        g.gain.value = level;
+        g.connect(sum);
+        return g;
+      };
+      const in1 = makeInput(p.level1);
+      const in2 = makeInput(p.level2);
+      const in3 = makeInput(p.level3);
+      const in4 = makeInput(p.level4);
+      const output = safeOutput(ctx, sum);
+      return {
+        inputs: { in1, in2, in3, in4 },
+        outputs: { audio: output },
+        setParam(key, v) {
+          if (key === 'level1') { p.level1 = v; in1.gain.value = v; }
+          else if (key === 'level2') { p.level2 = v; in2.gain.value = v; }
+          else if (key === 'level3') { p.level3 = v; in3.gain.value = v; }
+          else if (key === 'level4') { p.level4 = v; in4.gain.value = v; }
+        },
+        dispose() {
+          in1.disconnect(); in2.disconnect(); in3.disconnect(); in4.disconnect();
+          sum.disconnect();
+          disposeOutput(output);
+        },
+      };
+    },
+  },
+
   filter: {
     name: 'Filter',
     defaults: { type: 'lowpass', cutoff: 2000, resonance: 0.707 },
@@ -293,6 +339,10 @@ export function moduleMeta(type) {
 export const MODULE_PORTS = {
   oscillator: { inputs: [{ key: 'pitch', label: 'Pitch' }, { key: 'fine', label: 'Fine' }], outputs: [{ key: 'audio', label: 'Out' }] },
   noise: { inputs: [], outputs: [{ key: 'audio', label: 'Out' }] },
+  mixer: {
+    inputs: [{ key: 'in1', label: 'In 1' }, { key: 'in2', label: 'In 2' }, { key: 'in3', label: 'In 3' }, { key: 'in4', label: 'In 4' }],
+    outputs: [{ key: 'audio', label: 'Out' }],
+  },
   filter: { inputs: [{ key: 'audio', label: 'In' }, { key: 'cutoff', label: 'Cutoff' }], outputs: [{ key: 'audio', label: 'Out' }] },
   envelope: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
   lfo: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
@@ -307,6 +357,12 @@ export const MODULE_PORTS = {
 export const MODULE_UI_PARAMS = {
   oscillator: [{ key: 'coarse', label: 'Coarse', min: -24, max: 24, step: 1, unit: 'st' }],
   noise: [],
+  mixer: [
+    { key: 'level1', label: 'In 1', min: 0, max: 1, unit: '' },
+    { key: 'level2', label: 'In 2', min: 0, max: 1, unit: '' },
+    { key: 'level3', label: 'In 3', min: 0, max: 1, unit: '' },
+    { key: 'level4', label: 'In 4', min: 0, max: 1, unit: '' },
+  ],
   filter: [
     { key: 'cutoff', label: 'Cutoff', min: 40, max: 12000, curve: 'log', unit: 'Hz' },
     { key: 'resonance', label: 'Reso', min: 0.1, max: 15, curve: 'log', unit: '' },
