@@ -3,16 +3,20 @@
  * wie Maschinen im Hauptrack in einer Liste (Vorderseite: Name + Regler
  * direkt in der Zeile, ▲/▼ zum Umsortieren, Halten für Duplizieren/
  * Entfernen, "+ Add Module" am Ende). Ein Flip-Button dreht dieselbe Liste
- * auf die Rückseite: dort erscheinen dieselben Module als Steckfelder mit
- * ihren Ein-/Ausgängen, verbunden per virtuellem Kabel (ziehen zum
- * Verbinden, antippen zum Trennen).
+ * auf die Rückseite: dort erscheinen dieselben Module NEBENEINANDER in
+ * einer waagrecht scrollbaren Buchsenleiste (wie ein echtes Patch-Bay-Feld)
+ * mit ihren Ein-/Ausgängen, verbunden per virtuellem Kabel (antippen zum
+ * Verbinden -- Ausgang, dann Eingang antippen --, ziehen geht auch; ✕ neben
+ * einem belegten Eingang ODER das Kabel selbst antippen zum Trennen).
  *
  * Die Listen-Reihenfolge (ModularPatch#moveModule) ist die EINZIGE
- * Sortierung -- Vorder- und Rückseite zeigen dieselbe Reihenfolge, keine
- * zwei unabhängigen Layouts wie in der vorigen freien Leinwand-Version.
- * Das macht die Rückseite nebenbei einfacher: Steckplätze stehen in einer
- * normalen, mitwachsenden Liste statt auf einer festen 1400x1000-Fläche,
- * kein Modul-Herumziehen und keine Scroll-Offset-Rechnung mehr nötig.
+ * Sortierung -- Vorder- und Rückseite zeigen dieselbe Reihenfolge. Die
+ * Rückseite reiht Module bewusst NEBENEINANDER statt übereinander: darunter
+ * bleibt so eine durchgehend freie "Kabel-Wanne", in der jedes Kabel frei
+ * verläuft (s. updateCables()) -- bei übereinander gestapelten Zeilen (eine
+ * frühere Fassung) liefe ein Kabel zwischen zwei nicht benachbarten Zeilen
+ * zwangsläufig unsichtbar und unantippbar unter jeder dazwischenliegenden
+ * Zeile hindurch.
  *
  * renderModularRack() wird EINMAL pro Maschine beim Bauen ihrer Bedien-
  * oberfläche aufgerufen (s. machines/modular.js#buildControls) und baut
@@ -50,7 +54,7 @@ export function renderModularRack(container, machine) {
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
     <div class="modrack__jacks-wrap" data-jackswrap hidden>
       <svg class="modrack__cables" data-cables></svg>
-      <div class="modrack__jacks" data-jacks></div>
+      <div class="modrack__jack-strip" data-jacks></div>
     </div>
   `;
   container.appendChild(root);
@@ -130,25 +134,51 @@ export function renderModularRack(container, machine) {
     }
   }
 
-  /* ---------- Rückseite: Steckfeld + Kabel ---------- */
+  /* ---------- Rückseite: Steckfeld-Reihe + Kabel-Wanne darunter ----------
+     Module stehen hier NEBENEINANDER in einer waagrecht scrollbaren Reihe
+     (wie die Buchsenleiste eines echten Patch-Bay-Feldes), statt
+     übereinander wie auf der Vorderseite -- absichtlich anders: darunter
+     bleibt dadurch eine durchgehend freie Fläche (die "Wanne"), in der
+     JEDES Kabel unbehindert von fremden Modulen verlaufen kann. Bei
+     übereinander gestapelten Zeilen (die frühere Fassung) gäbe es diese
+     freie Fläche nicht -- ein Kabel zwischen zwei nicht benachbarten
+     Zeilen liefe zwangsläufig unsichtbar UND unantippbar unter jeder
+     dazwischenliegenden Zeile hindurch (die Zeilen sind blickdicht und
+     liegen im DOM über dem SVG); s. Chat: "Kabel an der Seite unübersichtlich". */
 
-  function jackRowHtml(id, m) {
+  function inPortHtml(id, p) {
+    const cable = patch.cables.find((c) => c.toId === id && c.toPort === p.key);
+    // Ein belegter Eingang bekommt ein eigenes, grosses "✕" zum Trennen --
+    // das dünne Kabel selbst antippen bleibt zusätzlich möglich (breiterer
+    // unsichtbarer Trefferbereich, s. updateCables()), aber dieser Button
+    // ist ein garantiert leicht zu treffendes Ziel, unabhängig vom
+    // Kabelverlauf (Chat: "ich habe es nicht geschafft [ein Kabel zu
+    // entfernen]").
+    return `
+      <span class="port port--in" data-module-id="${id}" data-port-dir="in" data-port-key="${p.key}">
+        <span class="port__dot"></span>${p.label}
+        ${cable ? `<button type="button" class="port__remove" data-remove-cable="${cable.id}" aria-label="Disconnect ${p.label}">✕</button>` : ''}
+      </span>
+    `;
+  }
+
+  function jackTileHtml(id, m) {
     const ports = MODULE_PORTS[m.type];
     return `
-      <div class="modrack__jack-row" data-module-id="${id}">
-        <div class="modrack__jack-row-head">${moduleMeta(m.type).name}</div>
+      <div class="modrack__jack-tile" data-module-id="${id}">
+        <div class="modrack__jack-tile-head">${moduleMeta(m.type).name}</div>
         <div class="modrack__jack-ports modrack__jack-ports--in">
-          ${ports.inputs.map((p) => `<span class="port port--in" data-module-id="${id}" data-port-dir="in" data-port-key="${p.key}"><span class="port__dot"></span>${p.label}</span>`).join('')}
+          ${ports.inputs.map((p) => inPortHtml(id, p)).join('')}
         </div>
         <div class="modrack__jack-ports modrack__jack-ports--out">
-          ${ports.outputs.map((p) => `<span class="port port--out" data-module-id="${id}" data-port-dir="out" data-port-key="${p.key}">${p.label}<span class="port__dot"></span></span>`).join('')}
+          ${ports.outputs.map((p) => `<span class="port port--out" data-module-id="${id}" data-port-dir="out" data-port-key="${p.key}"><span class="port__dot"></span>${p.label}</span>`).join('')}
         </div>
       </div>
     `;
   }
 
   function renderBack() {
-    jacksEl.innerHTML = [...patch.modules.entries()].map(([id, m]) => jackRowHtml(id, m)).join('');
+    jacksEl.innerHTML = [...patch.modules.entries()].map(([id, m]) => jackTileHtml(id, m)).join('');
     // Scharf geschalteter Ausgang (s. Tap-Verbinden weiter unten) übersteht
     // ein Neuzeichnen -- z. B. wenn man erst eine Ausgangs-Buchse antippt
     // und danach noch einen anderen Regler/Move-Pfeil auf der Vorderseite
@@ -160,25 +190,21 @@ export function renderModularRack(container, machine) {
     updateCables();
   }
 
-  // Breite der reservierten Spur rechts neben den Zeilen (s. CSS
-  // .modrack__jacks-wrap padding-right) -- dort verlaufen die Kabel, statt
-  // querbeet unter fremden Zeilen hindurch (s. updateCables()).
-  const LANE_MARGIN = 12;
+  // Zusätzlicher Tiefenversatz je Kabel (i % 4), damit sich mehrere Kabel
+  // in der Wanne nicht exakt überlagern -- bei der breiten, hohen Wanne
+  // hier viel grosszügiger möglich als in der früheren schmalen Seitenspur.
+  const TRAY_STEP = 16;
 
-  /** Zeichnet alle Kabel als Bezier-Kurven. Ports beider Sorten sitzen am
-   *  rechten Rand jeder Zeile (Ein- links von Aus-Port) -- ein simpler
-   *  Mittelpunkt zwischen zwei Ports bliebe fast immer in genau dieser
-   *  Spalte und liefe damit UNTER jeder dazwischenliegenden Zeile hindurch,
-   *  unsichtbar UND unantippbar (die Zeilen sind blickdicht und liegen im
-   *  DOM über dem SVG). Deshalb biegen alle Kabel stattdessen erst in eine
-   *  eigene, zeilenfreie Spur ganz rechts aus (s. LANE_MARGIN/CSS padding),
-   *  laufen dort frei sichtbar hoch/runter und kommen erst kurz vor dem
-   *  Ziel-Port wieder zurück -- wie bei einem echten Patch-Bay-Steckfeld.
-   *  Leichter Versatz je Kabel (i % 3), damit sich mehrere Kabel in der
-   *  Spur nicht exakt überlagern. */
+  /** Zeichnet alle Kabel als Bezier-Kurven, die von ihrem Ausgangs-Port
+   *  senkrecht nach UNTEN in die freie Wanne unter der Steckfeld-Reihe
+   *  eintauchen und erst kurz vor dem Ziel-Port wieder aufsteigen -- wie
+   *  ein echtes Kabel, das lose unter einem Patch-Bay-Feld hängt. Die
+   *  Wanne beginnt am unteren Rand der GESAMTEN Reihe (nicht nur der
+   *  eigenen Kachel), damit auch eine höhere Nachbar-Kachel nie im Weg
+   *  liegt. */
   function updateCables() {
     const wrapRect = jacksWrapEl.getBoundingClientRect();
-    const laneX = wrapRect.width - LANE_MARGIN;
+    const stripBottom = jacksEl.getBoundingClientRect().bottom - wrapRect.top;
     const portCenter = (moduleId, dir, key) => {
       const el = jacksEl.querySelector(`.port[data-module-id="${moduleId}"][data-port-dir="${dir}"][data-port-key="${key}"] .port__dot`);
       if (!el) return null;
@@ -190,8 +216,15 @@ export function renderModularRack(container, machine) {
       const from = portCenter(c.fromId, 'out', c.fromPort);
       const to = portCenter(c.toId, 'in', c.toPort);
       if (!from || !to) return '';
-      const lane = laneX - (i % 3) * 10;
-      return `<path class="mod-cable" data-cable-id="${c.id}" d="M${from.x},${from.y} C${lane},${from.y} ${lane},${to.y} ${to.x},${to.y}"></path>`;
+      const well = stripBottom + 24 + (i % 4) * TRAY_STEP;
+      const d = `M${from.x},${from.y} C${from.x},${well} ${to.x},${well} ${to.x},${to.y}`;
+      // Zweiter, unsichtbarer Pfad mit viel breiterem Strich NUR fürs
+      // Antippen (Trennen) -- die sichtbare Linie bleibt dünn/elegant,
+      // aber der tatsächliche Trefferbereich ist grosszügig (dieselbe
+      // Klasse/data-cable-id, der Tap-Handler unten unterscheidet nicht,
+      // welcher der beiden Pfade getroffen wurde).
+      return `<path class="mod-cable-hit" data-cable-id="${c.id}" d="${d}"></path>`
+        + `<path class="mod-cable" data-cable-id="${c.id}" d="${d}"></path>`;
     }).join('');
 
     // Breite UND Höhe explizit als Attribute setzen statt sich für die
@@ -199,9 +232,14 @@ export function renderModularRack(container, machine) {
     // bildet Pfad-Koordinaten sonst nicht zuverlässig browserübergreifend
     // 1:1 auf CSS-Pixel ab, wenn nur eines von beiden gesetzt ist.
     svgEl.setAttribute('width', String(wrapRect.width));
-    svgEl.setAttribute('height', String(jacksEl.offsetHeight));
+    svgEl.setAttribute('height', String(jacksWrapEl.offsetHeight));
     svgEl.innerHTML = paths + (pendingCablePath ?? '');
   }
+  // Die Steckfeld-Reihe scrollt waagrecht (mehr Module als Bildschirmbreite)
+  // -- das SVG hängt AM WRAP, nicht an der scrollenden Reihe selbst, muss
+  // die Kabel beim Scrollen also aktiv nachziehen, statt automatisch
+  // "mitzuscrollen".
+  jacksEl.addEventListener('scroll', updateCables);
 
   /* ---------- Verbinden: antippen (Standard) ODER ziehen (weiterhin
      möglich) -- s. Chat: Ziehen allein war auf echten Touchgeräten kaum
@@ -244,6 +282,13 @@ export function renderModularRack(container, machine) {
   }
 
   jacksEl.addEventListener('pointerdown', (e) => {
+    const removeBtn = e.target.closest('[data-remove-cable]');
+    if (removeBtn) {
+      e.preventDefault();
+      patch.disconnect(Number(removeBtn.dataset.removeCable));
+      renderBack();
+      return;
+    }
     const inPort = e.target.closest('.port--in');
     if (inPort) {
       // Eingang antippen: nur relevant, wenn gerade ein Ausgang scharf
@@ -297,8 +342,11 @@ export function renderModularRack(container, machine) {
     }
     if (snapTarget !== best) { clearSnapTarget(); snapTarget = best; snapTarget?.classList.add('port--snap-target'); }
 
-    const lane = wrapRect.width - LANE_MARGIN;
-    pendingCablePath = `<path class="mod-cable mod-cable--pending" d="M${fx},${fy} C${lane},${fy} ${lane},${ty} ${tx},${ty}"></path>`;
+    // Gleicher Wannen-Look wie die fertigen Kabel (s. updateCables()), aber
+    // ohne Tiefenversatz -- nur eine einzelne Vorschau ist je gerade aktiv.
+    const stripBottom = jacksEl.getBoundingClientRect().bottom - wrapRect.top;
+    const well = stripBottom + 24;
+    pendingCablePath = `<path class="mod-cable mod-cable--pending" d="M${fx},${fy} C${fx},${well} ${tx},${well} ${tx},${ty}"></path>`;
     updateCables();
   });
   const finishCableDrag = () => {
