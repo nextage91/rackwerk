@@ -50,10 +50,15 @@ export class Modular extends StepSequencedSynth {
    *  StepSequencedSynth#emptyPattern, real reproduziert: "Receiver must be
    *  an instance of class Modular"). */
   buildDefaultPatch() {
-    const oscId = this.patch.addModule('oscillator');
-    const vcaId = this.patch.addModule('vca');
-    const envId = this.patch.addModule('envelope');
-    const outId = this.patch.addModule('output');
+    // Positionen bilden den Signalfluss von links nach rechts nach --
+    // Oszillator/Hüllkurve fliessen von links in den VCA, der rechts
+    // heraus zum Ausgang führt -- damit die drei Standard-Kabel von
+    // Anfang an kurz und direkt verlaufen, statt der Nutzer müsste sie
+    // gleich beim ersten Öffnen selbst zurechtziehen.
+    const oscId = this.patch.addModule('oscillator', { x: 20, y: 20 });
+    const vcaId = this.patch.addModule('vca', { x: 230, y: 70 });
+    const envId = this.patch.addModule('envelope', { x: 20, y: 190 });
+    const outId = this.patch.addModule('output', { x: 420, y: 70 });
     this.patch.connect(oscId, 'audio', vcaId, 'audio');
     this.patch.connect(vcaId, 'audio', outId, 'audio');
     this.patch.connect(envId, 'cv', vcaId, 'gain');

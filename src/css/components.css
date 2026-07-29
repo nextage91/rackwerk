@@ -1328,9 +1328,10 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 /* ===================== Modular: Rack im Rack (ui/modular-view.js) =====================
    Front (.modrack__list): Regler-Zeilen im selben Stil wie die Zeilen des
    Hauptracks (Farbstreifen, Name, ▲/▼-Move-Buttons). Ein Flip-Button
-   schaltet auf die Rückseite (.modrack__jacks-wrap) um: dieselben Module in
-   derselben Reihenfolge, jetzt als Steckfelder mit ihren Ein-/Ausgängen,
-   Kabel per SVG darüber gelegt. Beides sitzt direkt im normalen Fokus-
+   schaltet auf die Rückseite (.modrack__canvas-wrap) um: dieselben Module
+   als frei verschiebbare Kacheln auf einer 2-Achsen-pan-baren Steckfläche,
+   Kabel per SVG darüber gelegt (wie Caustics Modular, s. Dateikopf-
+   Kommentar in ui/modular-view.js). Beides sitzt direkt im normalen Fokus-
    Bereich der Maschine -- kein eigenes Sheet-Overlay mehr wie zuvor. */
 .modrack__head {
   display: flex;
@@ -1380,62 +1381,85 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 }
 .modrack__add { margin-bottom: 4px; }
 
-/* Rückseite: Module stehen NEBENEINANDER in einer waagrecht scrollbaren
-   Reihe (wie die Buchsenleiste einer echten Patch-Bay) statt übereinander
-   wie auf der Vorderseite -- absichtlich anders: darunter bleibt dadurch
-   eine durchgehend freie Fläche (die "Wanne", padding-bottom), in der
-   JEDES Kabel frei verläuft, ohne je unter einer fremden Kachel
-   hindurchzumüssen (bei übereinander gestapelten Zeilen gäbe es diese
-   freie Fläche nicht -- ein Kabel zwischen zwei nicht benachbarten Zeilen
-   liefe zwangsläufig unsichtbar UND unantippbar darunter hindurch, die
-   Zeilen sind blickdicht und liegen im DOM über dem SVG). S.
-   ui/modular-view.js#updateCables für die Kabel-Geometrie. */
-.modrack__jacks-wrap { position: relative; padding-bottom: 170px; }
-.modrack__jack-strip {
-  /* position:relative ist Pflicht, nicht nur Kosmetik: ohne eigenes
-     "positioniertes" Stacking würde das absolut positionierte SVG
-     unabhängig von der DOM-Reihenfolge über der Reihe liegen (CSS-Regel:
-     positionierte Elemente liegen immer über normalem Fluss) -- Taps auf
-     Ports würden dann das unsichtbare Kabel-Trefferfeld dahinter treffen
-     statt den Port selbst. */
+/* Rückseite: frei verschiebbare Steckfläche (wie Caustics Modular, s.
+   ui/modular-view.js Dateikopf-Kommentar) -- Kacheln liegen absolut
+   positioniert (Modul-x/y) auf .modrack__canvas, das seinerseits in
+   .modrack__canvas-wrap in BEIDEN Achsen nativ scrollt/pan't (kein
+   eigener Pan-Code nötig). Eine Kachel-Kopfzeile ziehen verschiebt nur
+   diese Kachel (touch-action:none dort, s. .modrack__mod-box-head);
+   überall sonst auf der Fläche bleibt natives Scrollen aktiv. */
+.modrack__canvas-wrap {
   position: relative;
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
+  height: 320px;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: 4px;
+  border: 1px solid var(--ink-faint);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+.modrack__canvas {
+  /* width/height werden von ui/modular-view.js#updateCanvasSize() inline
+     gesetzt, gross genug für alle Kacheln + Rand -- Positionierungs-
+     Kontext sowohl für das Kabel-SVG als auch für jede Kachel. */
+  position: relative;
+}
+.modrack__boxes {
+  /* position:relative ist Pflicht, nicht nur Kosmetik: ohne eigenes
+     "positioniertes" Stacking würden Kacheln unabhängig von der DOM-
+     Reihenfolge UNTER dem absolut positionierten Kabel-SVG liegen
+     (CSS-Regel: positionierte Elemente liegen immer über normalem
+     Fluss) -- Taps auf Ports würden dann das unsichtbare Kabel-
+     Trefferfeld dahinter treffen statt den Port selbst (genau der Bug,
+     der die vorige Buchsenleiste kurzzeitig komplett unbedienbar
+     gemacht hat). */
+  position: relative;
 }
 .modrack__cables {
   position: absolute;
   top: 0; left: 0;
-  width: 100%;
   pointer-events: none;
   overflow: visible;
 }
-.modrack__jack-tile {
-  flex: 0 0 auto;
-  width: 128px;
+.modrack__mod-box {
+  position: absolute;
+  width: 148px;
   background: var(--bg-panel);
   border: 1px solid var(--ink-faint);
   border-top: 3px solid var(--m-color, #8f9bb3);
   border-radius: 8px;
-  padding: 8px;
 }
-.modrack__jack-tile-head {
+.modrack__mod-box-head {
   font-size: 12px;
   font-weight: 600;
   color: var(--lcd-ink);
   text-align: center;
+  padding: 6px 8px;
   margin-bottom: 6px;
+  border-bottom: 1px solid var(--ink-faint);
+  cursor: grab;
+  touch-action: none; /* eigene Zieh-Geste, s. ui/modular-view.js -- kein natives Pan hier */
 }
-.modrack__jack-ports {
+.modrack__mod-box-head:active { cursor: grabbing; }
+.modrack__mod-box-ports {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
   gap: 6px;
+  padding: 0 6px 8px;
   font-size: 10px;
   color: var(--ink-dim);
 }
-.modrack__jack-ports--out { margin-top: 8px; }
+.modrack__mod-box-ports--in, .modrack__mod-box-ports--out {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* Eingänge links, Ausgänge rechts (Caustic-Konvention, s. Dateikopf-
+   Kommentar) -- row-reverse dreht nur die Ausgänge optisch um (Beschriftung
+   dann links vom Punkt), ohne das HTML dafür zu duplizieren; der Punkt
+   selbst landet dadurch am rechten Rand der Spalte. */
+.modrack__mod-box-ports--out { align-items: flex-end; }
+.port--out { flex-direction: row-reverse; }
 
 /* Kabel: sichtbarer dünner Strich + zweiter, unsichtbarer breiter Strich
    NUR für den Tastbereich (dieselbe data-cable-id, s.
