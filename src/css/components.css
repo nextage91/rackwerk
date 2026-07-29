@@ -1413,6 +1413,11 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
      der die vorige Buchsenleiste kurzzeitig komplett unbedienbar
      gemacht hat). */
   position: relative;
+  /* Pinch-Zoom (s. ui/modular-view.js#applyZoom) skaliert GENAU diese
+     Ebene per transform -- transform-origin 0/0 hält die linke obere Ecke
+     fest, damit Modul-x/y weiterhin direkt (nur mit dem Zoomfaktor
+     multipliziert) der Bildschirmposition entspricht. */
+  transform-origin: 0 0;
 }
 .modrack__cables {
   position: absolute;
