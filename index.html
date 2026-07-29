@@ -18457,6 +18457,15 @@ class ModularPatch {
     const toModule = this.modules.get(toId);
     const to = toModule?.instance.inputs[toPort];
     if (!from || !to) return null;
+    // Ein Eingang ist wie eine echte Buchse -- nimmt immer nur EIN Kabel
+    // auf. Ein neues Kabel dorthin ersetzt ein evtl. schon vorhandenes,
+    // statt sich zusätzlich draufzustecken (zwei Kabel am selben Eingang
+    // würden das Signal einfach doppelt addieren, kein harmloses Duplikat
+    // wie man vielleicht erwarten würde). Ausgänge dürfen dagegen frei auf
+    // mehrere Eingänge gemultet werden (Standard-Modular-Technik, bleibt
+    // unverändert erlaubt) -- nur Eingänge sind exklusiv.
+    const existing = this.cables.find((c) => c.toId === toId && c.toPort === toPort);
+    if (existing) this.disconnect(existing.id);
     from.connect(to);
     // Erstes Kabel an einem CV-Ziel, das das ausdrücklich will (s.
     // __cvExclusive/Dateikopf-Kommentar) -- Regler-Basiswert merken und auf
