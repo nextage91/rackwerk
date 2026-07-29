@@ -160,9 +160,14 @@ const MODULE_DEFS = {
    * Hüllkurve als PERSISTENTE Steuerspannungsquelle (ConstantSourceNode),
    * nicht wie dsp.js#env() ein pro Anschlag frisch erzeugter/wegwerfbarer
    * Gain-Node -- ein Patch-Kabel verbindet feste Modul-Instanzen, keine
-   * Einwegknoten. trigger() rampt exakt dieselbe Kurvenform (Attack linear
-   * 0→1, Decay exponentiell →0.001, Release linear →0) auf `src.offset`,
-   * jedes Mal neu für den nächsten Anschlag.
+   * Einwegknoten. Attack-Sustain-Release wie SubSynths Amp-Hüllkurve
+   * (subsynth.js#playNote): auf den vollen Pegel rampen, dort für die
+   * GESAMTE Notenlänge HALTEN, erst bei Notenende (t+dur) linear auf 0
+   * loslassen -- NICHT wie eine frühere Fassung, die schon während der
+   * Note exponentiell fast bis auf Null abfiel (an `dur` gekoppelt, nicht
+   * einstellbar) und Release dadurch an einem längst unhörbaren Pegel
+   * ansetzen liess (Chat: "Release-Regler funktioniert nicht", zu Recht --
+   * er wirkte technisch, aber nur unterhalb der Hörschwelle).
    */
   envelope: {
     name: 'Envelope',
@@ -176,14 +181,13 @@ const MODULE_DEFS = {
         inputs: {},
         outputs: { cv: output },
         trigger(t, dur) {
-          const attack = Math.max(0, p.attack);
+          const attack = Math.max(0.0001, Math.min(p.attack, dur * 0.5)); // nie länger als die halbe Note, s. subsynth.js
           const release = Math.max(0.005, p.release);
           src.offset.cancelScheduledValues(t);
           src.offset.setValueAtTime(0.0001, t);
-          if (attack > 0) src.offset.linearRampToValueAtTime(1, t + attack);
-          else src.offset.setValueAtTime(1, t);
-          src.offset.exponentialRampToValueAtTime(0.001, t + attack + dur);
-          src.offset.linearRampToValueAtTime(0, t + attack + dur + release);
+          src.offset.linearRampToValueAtTime(1, t + attack);
+          src.offset.setValueAtTime(1, t + dur); // Halten auf vollem Pegel bis zum Notenende
+          src.offset.linearRampToValueAtTime(0, t + dur + release);
         },
         setParam(key, v) { p[key] = v; },
         dispose() { src.stop(); src.disconnect(); disposeOutput(output); },
