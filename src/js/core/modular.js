@@ -142,7 +142,17 @@ const MODULE_DEFS = {
         outputs: { audio: output },
         setParam(key, v) {
           if (key === 'type') filter.type = v;
-          else if (key === 'cutoff') { p.cutoff = v; filter.frequency.value = v; }
+          else if (key === 'cutoff') {
+            p.cutoff = v;
+            // Solange ein Kabel an cutoff hängt, hält ModularPatch#connect
+            // den Basiswert in __patchBaseValue und den Live-Wert bei 0,
+            // damit das Kabel allein bestimmt (s. Dateikopf-Kommentar).
+            // Der Regler darf dann NICHT direkt auf .value schreiben --
+            // das würde die Kabel-Steuerung mit einem festen Wert
+            // überschreiben (reproduziert: Ton "hängt" beim Drehen fest).
+            if (filter.frequency.__patchBaseValue !== undefined) filter.frequency.__patchBaseValue = v;
+            else filter.frequency.value = v;
+          }
           else if (key === 'resonance') filter.Q.value = v;
         },
         dispose() { input.disconnect(); filter.disconnect(); disposeOutput(output); },
@@ -228,7 +238,19 @@ const MODULE_DEFS = {
         inputs: { audio: input, gain: gain.gain },
         outputs: { audio: output },
         setParam(key, v) {
-          if (key === 'level') { p.level = v; gain.gain.value = v; }
+          if (key === 'level') {
+            p.level = v;
+            // Gleiche Regel wie beim Filter-Cutoff oben: solange ein Kabel
+            // (typischerweise eine Hüllkurve) an gain hängt, bestimmt
+            // ALLEIN das Kabel den Live-Wert (auf 0 gehalten von
+            // ModularPatch#connect) -- der Regler aktualisiert nur den
+            // gemerkten Basiswert, der beim Trennen des Kabels wieder
+            // einrastet. Reported bug: Regler drehen liess den Ton
+            // schlagartig konstant statt der Hüllkurve zu folgen, weil
+            // hier vorher immer direkt .value überschrieben wurde.
+            if (gain.gain.__patchBaseValue !== undefined) gain.gain.__patchBaseValue = v;
+            else gain.gain.value = v;
+          }
         },
         dispose() { input.disconnect(); gain.disconnect(); disposeOutput(output); },
       };
@@ -391,9 +413,15 @@ export class ModularPatch {
     if (from && to) {
       try { from.disconnect(to); } catch { /* schon getrennt (z. B. Modul gerade entfernt) */ }
       // Letztes Kabel an diesem CV-Ziel entfernt -- Regler-Basiswert
-      // wiederherstellen (s. connect() oben).
+      // wiederherstellen (s. connect() oben) UND __patchBaseValue wieder
+      // löschen: die einzelnen Module prüfen dieses Feld in ihrem setParam()
+      // (s. z. B. vca/filter unten), um zu erkennen, ob ihr eigener Regler
+      // gerade von einem Kabel überstimmt wird -- bliebe das Feld stehen,
+      // hielte ein späterer Regler-Dreh den Wert für immer fälschlich fest,
+      // obwohl längst kein Kabel mehr hängt.
       if (to instanceof AudioParam && this.#portCountOnTarget(cable.toId, cable.toPort) === 0) {
         to.setValueAtTime(to.__patchBaseValue ?? 0, engine.now);
+        delete to.__patchBaseValue;
       }
     }
   }
