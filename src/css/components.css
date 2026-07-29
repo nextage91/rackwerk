@@ -1452,6 +1452,24 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 .port--in .port__dot { background: #5ec8e0; }
 .port--out .port__dot { background: #e8b84b; }
 
+/* Scharf geschalteter Ausgang (Tap-Verbinden) -- pulsierender Ring, damit
+   auch ohne durchgehendes Ziehen klar ist, wo eine Verbindung gerade
+   "wartet". Hervorgehobenes Eingangs-Ziel beim Ziehen (Fang-Radius, s.
+   ui/modular-view.js) -- deutlich grösser/leuchtend, weil man das beim
+   Ziehen NEBEN statt exakt unter dem Finger im Blick haben soll. */
+.port--armed .port__dot {
+  animation: port-armed-pulse 1s ease-in-out infinite;
+  box-shadow: 0 0 0 4px rgba(232,184,75,.55);
+}
+@keyframes port-armed-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.3); }
+}
+.port--snap-target .port__dot {
+  transform: scale(1.5);
+  box-shadow: 0 0 0 6px rgba(94,200,224,.65);
+}
+
 /* Der Modul-Picker wird jetzt direkt aus dem Machine-Focus heraus geöffnet
    (kein separates Modular-Sheet mehr dazwischen) -- gleiche Ebene wie
    Insert-/Modulator-Picker (s. dort). */

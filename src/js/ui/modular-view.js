@@ -149,6 +149,14 @@ export function renderModularRack(container, machine) {
 
   function renderBack() {
     jacksEl.innerHTML = [...patch.modules.entries()].map(([id, m]) => jackRowHtml(id, m)).join('');
+    // Scharf geschalteter Ausgang (s. Tap-Verbinden weiter unten) übersteht
+    // ein Neuzeichnen -- z. B. wenn man erst eine Ausgangs-Buchse antippt
+    // und danach noch einen anderen Regler/Move-Pfeil auf der Vorderseite
+    // anfasst, das aber keine echte Absage der Auswahl sein soll.
+    if (armedFrom) {
+      jacksEl.querySelector(`.port--out[data-module-id="${armedFrom.moduleId}"][data-port-key="${armedFrom.port}"]`)
+        ?.classList.add('port--armed');
+    }
     updateCables();
   }
 
@@ -195,48 +203,124 @@ export function renderModularRack(container, machine) {
     svgEl.innerHTML = paths + (pendingCablePath ?? '');
   }
 
-  let pendingFrom = null; // { moduleId, port }
+  /* ---------- Verbinden: antippen (Standard) ODER ziehen (weiterhin
+     möglich) -- s. Chat: Ziehen allein war auf echten Touchgeräten kaum
+     zu treffen, weil der Finger genau den Zielpunkt verdeckt.
+       - Tippen: Ausgang antippen schaltet ihn "scharf" (pulsierender
+         Ring), danach einen Eingang antippen verbindet -- man sieht beim
+         Antippen des Ziels kurz nichts, aber sobald der Finger wieder weg
+         ist, ist die Verbindung sichtbar. Denselben Ausgang nochmal
+         antippen (oder daneben) hebt die Auswahl wieder auf.
+       - Ziehen: bleibt für alle, die die Geste schon gewohnt sind, aber
+         mit zwei Verbesserungen: das gezogene Kabel endet sichtbar ÜBER
+         dem Finger (GHOST_OFFSET_Y) statt exakt darunter, und der
+         nächstgelegene gültige Eingang leuchtet schon aus einigem Abstand
+         auf (SNAP_RADIUS) -- verbunden wird beim Loslassen mit GENAU
+         diesem hervorgehobenen Ziel, nicht mit dem, was exakt unter dem
+         Finger liegt (das wäre ja gerade das Problem). */
+  const GHOST_OFFSET_Y = 44;
+  const SNAP_RADIUS = 60;
+  const TAP_MOVE_TOLERANCE = 8;
+
+  let armedFrom = null; // { moduleId, port } -- per Tap scharf geschalteter Ausgang
+  let dragFrom = null; // { moduleId, port } -- währenddessen evtl. gezogener Ausgang
+  let dragMoved = false;
+  let dragStartX = 0, dragStartY = 0;
+  let snapTarget = null; // aktuell hervorgehobenes Eingangs-Element beim Ziehen
   let pendingCablePath = null;
 
+  function setArmed(from) {
+    jacksEl.querySelector('.port--armed')?.classList.remove('port--armed');
+    armedFrom = from;
+    if (from) {
+      jacksEl.querySelector(`.port--out[data-module-id="${from.moduleId}"][data-port-key="${from.port}"]`)
+        ?.classList.add('port--armed');
+    }
+  }
+
+  function clearSnapTarget() {
+    snapTarget?.classList.remove('port--snap-target');
+    snapTarget = null;
+  }
+
   jacksEl.addEventListener('pointerdown', (e) => {
-    const port = e.target.closest('.port--out');
-    if (!port) return;
+    const inPort = e.target.closest('.port--in');
+    if (inPort) {
+      // Eingang antippen: nur relevant, wenn gerade ein Ausgang scharf
+      // geschaltet ist -- Eingänge sind selbst nie Zieh-Quelle.
+      if (armedFrom) {
+        e.preventDefault();
+        patch.connect(armedFrom.moduleId, armedFrom.port, Number(inPort.dataset.moduleId), inPort.dataset.portKey);
+        setArmed(null);
+        renderBack();
+      }
+      return;
+    }
+    const outPort = e.target.closest('.port--out');
+    if (!outPort) {
+      // Leere Fläche angetippt -- eine offene Auswahl verwerfen.
+      if (armedFrom) setArmed(null);
+      return;
+    }
     // touch-action:none auf .port (s. CSS) reicht auf echten Touchgeräten
     // NICHT immer aus, um das Scrollen des umgebenden Fokus-Panels zu
     // unterdrücken -- preventDefault() zusätzlich, wie überall sonst im
-    // Code, wo per Pointer gezogen wird (s. ui/knob.js#onDown). Ohne das:
-    // der erste Zug wird als Scrollversuch interpretiert statt als
-    // Kabel-Ziehen, das Kabel verbindet sich nie (Chat-Report: "kann die
-    // Patch-Punkte nicht miteinander verbinden").
+    // Code, wo per Pointer gezogen wird (s. ui/knob.js#onDown).
     e.preventDefault();
-    pendingFrom = { moduleId: Number(port.dataset.moduleId), port: port.dataset.portKey };
+    dragFrom = { moduleId: Number(outPort.dataset.moduleId), port: outPort.dataset.portKey };
+    dragMoved = false;
+    dragStartX = e.clientX; dragStartY = e.clientY;
     try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
     e.stopPropagation();
   });
   jacksEl.addEventListener('pointermove', (e) => {
-    if (!pendingFrom) return;
+    if (!dragFrom) return;
+    if (!dragMoved) {
+      if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) <= TAP_MOVE_TOLERANCE) return;
+      dragMoved = true; // erst ab hier ist es wirklich ein Zug, kein Tippen
+    }
     const wrapRect = jacksWrapEl.getBoundingClientRect();
-    const fromDot = jacksEl.querySelector(`.port[data-module-id="${pendingFrom.moduleId}"][data-port-dir="out"][data-port-key="${pendingFrom.port}"] .port__dot`);
+    const fromDot = jacksEl.querySelector(`.port[data-module-id="${dragFrom.moduleId}"][data-port-dir="out"][data-port-key="${dragFrom.port}"] .port__dot`);
     if (!fromDot) return;
     const r = fromDot.getBoundingClientRect();
     const fx = r.left + r.width / 2 - wrapRect.left;
     const fy = r.top + r.height / 2 - wrapRect.top;
     const tx = e.clientX - wrapRect.left;
-    const ty = e.clientY - wrapRect.top;
+    const ty = e.clientY - wrapRect.top - GHOST_OFFSET_Y; // über dem Finger, nicht darunter
+
+    let best = null, bestDist = SNAP_RADIUS;
+    for (const inPort of jacksEl.querySelectorAll('.port--in')) {
+      const dot = inPort.querySelector('.port__dot');
+      const dr = dot.getBoundingClientRect();
+      const dist = Math.hypot(dr.left + dr.width / 2 - wrapRect.left - tx, dr.top + dr.height / 2 - wrapRect.top - ty);
+      if (dist < bestDist) { bestDist = dist; best = inPort; }
+    }
+    if (snapTarget !== best) { clearSnapTarget(); snapTarget = best; snapTarget?.classList.add('port--snap-target'); }
+
     const lane = wrapRect.width - LANE_MARGIN;
     pendingCablePath = `<path class="mod-cable mod-cable--pending" d="M${fx},${fy} C${lane},${fy} ${lane},${ty} ${tx},${ty}"></path>`;
     updateCables();
   });
-  const finishCableDrag = (e) => {
-    if (!pendingFrom) return;
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.port--in');
-    if (target) patch.connect(pendingFrom.moduleId, pendingFrom.port, Number(target.dataset.moduleId), target.dataset.portKey);
-    pendingFrom = null;
+  const finishCableDrag = () => {
+    if (!dragFrom) return;
+    if (dragMoved) {
+      if (snapTarget) patch.connect(dragFrom.moduleId, dragFrom.port, Number(snapTarget.dataset.moduleId), snapTarget.dataset.portKey);
+    } else {
+      // Kein nennenswerter Zug -- ein einfaches Tippen, schaltet scharf/ab.
+      setArmed(armedFrom && armedFrom.moduleId === dragFrom.moduleId && armedFrom.port === dragFrom.port ? null : dragFrom);
+    }
+    clearSnapTarget();
+    dragFrom = null;
     pendingCablePath = null;
     renderBack();
   };
   jacksEl.addEventListener('pointerup', finishCableDrag);
-  jacksEl.addEventListener('pointercancel', () => { pendingFrom = null; pendingCablePath = null; updateCables(); });
+  jacksEl.addEventListener('pointercancel', () => {
+    dragFrom = null; dragMoved = false;
+    clearSnapTarget();
+    pendingCablePath = null;
+    updateCables();
+  });
 
   svgEl.addEventListener('pointerdown', (e) => {
     const path = e.target.closest('[data-cable-id]');
@@ -252,9 +336,12 @@ export function renderModularRack(container, machine) {
     const isFront = face === 'front';
     listEl.hidden = !isFront;
     addBtn.hidden = !isFront;
-    hintEl.hidden = !isFront;
     jacksWrapEl.hidden = isFront;
     flipBtn.textContent = isFront ? '🔄 Flip to Patch Bay' : '🔄 Flip to Controls';
+    hintEl.textContent = isFront
+      ? 'Hold a module for options · tap + to add one'
+      : 'Tap an output, then an input to connect · tap a cable to remove it';
+    armedFrom = null; // keine über einen Flip hinweg "hängende" Auswahl
     if (!isFront) renderBack(); // faul -- s. Dateikopf-Kommentar
   }
   flipBtn.addEventListener('click', () => setFace(face === 'front' ? 'back' : 'front'));
