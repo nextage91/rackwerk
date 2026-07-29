@@ -1,8 +1,12 @@
 /**
  * Modular — frei patchbare Synth-Stimme (wie Caustics "Modular"): statt
  * einer festen Klangkette baut sich der Nutzer seine eigene aus einzelnen
- * Bausteinen (core/modular.js#MODULE_DEFS), verbunden über virtuelle Kabel
- * im Patch-Editor (ui/modular-view.js#openModularEditor).
+ * Bausteinen (core/modular.js#MODULE_DEFS). Die Bedienoberfläche ist ein
+ * Rack im Rack (ui/modular-view.js#renderModularRack): Module stecken wie
+ * Maschinen im Hauptrack in einer Liste (Vorderseite, Regler direkt in der
+ * Zeile), ein Flip-Button dreht dieselbe Liste auf die Rückseite, wo die
+ * Ein-/Ausgänge als Steckplätze erscheinen und per virtuellem Kabel
+ * verbunden werden.
  *
  * Erbt Pattern-Bank/Step-Grid/Jam-Clip-Bindung unverändert von
  * StepSequencedSynth (wie SubSynth) -- monophon, sequenzergetrieben, kein
@@ -12,7 +16,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { ModularPatch } from '../core/modular.js';
-import { openModularEditor } from '../ui/modular-view.js';
+import { renderModularRack } from '../ui/modular-view.js';
 
 export class Modular extends StepSequencedSynth {
   static meta = {
@@ -46,10 +50,10 @@ export class Modular extends StepSequencedSynth {
    *  StepSequencedSynth#emptyPattern, real reproduziert: "Receiver must be
    *  an instance of class Modular"). */
   buildDefaultPatch() {
-    const oscId = this.patch.addModule('oscillator', { x: 20, y: 20 });
-    const vcaId = this.patch.addModule('vca', { x: 140, y: 20 });
-    const envId = this.patch.addModule('envelope', { x: 140, y: 140 });
-    const outId = this.patch.addModule('output', { x: 260, y: 20 });
+    const oscId = this.patch.addModule('oscillator');
+    const vcaId = this.patch.addModule('vca');
+    const envId = this.patch.addModule('envelope');
+    const outId = this.patch.addModule('output');
     this.patch.connect(oscId, 'audio', vcaId, 'audio');
     this.patch.connect(vcaId, 'audio', outId, 'audio');
     this.patch.connect(envId, 'cv', vcaId, 'gain');
@@ -92,11 +96,7 @@ export class Modular extends StepSequencedSynth {
   }
 
   buildControls(container) {
-    const row = document.createElement('div');
-    row.className = 'machine__row';
-    row.innerHTML = '<button type="button" class="m-btn m-btn--wide" data-open-patch>🔌 Open Patch Editor</button>';
-    row.querySelector('[data-open-patch]').addEventListener('click', () => openModularEditor(this));
-    container.appendChild(row);
+    renderModularRack(container, this);
     this.buildPatternControls(container);
   }
 
