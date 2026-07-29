@@ -160,7 +160,7 @@ const MODULE_DEFS = {
    */
   envelope: {
     name: 'Envelope',
-    defaults: { attack: 0, release: 0.05 },
+    defaults: { attack: 0.002, release: 0.05 },
     build(ctx, p) {
       const src = ctx.createConstantSource();
       src.offset.value = 0;
@@ -284,7 +284,7 @@ export const MODULE_UI_PARAMS = {
     { key: 'resonance', label: 'Reso', min: 0.1, max: 15, curve: 'log', unit: '' },
   ],
   envelope: [
-    { key: 'attack', label: 'Attack', min: 0, max: 1, curve: 'log', unit: 's' },
+    { key: 'attack', label: 'Attack', min: 0.002, max: 1, curve: 'log', unit: 's' },
     { key: 'release', label: 'Release', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
   ],
   lfo: [
