@@ -1324,3 +1324,115 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 .machine--master .seg__btn { min-width: 44px; }
 
 .fx__revlabel { margin-right: 6px; }
+
+/* ===================== Modular: Patch-Editor (ui/modular-view.js) =====================
+   Über dem Machine-Focus (z-index 55), gleiche Ebene wie Insert-/Modulator-
+   Picker -- der Modul-Picker darunter (sheet--module-picker) sitzt noch eine
+   Stufe höher, weil er AUS diesem Sheet heraus geöffnet wird. */
+.sheet--modular { z-index: 60; }
+.sheet--module-picker { z-index: 65; }
+.modular-editor {
+  display: flex;
+  flex-direction: column;
+  height: 88vh;
+  max-height: 88vh;
+}
+.modular-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.modular-editor__hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.modular-editor__canvas-wrap {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  background: rgba(0,0,0,.35);
+  border-radius: var(--r-panel);
+  box-shadow: 0 2px 4px rgba(0,0,0,.5) inset;
+  -webkit-overflow-scrolling: touch;
+}
+/* Grosszügige, feste Fläche statt "so breit wie der Bildschirm" -- Module
+   brauchen Platz zum Verschieben, ohne sich sofort gegenseitig zu
+   überlappen; Scrollen (touch-action:pan-x/y unten) macht den Rest
+   erreichbar. */
+.modular-editor__canvas,
+.modular-editor__cables {
+  position: absolute;
+  top: 0; left: 0;
+  width: 1400px;
+  height: 1000px;
+}
+.modular-editor__cables { pointer-events: none; overflow: visible; }
+.mod-cable {
+  fill: none;
+  stroke: var(--m-color, #8f9bb3);
+  stroke-width: 2.5;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.mod-cable--pending { stroke-dasharray: 5 4; opacity: .75; }
+/* .modular-editor__canvas liegt (DOM-Reihenfolge) ÜBER dem SVG und deckt
+   denselben 1400x1000-Bereich ab -- ohne pointer-events:none würde die
+   leere Fläche zwischen den Kästchen (wo die Kabel verlaufen) jeden Klick
+   abfangen, bevor er das SVG darunter erreicht, und "Kabel antippen zum
+   Löschen" wäre nie auslösbar. Die Kästchen selbst holen sich pointer-
+   events per .mod-box wieder zurück. */
+.modular-editor__canvas { pointer-events: none; }
+.mod-box {
+  position: absolute;
+  width: 148px;
+  background: var(--bg-panel);
+  border: 1px solid var(--ink-faint);
+  border-radius: 8px;
+  padding: 6px;
+  touch-action: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  pointer-events: auto;
+}
+.mod-box__head {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 4px;
+  color: var(--lcd-ink);
+}
+.mod-box__ports {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--ink-dim);
+  pointer-events: auto;
+}
+.mod-box__ports--in { align-items: flex-start; }
+.mod-box__ports--out { align-items: flex-end; margin-top: 6px; }
+.port {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  touch-action: none;
+}
+.port--out { flex-direction: row-reverse; }
+.port__dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.5);
+  flex: 0 0 auto;
+}
+.port--in .port__dot { background: #5ec8e0; }
+.port--out .port__dot { background: #e8b84b; }
+.mod-box__params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: center;
+  margin: 4px 0;
+}
+.mod-box__seg { justify-content: center; margin: 4px 0; }
+.modular-editor__add { margin-top: 8px; }
