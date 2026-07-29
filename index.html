@@ -18349,7 +18349,22 @@ const MODULE_DEFS = {
    * einstellbar) und Release dadurch an einem längst unhörbaren Pegel
    * ansetzen liess (Chat: "Release-Regler funktioniert nicht", zu Recht --
    * er wirkte technisch, aber nur unterhalb der Hörschwelle).
-   */
+   *
+   * cancelAndHoldAtTime() statt cancelScheduledValues()+setValueAtTime
+   * (0.0001, t): weil dieselbe Instanz für JEDE Note wiederverwendet wird
+   * (s. oben), kann eine neue Note feuern, WÄHREND die vorige noch mitten
+   * im (evtl. langen) Release ist -- cancelScheduledValues() allein
+   * bricht die laufende Rampe an ihrem AKTUELLEN Wert ab (z. B. 0.6 bei
+   * halb durchlaufenem Release), das direkt folgende setValueAtTime
+   * (0.0001, t) sprang von dort aber HART auf nahe Null, bevor die neue
+   * Attack-Rampe wieder hochlief -- ein hörbares Klicken (Chat: "klicken
+   * bei langen Release-Zeiten bevor die nächste Note spielt", per
+   * Reproduktion bestätigt: ein Sprung von ~0.6 auf ~0 und zurück auf 1
+   * innerhalb von unter 10ms). cancelAndHoldAtTime hält den Wert exakt
+   * dort, wo die alte Rampe zur Zeit t tatsächlich stünde -- die neue
+   * Attack-Rampe (linearRampToValueAtTime(1, ...)) läuft dann OHNE Sprung
+   * von genau diesem Punkt aus weiter, egal ob die Hüllkurve gerade bei 0
+   * (normaler Fall) oder mitten im Release (Nachtriggern) steht. */
   envelope: {
     name: 'Envelope',
     defaults: { attack: 0.002, release: 0.05 },
@@ -18364,8 +18379,7 @@ const MODULE_DEFS = {
         trigger(t, dur) {
           const attack = Math.max(0.0001, Math.min(p.attack, dur * 0.5)); // nie länger als die halbe Note, s. subsynth.js
           const release = Math.max(0.005, p.release);
-          src.offset.cancelScheduledValues(t);
-          src.offset.setValueAtTime(0.0001, t);
+          src.offset.cancelAndHoldAtTime(t);
           src.offset.linearRampToValueAtTime(1, t + attack);
           src.offset.setValueAtTime(1, t + dur); // Halten auf vollem Pegel bis zum Notenende
           src.offset.linearRampToValueAtTime(0, t + dur + release);
