@@ -18185,17 +18185,13 @@ const MODULE_DEFS = {
         outputs: { audio: output },
         setParam(key, v) {
           if (key === 'type') filter.type = v;
-          else if (key === 'cutoff') {
-            p.cutoff = v;
-            // Solange ein Kabel an cutoff hängt, hält ModularPatch#connect
-            // den Basiswert in __patchBaseValue und den Live-Wert bei 0,
-            // damit das Kabel allein bestimmt (s. Dateikopf-Kommentar).
-            // Der Regler darf dann NICHT direkt auf .value schreiben --
-            // das würde die Kabel-Steuerung mit einem festen Wert
-            // überschreiben (reproduziert: Ton "hängt" beim Drehen fest).
-            if (filter.frequency.__patchBaseValue !== undefined) filter.frequency.__patchBaseValue = v;
-            else filter.frequency.value = v;
-          }
+          // Anders als beim VCA-Pegel (s. dort) ist additiv hier genau
+          // richtig: der Regler setzt die Basisfrequenz, ein gepatchtes
+          // LFO/Hüllkurven-Signal schwingt/verschiebt sie zusätzlich --
+          // dieselbe Konvention wie bei echten Analogfiltern (Cutoff-Knopf
+          // + CV-Eingang addieren sich). Der Regler schreibt deshalb IMMER
+          // direkt auf .value, unabhängig davon, ob gerade ein Kabel hängt.
+          else if (key === 'cutoff') { p.cutoff = v; filter.frequency.value = v; }
           else if (key === 'resonance') filter.Q.value = v;
         },
         dispose() { input.disconnect(); filter.disconnect(); disposeOutput(output); },
@@ -18264,38 +18260,44 @@ const MODULE_DEFS = {
   },
 
   /** VCA -- steuerbarer Verstärker, das Standard-"Ausgang dosieren"-Modul
-   *  jedes Modularsystems. `level` ist der Regler-Basiswert; sobald ein
-   *  Kabel an `gain` hängt, übernimmt ModularPatch#connect diesen Basiswert
-   *  auf 0 (s. Dateikopf-Kommentar) -- eine gepatchte Hüllkurve bestimmt den
-   *  Pegel dann vollständig selbst. */
+   *  jedes Modularsystems. ZWEI in Serie geschaltete Gain-Stufen statt
+   *  einer einzigen, damit sich Regler und Kabel nie gegenseitig
+   *  überschreiben können (beide Bugs, die genau daran lagen: erst "Regler
+   *  dreht Ton schlagartig konstant" (der Regler überschrieb live den
+   *  Wert, den das Kabel gerade steuerte), dann nach dem ersten Fix
+   *  "Regler hat gar keinen Einfluss mehr" (der Regler durfte nur noch den
+   *  Basiswert merken, der aber erst beim Trennen des Kabels wieder
+   *  einrastet -- solange die Hüllkurve angeschlossen bleibt, war der
+   *  Regler dauerhaft wirkungslos)):
+   *   - `level` (Regler) steuert AUSSCHLIESSLICH levelGain -- nie von
+   *     einem Kabel berührt, wirkt also IMMER, patched oder nicht.
+   *   - `gain` (CV-Port) steuert AUSSCHLIESSLICH cvGain -- ruht bei 1
+   *     (transparent) ohne Kabel, wird von ModularPatch#connect auf 0
+   *     gesetzt, sobald ein Kabel hängt (dieselbe Konvention wie immer),
+   *     und multipliziert sich (weil in Serie geschaltet statt addiert)
+   *     mit levelGain statt sich mit ihm zu addieren -- so bleibt der
+   *     Regler ein echter Lautstärke-Trimmer FÜR die Hüllkurve, statt mit
+   *     ihr um denselben Wert zu konkurrieren. */
   vca: {
     name: 'VCA',
     defaults: { level: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
-      const gain = ctx.createGain();
-      gain.gain.value = p.level;
-      input.connect(gain);
-      const output = safeOutput(ctx, gain);
+      const levelGain = ctx.createGain();
+      levelGain.gain.value = p.level;
+      const cvGain = ctx.createGain();
+      cvGain.gain.value = 1;
+      cvGain.gain.__cvExclusive = true; // s. ModularPatch#connect/disconnect
+      input.connect(levelGain);
+      levelGain.connect(cvGain);
+      const output = safeOutput(ctx, cvGain);
       return {
-        inputs: { audio: input, gain: gain.gain },
+        inputs: { audio: input, gain: cvGain.gain },
         outputs: { audio: output },
         setParam(key, v) {
-          if (key === 'level') {
-            p.level = v;
-            // Gleiche Regel wie beim Filter-Cutoff oben: solange ein Kabel
-            // (typischerweise eine Hüllkurve) an gain hängt, bestimmt
-            // ALLEIN das Kabel den Live-Wert (auf 0 gehalten von
-            // ModularPatch#connect) -- der Regler aktualisiert nur den
-            // gemerkten Basiswert, der beim Trennen des Kabels wieder
-            // einrastet. Reported bug: Regler drehen liess den Ton
-            // schlagartig konstant statt der Hüllkurve zu folgen, weil
-            // hier vorher immer direkt .value überschrieben wurde.
-            if (gain.gain.__patchBaseValue !== undefined) gain.gain.__patchBaseValue = v;
-            else gain.gain.value = v;
-          }
+          if (key === 'level') { p.level = v; levelGain.gain.value = v; }
         },
-        dispose() { input.disconnect(); gain.disconnect(); disposeOutput(output); },
+        dispose() { input.disconnect(); levelGain.disconnect(); cvGain.disconnect(); disposeOutput(output); },
       };
     },
   },
@@ -18434,10 +18436,14 @@ class ModularPatch {
     const to = toModule?.instance.inputs[toPort];
     if (!from || !to) return null;
     from.connect(to);
-    // Erstes Kabel an einem CV-Ziel (AudioParam, s. Dateikopf-Kommentar) --
-    // Regler-Basiswert merken und auf 0 setzen, damit das Kabel allein
-    // bestimmt, was ankommt, statt sich zum Reglerwert zu addieren.
-    if (to instanceof AudioParam && this.#portCountOnTarget(toId, toPort) === 0) {
+    // Erstes Kabel an einem CV-Ziel, das das ausdrücklich will (s.
+    // __cvExclusive/Dateikopf-Kommentar) -- Regler-Basiswert merken und auf
+    // 0 setzen, damit das Kabel ALLEIN bestimmt, was ankommt. Die meisten
+    // CV-Ports (Filter-Cutoff, Oszillator-Pitch, ...) wollen das GERADE
+    // NICHT: dort soll sich das Kabel zum Reglerwert/aktuellen Ton ADDIEREN
+    // (Standard-Konvention echter Analogsysteme), nur der VCA-Pegel
+    // braucht eine dedizierte, vom Regler unabhängige Stufe (s. dort).
+    if (to instanceof AudioParam && to.__cvExclusive && this.#portCountOnTarget(toId, toPort) === 0) {
       to.__patchBaseValue = to.value;
       to.setValueAtTime(0, engine.now);
     }
@@ -18456,13 +18462,10 @@ class ModularPatch {
     if (from && to) {
       try { from.disconnect(to); } catch { /* schon getrennt (z. B. Modul gerade entfernt) */ }
       // Letztes Kabel an diesem CV-Ziel entfernt -- Regler-Basiswert
-      // wiederherstellen (s. connect() oben) UND __patchBaseValue wieder
-      // löschen: die einzelnen Module prüfen dieses Feld in ihrem setParam()
-      // (s. z. B. vca/filter unten), um zu erkennen, ob ihr eigener Regler
-      // gerade von einem Kabel überstimmt wird -- bliebe das Feld stehen,
-      // hielte ein späterer Regler-Dreh den Wert für immer fälschlich fest,
-      // obwohl längst kein Kabel mehr hängt.
-      if (to instanceof AudioParam && this.#portCountOnTarget(cable.toId, cable.toPort) === 0) {
+      // wiederherstellen (s. connect() oben) und __patchBaseValue wieder
+      // löschen (sonst bliebe es für immer gesetzt, sobald hier je ein
+      // Kabel hing -- s. connect()-Kommentar).
+      if (to instanceof AudioParam && to.__cvExclusive && this.#portCountOnTarget(cable.toId, cable.toPort) === 0) {
         to.setValueAtTime(to.__patchBaseValue ?? 0, engine.now);
         delete to.__patchBaseValue;
       }
