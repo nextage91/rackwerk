@@ -35,7 +35,7 @@ MODULES = [
     ("js/core/modulators.js",   ["LFO_WAVES", "LFO_SYNC_BUTTONS", "ARP_MODES", "ARP_SYNC_BUTTONS", "MODULATOR_TYPES", "MOD_DISPLAY", "MOD_COLORS", "createModulator"]),
     ("js/ui/insert-chain.js",   ["openInsertPicker", "renderInsertChain", "INSERT_DISPLAY"]),
     ("js/ui/modulation-chain.js", ["openModulatorPicker", "renderModulationChain"]),
-    ("js/ui/modular-view.js",   ["openModularEditor"]),
+    ("js/ui/modular-view.js",   ["renderModularRack"]),
     ("js/core/fx.js",           ["masterFX"]),
     ("js/core/song.js",         ["song"]),
     ("js/core/recorder.js",     ["recorder"]),

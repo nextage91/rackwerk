@@ -312,13 +312,13 @@ let nextCableId = 1;
 
 export class ModularPatch {
   constructor() {
-    /** @type {Map<number, {type:string, params:object, instance:object, x:number, y:number}>} */
+    /** @type {Map<number, {type:string, params:object, instance:object}>} */
     this.modules = new Map();
     /** @type {Array<{id:number, fromId:number, fromPort:string, toId:number, toPort:string}>} */
     this.cables = [];
   }
 
-  /** @param {{id?:number, params?:object, x?:number, y?:number}} [saved] */
+  /** @param {{id?:number, params?:object}} [saved] */
   addModule(type, saved = null) {
     const def = MODULE_DEFS[type];
     if (!def) throw new Error(`Unbekannter Modul-Typ: ${type}`);
@@ -326,8 +326,26 @@ export class ModularPatch {
     const id = saved?.id ?? nextModuleId++;
     if (saved?.id != null) nextModuleId = Math.max(nextModuleId, saved.id + 1);
     const instance = def.build(engine.ctx, params);
-    this.modules.set(id, { type, params, instance, x: saved?.x ?? 20, y: saved?.y ?? 20 });
+    this.modules.set(id, { type, params, instance });
     return id;
+  }
+
+  /** Ein Modul in der Rack-Reihenfolge nach oben (-1) oder unten (+1)
+   *  verschieben -- die Map-Einfügereihenfolge IST die Rack-Reihenfolge
+   *  (durchgezogen bis in serialize()), also einfach neu befüllen statt
+   *  eine separate Sortier-Struktur mitzuführen. Dieselbe Reihenfolge
+   *  bestimmt auch die Steckplatz-Positionen auf der Rückseite (s.
+   *  ui/modular-view.js) -- Vorder- und Rückansicht zeigen bewusst
+   *  dieselbe Liste, keine zwei unabhängigen Sortierungen. */
+  moveModule(id, dir) {
+    const ids = [...this.modules.keys()];
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i === -1 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    const reordered = new Map();
+    for (const k of ids) reordered.set(k, this.modules.get(k));
+    this.modules = reordered;
   }
 
   removeModule(id) {
@@ -399,9 +417,13 @@ export class ModularPatch {
     for (const id of [...this.modules.keys()]) this.removeModule(id);
   }
 
+  /** Reihenfolge kommt allein aus der Map-Einfügereihenfolge (s.
+   *  moveModule()) -- kein separates x/y mehr nötig, das Array hier IST
+   *  schon die Rack-Reihenfolge. rebuildPatchFrom() (machines/modular.js)
+   *  fügt beim Laden in genau dieser Array-Reihenfolge wieder ein. */
   serialize() {
     return {
-      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params }, x: m.x, y: m.y })),
+      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params } })),
       cables: this.cables.map((c) => ({ fromId: c.fromId, fromPort: c.fromPort, toId: c.toId, toPort: c.toPort })),
     };
   }

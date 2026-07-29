@@ -1325,50 +1325,109 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 
 .fx__revlabel { margin-right: 6px; }
 
-/* ===================== Modular: Patch-Editor (ui/modular-view.js) =====================
-   Über dem Machine-Focus (z-index 55), gleiche Ebene wie Insert-/Modulator-
-   Picker -- der Modul-Picker darunter (sheet--module-picker) sitzt noch eine
-   Stufe höher, weil er AUS diesem Sheet heraus geöffnet wird. */
-.sheet--modular { z-index: 60; }
-.sheet--module-picker { z-index: 65; }
-.modular-editor {
-  display: flex;
-  flex-direction: column;
-  height: 88vh;
-  max-height: 88vh;
-}
-.modular-editor__head {
+/* ===================== Modular: Rack im Rack (ui/modular-view.js) =====================
+   Front (.modrack__list): Regler-Zeilen im selben Stil wie die Zeilen des
+   Hauptracks (Farbstreifen, Name, ▲/▼-Move-Buttons). Ein Flip-Button
+   schaltet auf die Rückseite (.modrack__jacks-wrap) um: dieselben Module in
+   derselben Reihenfolge, jetzt als Steckfelder mit ihren Ein-/Ausgängen,
+   Kabel per SVG darüber gelegt. Beides sitzt direkt im normalen Fokus-
+   Bereich der Maschine -- kein eigenes Sheet-Overlay mehr wie zuvor. */
+.modrack__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 4px;
 }
-.modular-editor__hint {
+.modrack__title { font-weight: 600; color: var(--lcd-ink); }
+.modrack__hint {
   margin: 0 0 8px;
   font-size: 11px;
   color: var(--ink-dim);
 }
-.modular-editor__canvas-wrap {
-  position: relative;
-  flex: 1;
-  overflow: auto;
-  background: rgba(0,0,0,.35);
-  border-radius: var(--r-panel);
-  box-shadow: 0 2px 4px rgba(0,0,0,.5) inset;
-  -webkit-overflow-scrolling: touch;
+.modrack__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
 }
-/* Grosszügige, feste Fläche statt "so breit wie der Bildschirm" -- Module
-   brauchen Platz zum Verschieben, ohne sich sofort gegenseitig zu
-   überlappen; Scrollen (touch-action:pan-x/y unten) macht den Rest
-   erreichbar. */
-.modular-editor__canvas,
-.modular-editor__cables {
+/* [hidden] hat dieselbe Spezifität wie die Klassen oben, die eigene
+   display-Werte setzen -- ohne diese Overrides würde die Front-Liste bzw.
+   der Add-Button beim Flip auf die Rückseite sichtbar bleiben (s. auch
+   .stepseq__grid[hidden] weiter unten, derselbe Browser-Fallstrick). */
+.modrack__list[hidden], .modrack__add[hidden] { display: none; }
+.modrack__row {
+  background: var(--bg-panel);
+  border: 1px solid var(--ink-faint);
+  border-left: 3px solid var(--m-color, #8f9bb3);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.modrack__row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.modrack__row-name { font-size: 12px; font-weight: 600; color: var(--lcd-ink); }
+.modrack__row-move { display: flex; gap: 2px; }
+.modrack__row-seg { justify-content: center; margin: 6px 0 0; }
+.modrack__row-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.modrack__add { margin-bottom: 4px; }
+
+/* Kein eigener Scroll-Container mehr wie bei der früheren festen Leinwand
+   -- die Liste wächst mit ihrem Inhalt, das umgebende Fokus-Panel scrollt
+   als Ganzes. .modrack__cables braucht nur eine position:relative-Hülle,
+   keine Scroll-Offset-Korrektur (s. ui/modular-view.js#updateCables). */
+/* padding-right reserviert eine zeilenfreie Spur, in der Kabel verlaufen
+   (s. ui/modular-view.js#updateCables) -- ohne sie liefen Kabel unter den
+   blickdichten Zeilen hindurch, unsichtbar und unantippbar. */
+.modrack__jacks-wrap { position: relative; padding-right: 40px; }
+.modrack__jacks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.modrack__cables {
   position: absolute;
   top: 0; left: 0;
-  width: 1400px;
-  height: 1000px;
+  width: 100%;
+  pointer-events: none;
+  overflow: visible;
 }
-.modular-editor__cables { pointer-events: none; overflow: visible; }
+.modrack__jack-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--ink-faint);
+  border-left: 3px solid var(--m-color, #8f9bb3);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.modrack__jack-row-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lcd-ink);
+  flex: 1;
+}
+.modrack__jack-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.modrack__jack-ports--out { align-items: flex-end; }
+
+/* Kabel + Steck-Punkte -- unverändert vom Vorgänger-Design übernommen. */
 .mod-cable {
   fill: none;
   stroke: var(--m-color, #8f9bb3);
@@ -1377,41 +1436,6 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   cursor: pointer;
 }
 .mod-cable--pending { stroke-dasharray: 5 4; opacity: .75; }
-/* .modular-editor__canvas liegt (DOM-Reihenfolge) ÜBER dem SVG und deckt
-   denselben 1400x1000-Bereich ab -- ohne pointer-events:none würde die
-   leere Fläche zwischen den Kästchen (wo die Kabel verlaufen) jeden Klick
-   abfangen, bevor er das SVG darunter erreicht, und "Kabel antippen zum
-   Löschen" wäre nie auslösbar. Die Kästchen selbst holen sich pointer-
-   events per .mod-box wieder zurück. */
-.modular-editor__canvas { pointer-events: none; }
-.mod-box {
-  position: absolute;
-  width: 148px;
-  background: var(--bg-panel);
-  border: 1px solid var(--ink-faint);
-  border-radius: 8px;
-  padding: 6px;
-  touch-action: none;
-  box-shadow: 0 2px 6px rgba(0,0,0,.4);
-  pointer-events: auto;
-}
-.mod-box__head {
-  font-size: 12px;
-  font-weight: 600;
-  text-align: center;
-  margin-bottom: 4px;
-  color: var(--lcd-ink);
-}
-.mod-box__ports {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--ink-dim);
-  pointer-events: auto;
-}
-.mod-box__ports--in { align-items: flex-start; }
-.mod-box__ports--out { align-items: flex-end; margin-top: 6px; }
 .port {
   display: flex;
   align-items: center;
@@ -1427,12 +1451,8 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 }
 .port--in .port__dot { background: #5ec8e0; }
 .port--out .port__dot { background: #e8b84b; }
-.mod-box__params {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  justify-content: center;
-  margin: 4px 0;
-}
-.mod-box__seg { justify-content: center; margin: 4px 0; }
-.modular-editor__add { margin-top: 8px; }
+
+/* Der Modul-Picker wird jetzt direkt aus dem Machine-Focus heraus geöffnet
+   (kein separates Modular-Sheet mehr dazwischen) -- gleiche Ebene wie
+   Insert-/Modulator-Picker (s. dort). */
+.sheet--module-picker { z-index: 60; }
