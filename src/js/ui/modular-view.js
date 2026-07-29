@@ -186,6 +186,11 @@ export function renderModularRack(container, machine) {
       return `<path class="mod-cable" data-cable-id="${c.id}" d="M${from.x},${from.y} C${lane},${from.y} ${lane},${to.y} ${to.x},${to.y}"></path>`;
     }).join('');
 
+    // Breite UND Höhe explizit als Attribute setzen statt sich für die
+    // Breite auf CSS width:100% zu verlassen -- ein <svg> ohne viewBox
+    // bildet Pfad-Koordinaten sonst nicht zuverlässig browserübergreifend
+    // 1:1 auf CSS-Pixel ab, wenn nur eines von beiden gesetzt ist.
+    svgEl.setAttribute('width', String(wrapRect.width));
     svgEl.setAttribute('height', String(jacksEl.offsetHeight));
     svgEl.innerHTML = paths + (pendingCablePath ?? '');
   }
@@ -196,6 +201,14 @@ export function renderModularRack(container, machine) {
   jacksEl.addEventListener('pointerdown', (e) => {
     const port = e.target.closest('.port--out');
     if (!port) return;
+    // touch-action:none auf .port (s. CSS) reicht auf echten Touchgeräten
+    // NICHT immer aus, um das Scrollen des umgebenden Fokus-Panels zu
+    // unterdrücken -- preventDefault() zusätzlich, wie überall sonst im
+    // Code, wo per Pointer gezogen wird (s. ui/knob.js#onDown). Ohne das:
+    // der erste Zug wird als Scrollversuch interpretiert statt als
+    // Kabel-Ziehen, das Kabel verbindet sich nie (Chat-Report: "kann die
+    // Patch-Punkte nicht miteinander verbinden").
+    e.preventDefault();
     pendingFrom = { moduleId: Number(port.dataset.moduleId), port: port.dataset.portKey };
     try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
     e.stopPropagation();
