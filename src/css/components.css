@@ -1380,19 +1380,30 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 }
 .modrack__add { margin-bottom: 4px; }
 
-/* Kein eigener Scroll-Container mehr wie bei der früheren festen Leinwand
-   -- die Liste wächst mit ihrem Inhalt, das umgebende Fokus-Panel scrollt
-   als Ganzes. .modrack__cables braucht nur eine position:relative-Hülle,
-   keine Scroll-Offset-Korrektur (s. ui/modular-view.js#updateCables). */
-/* padding-right reserviert eine zeilenfreie Spur, in der Kabel verlaufen
-   (s. ui/modular-view.js#updateCables) -- ohne sie liefen Kabel unter den
-   blickdichten Zeilen hindurch, unsichtbar und unantippbar. */
-.modrack__jacks-wrap { position: relative; padding-right: 40px; }
-.modrack__jacks {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* Rückseite: Module stehen NEBENEINANDER in einer waagrecht scrollbaren
+   Reihe (wie die Buchsenleiste einer echten Patch-Bay) statt übereinander
+   wie auf der Vorderseite -- absichtlich anders: darunter bleibt dadurch
+   eine durchgehend freie Fläche (die "Wanne", padding-bottom), in der
+   JEDES Kabel frei verläuft, ohne je unter einer fremden Kachel
+   hindurchzumüssen (bei übereinander gestapelten Zeilen gäbe es diese
+   freie Fläche nicht -- ein Kabel zwischen zwei nicht benachbarten Zeilen
+   liefe zwangsläufig unsichtbar UND unantippbar darunter hindurch, die
+   Zeilen sind blickdicht und liegen im DOM über dem SVG). S.
+   ui/modular-view.js#updateCables für die Kabel-Geometrie. */
+.modrack__jacks-wrap { position: relative; padding-bottom: 170px; }
+.modrack__jack-strip {
+  /* position:relative ist Pflicht, nicht nur Kosmetik: ohne eigenes
+     "positioniertes" Stacking würde das absolut positionierte SVG
+     unabhängig von der DOM-Reihenfolge über der Reihe liegen (CSS-Regel:
+     positionierte Elemente liegen immer über normalem Fluss) -- Taps auf
+     Ports würden dann das unsichtbare Kabel-Trefferfeld dahinter treffen
+     statt den Port selbst. */
   position: relative;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
 }
 .modrack__cables {
   position: absolute;
@@ -1401,37 +1412,47 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   pointer-events: none;
   overflow: visible;
 }
-.modrack__jack-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.modrack__jack-tile {
+  flex: 0 0 auto;
+  width: 128px;
   background: var(--bg-panel);
   border: 1px solid var(--ink-faint);
-  border-left: 3px solid var(--m-color, #8f9bb3);
+  border-top: 3px solid var(--m-color, #8f9bb3);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 8px;
 }
-.modrack__jack-row-head {
+.modrack__jack-tile-head {
   font-size: 12px;
   font-weight: 600;
   color: var(--lcd-ink);
-  flex: 1;
+  text-align: center;
+  margin-bottom: 6px;
 }
 .modrack__jack-ports {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   font-size: 10px;
   color: var(--ink-dim);
 }
-.modrack__jack-ports--out { align-items: flex-end; }
+.modrack__jack-ports--out { margin-top: 8px; }
 
-/* Kabel + Steck-Punkte -- unverändert vom Vorgänger-Design übernommen. */
+/* Kabel: sichtbarer dünner Strich + zweiter, unsichtbarer breiter Strich
+   NUR für den Tastbereich (dieselbe data-cable-id, s.
+   ui/modular-view.js#updateCables) -- eine dünne Linie exakt treffen ist
+   auf echten Touchgeräten kaum machbar (Chat: "ich habe es nicht
+   geschafft [ein Kabel zu entfernen]"). */
 .mod-cable {
   fill: none;
   stroke: var(--m-color, #8f9bb3);
   stroke-width: 2.5;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.mod-cable-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 28;
   pointer-events: stroke;
   cursor: pointer;
 }
@@ -1442,7 +1463,6 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   gap: 4px;
   touch-action: none;
 }
-.port--out { flex-direction: row-reverse; }
 .port__dot {
   width: 14px; height: 14px;
   border-radius: 50%;
@@ -1451,6 +1471,23 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 }
 .port--in .port__dot { background: #5ec8e0; }
 .port--out .port__dot { background: #e8b84b; }
+
+/* Grosser, garantiert leicht zu treffender Trennen-Button neben jedem
+   belegten Eingang -- Alternative zum (dünneren) Kabel-Antippen, s. oben. */
+.port__remove {
+  margin-left: auto;
+  width: 18px; height: 18px;
+  min-width: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,255,255,.15);
+  color: var(--ink-dim);
+  font-size: 10px;
+  line-height: 18px;
+  padding: 0;
+  cursor: pointer;
+}
+.port__remove:active { background: rgba(255,255,255,.35); }
 
 /* Scharf geschalteter Ausgang (Tap-Verbinden) -- pulsierender Ring, damit
    auch ohne durchgehendes Ziehen klar ist, wo eine Verbindung gerade
