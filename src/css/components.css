@@ -1427,7 +1427,18 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border: 1px solid var(--ink-faint);
   border-top: 3px solid var(--m-color, #8f9bb3);
   border-radius: 8px;
+  cursor: grab;
+  /* Die GANZE Kachel ist der Zieh-Griff, nicht nur die schmale Kopfzeile
+     (Chat: "ich scrolle oft im Feld anstatt das Modul zu verschieben" --
+     die Kopfzeile allein war ein zu kleines, zu leicht verfehltes Ziel;
+     knapp daneben landete man auf dem Kachel-Rumpf, der bisher nichts
+     Eigenes tat und deshalb natives Scrollen der Steckfläche auslöste).
+     Ports/Trennen-Button innerhalb haben ohnehin schon ihr eigenes
+     touch-action:none (s. .port unten) -- unverändert vorrangig, s.
+     ui/modular-view.js#pointerdown. */
+  touch-action: none;
 }
+.modrack__mod-box:active { cursor: grabbing; }
 .modrack__mod-box-head {
   font-size: 12px;
   font-weight: 600;
@@ -1436,10 +1447,7 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   padding: 6px 8px;
   margin-bottom: 6px;
   border-bottom: 1px solid var(--ink-faint);
-  cursor: grab;
-  touch-action: none; /* eigene Zieh-Geste, s. ui/modular-view.js -- kein natives Pan hier */
 }
-.modrack__mod-box-head:active { cursor: grabbing; }
 .modrack__mod-box-ports {
   display: flex;
   justify-content: space-between;

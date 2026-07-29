@@ -188,7 +188,7 @@ export function renderModularRack(container, machine) {
     const ports = MODULE_PORTS[m.type];
     return `
       <div class="modrack__mod-box" data-module-id="${id}" style="left:${m.x}px; top:${m.y}px;">
-        <div class="modrack__mod-box-head" data-drag-handle>${moduleMeta(m.type).name}</div>
+        <div class="modrack__mod-box-head">${moduleMeta(m.type).name}</div>
         <div class="modrack__mod-box-ports">
           <div class="modrack__mod-box-ports--in">
             ${ports.inputs.map((p) => inPortHtml(id, p)).join('')}
@@ -321,24 +321,10 @@ export function renderModularRack(container, machine) {
   }
 
   jacksEl.addEventListener('pointerdown', (e) => {
-    // Kopfzeile einer Kachel: Modul auf der Steckfläche verschieben (s.
-    // Dateikopf-Kommentar -- der eigentliche Kern des Umbaus). Eigener,
-    // erster Zweig, weil das eine ganz andere Geste ist als das Verbinden
-    // weiter unten und nie mit Ports kollidiert (die Kopfzeile enthält
-    // keine).
-    const handle = e.target.closest('[data-drag-handle]');
-    if (handle) {
-      e.preventDefault();
-      const box = handle.closest('.modrack__mod-box');
-      const id = Number(box.dataset.moduleId);
-      const m = patch.modules.get(id);
-      if (!m) return;
-      moveFrom = { id, startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y };
-      moveMoved = false;
-      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
-      e.stopPropagation();
-      return;
-    }
+    // Ports und der Trennen-Button haben Vorrang -- erst DANACH gilt ein
+    // Antippen als "Modul verschieben" (s. unten). Reihenfolge ist
+    // wichtig: ohne das würde ein Tap auf einen Port als Verschiebe-
+    // Versuch missverstanden.
     const removeBtn = e.target.closest('[data-remove-cable]');
     if (removeBtn) {
       e.preventDefault();
@@ -359,21 +345,41 @@ export function renderModularRack(container, machine) {
       return;
     }
     const outPort = e.target.closest('.port--out');
-    if (!outPort) {
-      // Leere Fläche angetippt -- eine offene Auswahl verwerfen.
-      if (armedFrom) setArmed(null);
+    if (outPort) {
+      // touch-action:none auf .port (s. CSS) reicht auf echten Touchgeräten
+      // NICHT immer aus, um das Scrollen des umgebenden Fokus-Panels zu
+      // unterdrücken -- preventDefault() zusätzlich, wie überall sonst im
+      // Code, wo per Pointer gezogen wird (s. ui/knob.js#onDown).
+      e.preventDefault();
+      dragFrom = { moduleId: Number(outPort.dataset.moduleId), port: outPort.dataset.portKey };
+      dragMoved = false;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      e.stopPropagation();
       return;
     }
-    // touch-action:none auf .port (s. CSS) reicht auf echten Touchgeräten
-    // NICHT immer aus, um das Scrollen des umgebenden Fokus-Panels zu
-    // unterdrücken -- preventDefault() zusätzlich, wie überall sonst im
-    // Code, wo per Pointer gezogen wird (s. ui/knob.js#onDown).
-    e.preventDefault();
-    dragFrom = { moduleId: Number(outPort.dataset.moduleId), port: outPort.dataset.portKey };
-    dragMoved = false;
-    dragStartX = e.clientX; dragStartY = e.clientY;
-    try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
-    e.stopPropagation();
+    // Überall sonst auf einer Kachel (Kopfzeile ODER Rumpf) verschiebt das
+    // Modul -- NICHT nur die schmale Kopfzeile (s. Chat: "ich scrolle oft
+    // im Feld anstatt das Modul zu verschieben"). Die schmale Kopfzeile
+    // allein war auf echten Touchgeräten ein zu kleines, zu leicht
+    // verfehltes Ziel; ein Griff verfehlt die Kopfzeile knapp landet dann
+    // auf dem Kachel-Rumpf, der bis jetzt nichts Eigenes tat und deshalb
+    // natives Scrollen der Steckfläche auslöste, statt das Modul zu
+    // greifen.
+    const box = e.target.closest('.modrack__mod-box');
+    if (box) {
+      e.preventDefault();
+      const id = Number(box.dataset.moduleId);
+      const m = patch.modules.get(id);
+      if (!m) return;
+      moveFrom = { id, startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y };
+      moveMoved = false;
+      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      e.stopPropagation();
+      return;
+    }
+    // Leere Fläche angetippt -- eine offene Auswahl verwerfen.
+    if (armedFrom) setArmed(null);
   });
   jacksEl.addEventListener('pointermove', (e) => {
     if (moveFrom) {
