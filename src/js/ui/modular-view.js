@@ -3,20 +3,44 @@
  * wie Maschinen im Hauptrack in einer Liste (Vorderseite: Name + Regler
  * direkt in der Zeile, ▲/▼ zum Umsortieren, Halten für Duplizieren/
  * Entfernen, "+ Add Module" am Ende). Ein Flip-Button dreht dieselbe Liste
- * auf die Rückseite: dort erscheinen dieselben Module NEBENEINANDER in
- * einer waagrecht scrollbaren Buchsenleiste (wie ein echtes Patch-Bay-Feld)
- * mit ihren Ein-/Ausgängen, verbunden per virtuellem Kabel (antippen zum
- * Verbinden -- Ausgang, dann Eingang antippen --, ziehen geht auch; ✕ neben
- * einem belegten Eingang ODER das Kabel selbst antippen zum Trennen).
+ * auf die Rückseite: dort erscheinen dieselben Module als frei
+ * VERSCHIEBBARE Kacheln auf einer zweidimensional pan-baren Steckfläche --
+ * wie Caustics eigenes Modular (recherchiert, s. Chat: "schau auch nochmals
+ * wie das caustic in ihrem modular gelöst haben"): Eingänge links, Ausgänge
+ * rechts an jeder Kachel (Signalfluss liest sich wie ein Schaltplan von
+ * links nach rechts), Kabel sind Kurven, die live den tatsächlichen Jack-
+ * Positionen folgen. Verbinden bleibt wie zuvor: Ausgang antippen, dann
+ * Eingang antippen (Ziehen geht auch); ✕ neben einem belegten Eingang ODER
+ * das Kabel selbst antippen zum Trennen.
  *
- * Die Listen-Reihenfolge (ModularPatch#moveModule) ist die EINZIGE
- * Sortierung -- Vorder- und Rückseite zeigen dieselbe Reihenfolge. Die
- * Rückseite reiht Module bewusst NEBENEINANDER statt übereinander: darunter
- * bleibt so eine durchgehend freie "Kabel-Wanne", in der jedes Kabel frei
- * verläuft (s. updateCables()) -- bei übereinander gestapelten Zeilen (eine
- * frühere Fassung) liefe ein Kabel zwischen zwei nicht benachbarten Zeilen
- * zwangsläufig unsichtbar und unantippbar unter jeder dazwischenliegenden
- * Zeile hindurch.
+ * ZWEI vorige Fassungen sind daran gescheitert, eine EINZIGE feste
+ * Anordnung zu erraten, die für jeden Patch übersichtlich bleibt: erst
+ * Module übereinander gestapelt (Kabel liefen unsichtbar unter fremden
+ * Zeilen hindurch), dann nebeneinander in einer Reihe (Kabel liefen durch
+ * eine schmale Seitenspur, laut Feedback weiterhin unübersichtlich). Der
+ * eigentliche Kniff bei Caustic (und jedem echten Modularsystem) ist gar
+ * nicht die Kabel-Optik, sondern dass der NUTZER selbst festlegt, wo ein
+ * Modul steht -- Kabel-Chaos räumt man auf, indem man Module verschiebt,
+ * nicht indem die App eine cleverere Anordnung errät. Deshalb hier: Modul-
+ * Kopfzeile ziehen verschiebt die Kachel (Position wird in ModularPatch
+ * gespeichert, s. core/modular.js#moveModuleTo/serialize), leere Fläche
+ * ziehen scrollt/pan't die ganze Steckfläche (natives 2-Achsen-
+ * overflow:auto -- kein eigener Pan-Code nötig, dieselbe Technik, die schon
+ * die vorige waagrechte Buchsenleiste nutzte, nur auf beide Achsen
+ * ausgeweitet).
+ *
+ * Kabel-Koordinaten sind bewusst relativ zur SCROLLENDEN Fläche selbst
+ * (.modrack__canvas), nicht zum fixen Sichtfenster darum -- dadurch bleiben
+ * sie beim Pan automatisch korrekt (Kachel UND ihre Ports verschieben sich
+ * beim Scrollen um denselben Betrag, die Differenz bleibt invariant),
+ * ANDERS als in der vorigen Fassung, die noch einen eigenen scroll-Listener
+ * brauchte, weil dort das SVG am fixen Wrap hing statt an der scrollenden
+ * Fläche selbst.
+ *
+ * Die Listen-Reihenfolge (ModularPatch#moveModule) bleibt die Sortierung
+ * der VORDERSEITE -- x/y (Rückseite) ist davon unabhängig, ein Modul in der
+ * Reglerliste umzusortieren verschiebt seine Kachel auf der Steckfläche
+ * nicht.
  *
  * renderModularRack() wird EINMAL pro Maschine beim Bauen ihrer Bedien-
  * oberfläche aufgerufen (s. machines/modular.js#buildControls) und baut
@@ -30,10 +54,10 @@
  * (s. rack.js#mount -- .machine-focus startet mit hidden=true, erst später
  * sichtbar gemacht). getBoundingClientRect() auf einem noch nicht
  * layouteten/sichtbaren Baum liefert überall (0,0) -- deshalb rendert
- * renderBack() (Steckplatz-Positionen, Kabel-Pfade) bewusst NICHT beim
- * ersten Bau, sondern erst faul, wenn der Nutzer tatsächlich auf die
- * Rückseite umschaltet (ein Klick, der zwangsläufig erst passiert, wenn
- * das Fokus-Panel längst sichtbar ist).
+ * renderBack() (Kachel-Positionen, Kabel-Pfade) bewusst NICHT beim ersten
+ * Bau, sondern erst faul, wenn der Nutzer tatsächlich auf die Rückseite
+ * umschaltet (ein Klick, der zwangsläufig erst passiert, wenn das Fokus-
+ * Panel längst sichtbar ist).
  */
 import { MODULE_TYPES, MODULE_PORTS, MODULE_UI_PARAMS, OSCILLATOR_WAVES, FILTER_TYPES, moduleMeta } from '../core/modular.js';
 
@@ -52,9 +76,11 @@ export function renderModularRack(container, machine) {
     <p class="modrack__hint" data-hint>Hold a module for options · tap + to add one</p>
     <div class="modrack__list" data-list></div>
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
-    <div class="modrack__jacks-wrap" data-jackswrap hidden>
-      <svg class="modrack__cables" data-cables></svg>
-      <div class="modrack__jack-strip" data-jacks></div>
+    <div class="modrack__canvas-wrap" data-jackswrap hidden>
+      <div class="modrack__canvas" data-canvas>
+        <svg class="modrack__cables" data-cables></svg>
+        <div class="modrack__boxes" data-jacks></div>
+      </div>
     </div>
   `;
   container.appendChild(root);
@@ -63,6 +89,7 @@ export function renderModularRack(container, machine) {
   const addBtn = root.querySelector('[data-add-module]');
   const hintEl = root.querySelector('[data-hint]');
   const jacksWrapEl = root.querySelector('[data-jackswrap]');
+  const canvasEl = root.querySelector('[data-canvas]');
   const jacksEl = root.querySelector('[data-jacks]');
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
@@ -134,17 +161,12 @@ export function renderModularRack(container, machine) {
     }
   }
 
-  /* ---------- Rückseite: Steckfeld-Reihe + Kabel-Wanne darunter ----------
-     Module stehen hier NEBENEINANDER in einer waagrecht scrollbaren Reihe
-     (wie die Buchsenleiste eines echten Patch-Bay-Feldes), statt
-     übereinander wie auf der Vorderseite -- absichtlich anders: darunter
-     bleibt dadurch eine durchgehend freie Fläche (die "Wanne"), in der
-     JEDES Kabel unbehindert von fremden Modulen verlaufen kann. Bei
-     übereinander gestapelten Zeilen (die frühere Fassung) gäbe es diese
-     freie Fläche nicht -- ein Kabel zwischen zwei nicht benachbarten
-     Zeilen liefe zwangsläufig unsichtbar UND unantippbar unter jeder
-     dazwischenliegenden Zeile hindurch (die Zeilen sind blickdicht und
-     liegen im DOM über dem SVG); s. Chat: "Kabel an der Seite unübersichtlich". */
+  /* ---------- Rückseite: frei verschiebbare Steckfläche ----------
+     Jede Kachel hat Eingänge links, Ausgänge rechts (Caustic-Konvention,
+     s. Dateikopf-Kommentar) -- Signalfluss liest sich von links nach
+     rechts wie ein Schaltplan. Die Kopfzeile einer Kachel ist der Zieh-
+     Griff zum Verschieben; leere Fläche ziehen scrollt/pan't die ganze
+     Steckfläche (natives 2-Achsen-Scrollen des Wraps). */
 
   function inPortHtml(id, p) {
     const cable = patch.cables.find((c) => c.toId === id && c.toPort === p.key);
@@ -162,23 +184,25 @@ export function renderModularRack(container, machine) {
     `;
   }
 
-  function jackTileHtml(id, m) {
+  function modBoxHtml(id, m) {
     const ports = MODULE_PORTS[m.type];
     return `
-      <div class="modrack__jack-tile" data-module-id="${id}">
-        <div class="modrack__jack-tile-head">${moduleMeta(m.type).name}</div>
-        <div class="modrack__jack-ports modrack__jack-ports--in">
-          ${ports.inputs.map((p) => inPortHtml(id, p)).join('')}
-        </div>
-        <div class="modrack__jack-ports modrack__jack-ports--out">
-          ${ports.outputs.map((p) => `<span class="port port--out" data-module-id="${id}" data-port-dir="out" data-port-key="${p.key}"><span class="port__dot"></span>${p.label}</span>`).join('')}
+      <div class="modrack__mod-box" data-module-id="${id}" style="left:${m.x}px; top:${m.y}px;">
+        <div class="modrack__mod-box-head" data-drag-handle>${moduleMeta(m.type).name}</div>
+        <div class="modrack__mod-box-ports">
+          <div class="modrack__mod-box-ports--in">
+            ${ports.inputs.map((p) => inPortHtml(id, p)).join('')}
+          </div>
+          <div class="modrack__mod-box-ports--out">
+            ${ports.outputs.map((p) => `<span class="port port--out" data-module-id="${id}" data-port-dir="out" data-port-key="${p.key}"><span class="port__dot"></span>${p.label}</span>`).join('')}
+          </div>
         </div>
       </div>
     `;
   }
 
   function renderBack() {
-    jacksEl.innerHTML = [...patch.modules.entries()].map(([id, m]) => jackTileHtml(id, m)).join('');
+    jacksEl.innerHTML = [...patch.modules.entries()].map(([id, m]) => modBoxHtml(id, m)).join('');
     // Scharf geschalteter Ausgang (s. Tap-Verbinden weiter unten) übersteht
     // ein Neuzeichnen -- z. B. wenn man erst eine Ausgangs-Buchse antippt
     // und danach noch einen anderen Regler/Move-Pfeil auf der Vorderseite
@@ -187,37 +211,55 @@ export function renderModularRack(container, machine) {
       jacksEl.querySelector(`.port--out[data-module-id="${armedFrom.moduleId}"][data-port-key="${armedFrom.port}"]`)
         ?.classList.add('port--armed');
     }
+    updateCanvasSize();
     updateCables();
   }
 
-  // Zusätzlicher Tiefenversatz je Kabel (i % 4), damit sich mehrere Kabel
-  // in der Wanne nicht exakt überlagern -- bei der breiten, hohen Wanne
-  // hier viel grosszügiger möglich als in der früheren schmalen Seitenspur.
-  const TRAY_STEP = 16;
-
-  /** Zeichnet alle Kabel als Bezier-Kurven, die von ihrem Ausgangs-Port
-   *  senkrecht nach UNTEN in die freie Wanne unter der Steckfeld-Reihe
-   *  eintauchen und erst kurz vor dem Ziel-Port wieder aufsteigen -- wie
-   *  ein echtes Kabel, das lose unter einem Patch-Bay-Feld hängt. Die
-   *  Wanne beginnt am unteren Rand der GESAMTEN Reihe (nicht nur der
-   *  eigenen Kachel), damit auch eine höhere Nachbar-Kachel nie im Weg
-   *  liegt. */
-  function updateCables() {
+  /** Steckfläche mindestens so gross wie das Sichtfenster, sonst genau so
+   *  gross, dass jede Kachel (+ etwas Rand) hineinpasst -- damit man auch
+   *  weit verschobene Module per natives Scrollen erreichen kann. Läuft
+   *  nach jedem Render UND nach jedem Verschieben (s. Zieh-Logik unten). */
+  function updateCanvasSize() {
     const wrapRect = jacksWrapEl.getBoundingClientRect();
-    const stripBottom = jacksEl.getBoundingClientRect().bottom - wrapRect.top;
+    let right = wrapRect.width;
+    let bottom = wrapRect.height;
+    for (const box of jacksEl.querySelectorAll('.modrack__mod-box')) {
+      const m = patch.modules.get(Number(box.dataset.moduleId));
+      if (!m) continue;
+      right = Math.max(right, m.x + box.offsetWidth + 40);
+      bottom = Math.max(bottom, m.y + box.offsetHeight + 40);
+    }
+    canvasEl.style.width = `${right}px`;
+    canvasEl.style.height = `${bottom}px`;
+  }
+
+  /** Zeichnet alle Kabel als Bezier-Kurven direkt zwischen den echten
+   *  Jack-Positionen -- derselbe "S-Schwung" wie in jedem Node-Editor
+   *  (Blender-Shader-Nodes, VCV Rack, Node-RED): die Kontrollpunkte liegen
+   *  waagrecht neben Start/Ziel, in Flussrichtung (Ausgang rechts an der
+   *  Kachel -> Kontrollpunkt weiter rechts, Eingang links an der Kachel ->
+   *  Kontrollpunkt weiter links), das ergibt eine natürliche Kurve
+   *  unabhängig davon, wie die Kacheln zueinander stehen.
+   *
+   *  Koordinaten sind relativ zu .modrack__canvas (der scrollenden Fläche
+   *  SELBST, nicht zum fixen Wrap) -- bleiben dadurch beim Pan automatisch
+   *  korrekt, s. Dateikopf-Kommentar. */
+  function updateCables() {
+    const canvasRect = canvasEl.getBoundingClientRect();
     const portCenter = (moduleId, dir, key) => {
       const el = jacksEl.querySelector(`.port[data-module-id="${moduleId}"][data-port-dir="${dir}"][data-port-key="${key}"] .port__dot`);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2 - wrapRect.left, y: r.top + r.height / 2 - wrapRect.top };
+      return { x: r.left + r.width / 2 - canvasRect.left, y: r.top + r.height / 2 - canvasRect.top };
     };
+    const bend = (fx, tx) => Math.max(40, Math.abs(tx - fx) / 2);
 
-    const paths = patch.cables.map((c, i) => {
+    const paths = patch.cables.map((c) => {
       const from = portCenter(c.fromId, 'out', c.fromPort);
       const to = portCenter(c.toId, 'in', c.toPort);
       if (!from || !to) return '';
-      const well = stripBottom + 24 + (i % 4) * TRAY_STEP;
-      const d = `M${from.x},${from.y} C${from.x},${well} ${to.x},${well} ${to.x},${to.y}`;
+      const b = bend(from.x, to.x);
+      const d = `M${from.x},${from.y} C${from.x + b},${from.y} ${to.x - b},${to.y} ${to.x},${to.y}`;
       // Zweiter, unsichtbarer Pfad mit viel breiterem Strich NUR fürs
       // Antippen (Trennen) -- die sichtbare Linie bleibt dünn/elegant,
       // aber der tatsächliche Trefferbereich ist grosszügig (dieselbe
@@ -231,15 +273,10 @@ export function renderModularRack(container, machine) {
     // Breite auf CSS width:100% zu verlassen -- ein <svg> ohne viewBox
     // bildet Pfad-Koordinaten sonst nicht zuverlässig browserübergreifend
     // 1:1 auf CSS-Pixel ab, wenn nur eines von beiden gesetzt ist.
-    svgEl.setAttribute('width', String(wrapRect.width));
-    svgEl.setAttribute('height', String(jacksWrapEl.offsetHeight));
+    svgEl.setAttribute('width', String(canvasEl.offsetWidth));
+    svgEl.setAttribute('height', String(canvasEl.offsetHeight));
     svgEl.innerHTML = paths + (pendingCablePath ?? '');
   }
-  // Die Steckfeld-Reihe scrollt waagrecht (mehr Module als Bildschirmbreite)
-  // -- das SVG hängt AM WRAP, nicht an der scrollenden Reihe selbst, muss
-  // die Kabel beim Scrollen also aktiv nachziehen, statt automatisch
-  // "mitzuscrollen".
-  jacksEl.addEventListener('scroll', updateCables);
 
   /* ---------- Verbinden: antippen (Standard) ODER ziehen (weiterhin
      möglich) -- s. Chat: Ziehen allein war auf echten Touchgeräten kaum
@@ -266,6 +303,8 @@ export function renderModularRack(container, machine) {
   let dragStartX = 0, dragStartY = 0;
   let snapTarget = null; // aktuell hervorgehobenes Eingangs-Element beim Ziehen
   let pendingCablePath = null;
+  let moveFrom = null; // { id, startX, startY, origX, origY } -- gerade per Kopfzeile verschobenes Modul
+  let moveMoved = false;
 
   function setArmed(from) {
     jacksEl.querySelector('.port--armed')?.classList.remove('port--armed');
@@ -282,6 +321,24 @@ export function renderModularRack(container, machine) {
   }
 
   jacksEl.addEventListener('pointerdown', (e) => {
+    // Kopfzeile einer Kachel: Modul auf der Steckfläche verschieben (s.
+    // Dateikopf-Kommentar -- der eigentliche Kern des Umbaus). Eigener,
+    // erster Zweig, weil das eine ganz andere Geste ist als das Verbinden
+    // weiter unten und nie mit Ports kollidiert (die Kopfzeile enthält
+    // keine).
+    const handle = e.target.closest('[data-drag-handle]');
+    if (handle) {
+      e.preventDefault();
+      const box = handle.closest('.modrack__mod-box');
+      const id = Number(box.dataset.moduleId);
+      const m = patch.modules.get(id);
+      if (!m) return;
+      moveFrom = { id, startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y };
+      moveMoved = false;
+      try { jacksEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      e.stopPropagation();
+      return;
+    }
     const removeBtn = e.target.closest('[data-remove-cable]');
     if (removeBtn) {
       e.preventDefault();
@@ -319,34 +376,54 @@ export function renderModularRack(container, machine) {
     e.stopPropagation();
   });
   jacksEl.addEventListener('pointermove', (e) => {
+    if (moveFrom) {
+      const dx = e.clientX - moveFrom.startX;
+      const dy = e.clientY - moveFrom.startY;
+      if (!moveMoved) {
+        if (Math.hypot(dx, dy) <= TAP_MOVE_TOLERANCE) return;
+        moveMoved = true;
+      }
+      const nx = Math.max(0, moveFrom.origX + dx);
+      const ny = Math.max(0, moveFrom.origY + dy);
+      const box = jacksEl.querySelector(`.modrack__mod-box[data-module-id="${moveFrom.id}"]`);
+      if (box) { box.style.left = `${nx}px`; box.style.top = `${ny}px`; }
+      // Sofort im Modell nachziehen (nicht erst bei pointerup) -- Kabel
+      // folgen dadurch live mit, genau wie bei Caustic, s. Dateikopf-
+      // Kommentar. Kein separater "Übernehmen"-Schritt, wie jeder andere
+      // Regler in der App.
+      patch.moveModuleTo(moveFrom.id, nx, ny);
+      updateCanvasSize();
+      updateCables();
+      return;
+    }
     if (!dragFrom) return;
     if (!dragMoved) {
       if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) <= TAP_MOVE_TOLERANCE) return;
       dragMoved = true; // erst ab hier ist es wirklich ein Zug, kein Tippen
     }
-    const wrapRect = jacksWrapEl.getBoundingClientRect();
+    const canvasRect = canvasEl.getBoundingClientRect();
     const fromDot = jacksEl.querySelector(`.port[data-module-id="${dragFrom.moduleId}"][data-port-dir="out"][data-port-key="${dragFrom.port}"] .port__dot`);
     if (!fromDot) return;
     const r = fromDot.getBoundingClientRect();
-    const fx = r.left + r.width / 2 - wrapRect.left;
-    const fy = r.top + r.height / 2 - wrapRect.top;
-    const tx = e.clientX - wrapRect.left;
-    const ty = e.clientY - wrapRect.top - GHOST_OFFSET_Y; // über dem Finger, nicht darunter
+    const fx = r.left + r.width / 2 - canvasRect.left;
+    const fy = r.top + r.height / 2 - canvasRect.top;
+    const pointerX = e.clientX;
+    const pointerY = e.clientY - GHOST_OFFSET_Y; // über dem Finger, nicht darunter (Viewport-Koordinaten, s. Fang-Radius unten)
+    const tx = pointerX - canvasRect.left;
+    const ty = pointerY - canvasRect.top;
 
     let best = null, bestDist = SNAP_RADIUS;
     for (const inPort of jacksEl.querySelectorAll('.port--in')) {
       const dot = inPort.querySelector('.port__dot');
       const dr = dot.getBoundingClientRect();
-      const dist = Math.hypot(dr.left + dr.width / 2 - wrapRect.left - tx, dr.top + dr.height / 2 - wrapRect.top - ty);
+      const dist = Math.hypot(dr.left + dr.width / 2 - pointerX, dr.top + dr.height / 2 - pointerY);
       if (dist < bestDist) { bestDist = dist; best = inPort; }
     }
     if (snapTarget !== best) { clearSnapTarget(); snapTarget = best; snapTarget?.classList.add('port--snap-target'); }
 
-    // Gleicher Wannen-Look wie die fertigen Kabel (s. updateCables()), aber
-    // ohne Tiefenversatz -- nur eine einzelne Vorschau ist je gerade aktiv.
-    const stripBottom = jacksEl.getBoundingClientRect().bottom - wrapRect.top;
-    const well = stripBottom + 24;
-    pendingCablePath = `<path class="mod-cable mod-cable--pending" d="M${fx},${fy} C${fx},${well} ${tx},${well} ${tx},${ty}"></path>`;
+    // Gleicher S-Schwung wie die fertigen Kabel (s. updateCables()).
+    const b = Math.max(40, Math.abs(tx - fx) / 2);
+    pendingCablePath = `<path class="mod-cable mod-cable--pending" d="M${fx},${fy} C${fx + b},${fy} ${tx - b},${ty} ${tx},${ty}"></path>`;
     updateCables();
   });
   const finishCableDrag = () => {
@@ -362,8 +439,19 @@ export function renderModularRack(container, machine) {
     pendingCablePath = null;
     renderBack();
   };
-  jacksEl.addEventListener('pointerup', finishCableDrag);
+  jacksEl.addEventListener('pointerup', (e) => {
+    if (moveFrom) {
+      // Ein blosses Antippen der Kopfzeile (kein nennenswerter Zug) ist
+      // kein Verschieben -- verwirft dann wie ein Tap auf leere Fläche
+      // eine offene Auswahl, statt sie stehen zu lassen.
+      if (!moveMoved && armedFrom) setArmed(null);
+      moveFrom = null; moveMoved = false;
+      return;
+    }
+    finishCableDrag();
+  });
   jacksEl.addEventListener('pointercancel', () => {
+    if (moveFrom) { moveFrom = null; moveMoved = false; return; }
     dragFrom = null; dragMoved = false;
     clearSnapTarget();
     pendingCablePath = null;
@@ -388,7 +476,7 @@ export function renderModularRack(container, machine) {
     flipBtn.textContent = isFront ? '🔄 Flip to Patch Bay' : '🔄 Flip to Controls';
     hintEl.textContent = isFront
       ? 'Hold a module for options · tap + to add one'
-      : 'Tap an output, then an input to connect · tap a cable to remove it';
+      : 'Drag a module\'s header to move it · tap an output, then an input to connect · tap a cable to remove it';
     armedFrom = null; // keine über einen Flip hinweg "hängende" Auswahl
     if (!isFront) renderBack(); // faul -- s. Dateikopf-Kommentar
   }

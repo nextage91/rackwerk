@@ -338,15 +338,42 @@ export const FILTER_TYPES = [
 let nextModuleId = 1;
 let nextCableId = 1;
 
+/** Grobe Kachel-Grösse NUR für die Kollisionsprüfung unten -- muss nicht
+ *  exakt mit der tatsächlich gerenderten Grösse übereinstimmen (die hängt
+ *  von der Portanzahl ab), reicht als Daumenregel, um ein neues Modul
+ *  nicht exakt auf ein bestehendes zu setzen. */
+const AUTO_POS_BOX_W = 160;
+const AUTO_POS_BOX_H = 110;
+
+/** Raster-Fallback-Position für ein neues Modul, das (noch) keine eigene
+ *  x/y mitbringt -- brandneu per "+ Add Module"/Duplizieren hinzugefügt,
+ *  oder ein älteres gespeichertes Projekt von vor dieser Funktion (s.
+ *  serialize() unten). Sucht die erste Raster-Position, die kein
+ *  bestehendes Modul überlappt -- ein reiner Index-basiertes Raster (0.,
+ *  1., 2. Modul, ...) würde z. B. ein neu hinzugefügtes 5. Modul exakt auf
+ *  die manuell platzierte Hüllkurve des Standard-Patches setzen (s.
+ *  machines/modular.js#buildDefaultPatch), das dann komplett dahinter
+ *  verschwindet. Der Nutzer zieht das Modul auf der frei verschiebbaren
+ *  Steckfläche (ui/modular-view.js) ohnehin dorthin, wo er es tatsächlich
+ *  haben will -- hier reicht "irgendwo frei", nicht "hübsch". */
+function autoPosition(existing) {
+  const others = [...existing.values()];
+  for (let i = 0; ; i++) {
+    const cand = { x: 20 + (i % 4) * 170, y: 20 + Math.floor(i / 4) * 150 };
+    const overlaps = others.some((m) => Math.abs(cand.x - m.x) < AUTO_POS_BOX_W && Math.abs(cand.y - m.y) < AUTO_POS_BOX_H);
+    if (!overlaps) return cand;
+  }
+}
+
 export class ModularPatch {
   constructor() {
-    /** @type {Map<number, {type:string, params:object, instance:object}>} */
+    /** @type {Map<number, {type:string, params:object, instance:object, x:number, y:number}>} */
     this.modules = new Map();
     /** @type {Array<{id:number, fromId:number, fromPort:string, toId:number, toPort:string}>} */
     this.cables = [];
   }
 
-  /** @param {{id?:number, params?:object}} [saved] */
+  /** @param {{id?:number, params?:object, x?:number, y?:number}} [saved] */
   addModule(type, saved = null) {
     const def = MODULE_DEFS[type];
     if (!def) throw new Error(`Unbekannter Modul-Typ: ${type}`);
@@ -354,7 +381,8 @@ export class ModularPatch {
     const id = saved?.id ?? nextModuleId++;
     if (saved?.id != null) nextModuleId = Math.max(nextModuleId, saved.id + 1);
     const instance = def.build(engine.ctx, params);
-    this.modules.set(id, { type, params, instance });
+    const pos = saved?.x != null && saved?.y != null ? { x: saved.x, y: saved.y } : autoPosition(this.modules);
+    this.modules.set(id, { type, params, instance, x: pos.x, y: pos.y });
     return id;
   }
 
@@ -374,6 +402,16 @@ export class ModularPatch {
     const reordered = new Map();
     for (const k of ids) reordered.set(k, this.modules.get(k));
     this.modules = reordered;
+  }
+
+  /** Position eines Moduls auf der frei verschiebbaren Steckfläche
+   *  (Rückseite, ui/modular-view.js) setzen -- unabhängig von der Rack-
+   *  Reihenfolge oben, die weiterhin nur die Vorderseiten-Liste sortiert. */
+  moveModuleTo(id, x, y) {
+    const m = this.modules.get(id);
+    if (!m) return;
+    m.x = x;
+    m.y = y;
   }
 
   removeModule(id) {
@@ -461,13 +499,16 @@ export class ModularPatch {
     for (const id of [...this.modules.keys()]) this.removeModule(id);
   }
 
-  /** Reihenfolge kommt allein aus der Map-Einfügereihenfolge (s.
-   *  moveModule()) -- kein separates x/y mehr nötig, das Array hier IST
-   *  schon die Rack-Reihenfolge. rebuildPatchFrom() (machines/modular.js)
-   *  fügt beim Laden in genau dieser Array-Reihenfolge wieder ein. */
+  /** Rack-Reihenfolge (Vorderseite) kommt allein aus der Map-Einfüge-
+   *  reihenfolge (s. moveModule()) -- rebuildPatchFrom() (machines/
+   *  modular.js) fügt beim Laden in genau dieser Array-Reihenfolge wieder
+   *  ein. x/y sind eine DAVON unabhängige zweite Eigenschaft: die Position
+   *  auf der frei verschiebbaren Steckfläche (Rückseite) -- ein Modul nach
+   *  oben/unten in der Vorderseiten-Liste zu schieben verändert NICHT, wo
+   *  es auf der Steckfläche steht, und umgekehrt. */
   serialize() {
     return {
-      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params } })),
+      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params }, x: m.x, y: m.y })),
       cables: this.cables.map((c) => ({ fromId: c.fromId, fromPort: c.fromPort, toId: c.toId, toPort: c.toPort })),
     };
   }
