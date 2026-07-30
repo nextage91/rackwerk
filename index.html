@@ -18241,21 +18241,23 @@ const MODULE_DEFS = {
     build(ctx, p) {
       const osc = ctx.createOscillator();
       osc.type = p.wave;
-      osc.frequency.value = midiToHz(60);
+      // Bewusst NICHT mit einer hörbaren Tonhöhe (z. B. C4) starten: der
+      // Oscillator läuft seit Modul-Erstellung durchgehend, bevor je eine
+      // Note gespielt wurde -- normalerweise unhörbar, weil der VCA bis
+      // zum ersten Envelope-Trigger komplett zu ist (s. VCA#build). Auf
+      // manchen Geräten reproduzierbar (Nutzer-Bugreport): GENAU beim
+      // allerersten je ausgelösten Trigger ist kurz die bis dahin
+      // geltende (Default-)Tonhöhe zu hören, bevor sie auf die Zielnote
+      // springt -- ein setValueAtTime()-Priming direkt beim Bauen (frühere
+      // Fassung) hat das NICHT behoben, der genaue Mechanismus auf dem
+      // betroffenen Gerät bleibt unklar. Statt weiter zu raten, WARUM kurz
+      // etwas durchsickert: einfach dafür sorgen, dass das, was in diesem
+      // Fenster durchsickern könnte, keine hörbare Tonhöhe hat -- 1 Hz
+      // liegt weit unter dem Hörbereich, klingt also wie Stille statt wie
+      // eine falsche Note, ganz gleich was den genauen Kaltstart-Effekt
+      // auslöst.
+      osc.frequency.value = 1;
       osc.start();
-      // Ohne dieses "Priming" wäre der ERSTE je auf diesem Parameter
-      // geplante setValueAtTime()-Aufruf (s. trigger() unten) tatsächlich
-      // der allererste Automations-Event überhaupt auf einem Parameter,
-      // der seit Modul-Erstellung durchgehend ohne jede Automation lief --
-      // auf manchen Geräten reproduzierbar hörbar (Nutzer-Bugreport: die
-      // allererste je gespielte Modular-Note klingt kurz auf der Default-
-      // Tonhöhe C4 an, bevor sie auf die Zieltonhöhe springt; passiert
-      // NICHT bei anderen Maschinen, deren Oszillatoren pro Note neu
-      // gebaut werden und ihre Frequenz per direktem .value VOR dem Start
-      // bekommen, nie per Automation auf einem langlebigen Parameter).
-      // Ein no-op-Event auf den ohnehin schon aktuellen Wert "verbraucht"
-      // diesen Sonderfall harmlos, bevor die erste echte Note drankommt.
-      osc.frequency.setValueAtTime(osc.frequency.value, ctx.currentTime);
       const output = safeOutput(ctx, osc);
       return {
         inputs: { pitch: osc.frequency, fine: osc.detune },
