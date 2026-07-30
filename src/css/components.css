@@ -1471,6 +1471,18 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border-radius: 0;
   border: none;
 }
+/* Der Knopf sitzt eingebettet (kleine Box) bewusst oben rechts, direkt an
+   der Steckfläche -- im Vollbild ist das dagegen ein unbequemer Ort zum
+   Verlassen (Nutzer-Feedback: "der x button ist zu weit oben"), auf einem
+   Handy oft ausserhalb der bequemen Daumen-Reichweite und nah an der
+   System-Statusleiste. Nur für den Vollbild-Zustand nach unten rechts
+   verschoben, wo er einhändig leichter zu erreichen ist. */
+.modrack__canvas-outer.is-fullscreen .modrack__canvas-fullscreen {
+  top: auto;
+  bottom: 16px;
+  right: 16px;
+  z-index: 3;
+}
 /* Transport-Leiste (oben) und Bottom-Bar (unten) bleiben sonst IMMER
    sichtbar, auch im normalen Vollbild-Maschinen-Editor (.machine-focus
    lässt bewusst Lücken für sie frei) -- für die Patch-Bay speziell

@@ -453,8 +453,30 @@ export function renderModularRack(container, machine) {
     if (activePointers.size === 2 && pinchStartDist > 0) {
       const pts = [...activePointers.values()];
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchStartZoom * (dist / pinchStartDist)));
-      applyZoom();
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchStartZoom * (dist / pinchStartDist)));
+      // Zoom um den Mittelpunkt der beiden Finger herum, nicht um die linke
+      // obere Ecke der Steckfläche (das war der bisherige Effekt, weil
+      // transform-origin auf .modrack__boxes fest bei 0/0 liegt, s.
+      // applyZoom()-Kommentar): Scroll-Position so nachführen, dass genau
+      // der Punkt UNTER den Fingern an derselben Bildschirmstelle bleibt --
+      // ohne das rutscht der Inhalt bei jedem Reinzoomen sichtbar weg, was
+      // sich "nicht optimiert"/unnatürlich anfühlt (Nutzer-Feedback).
+      if (newZoom !== zoom) {
+        const midX = (pts[0].x + pts[1].x) / 2;
+        const midY = (pts[0].y + pts[1].y) / 2;
+        const wrapRect = jacksWrapEl.getBoundingClientRect();
+        const localX = midX - wrapRect.left;
+        const localY = midY - wrapRect.top;
+        // Modell-Pixel (unskaliert, wie m.x/m.y), die gerade unter dem
+        // Fingerpaar liegen -- s. updateCanvasSize()-Kommentar zur
+        // Modell-vs-Bildschirm-Pixel-Unterscheidung.
+        const contentX = (jacksWrapEl.scrollLeft + localX) / zoom;
+        const contentY = (jacksWrapEl.scrollTop + localY) / zoom;
+        zoom = newZoom;
+        applyZoom();
+        jacksWrapEl.scrollLeft = contentX * zoom - localX;
+        jacksWrapEl.scrollTop = contentY * zoom - localY;
+      }
       return;
     }
     if (moveFrom) {
@@ -463,6 +485,11 @@ export function renderModularRack(container, machine) {
       if (!moveMoved) {
         if (Math.hypot(dx, dy) <= TAP_MOVE_TOLERANCE) return;
         moveMoved = true;
+        // Nutzer verschiebt selbst ein Modul, während die Steckfläche
+        // Vollbild ist -- die automatische Zentrierung beim Schliessen des
+        // Vollbilds NICHT rückgängig machen (s. setCanvasFullscreen), sonst
+        // ginge genau diese bewusste Änderung wieder verloren.
+        if (isCanvasFullscreen) modulesMovedInFullscreen = true;
       }
       // dx/dy sind reale Bildschirm-Pixel (Fingerbewegung) -- durch `zoom`
       // teilen, um sie in Modell-Pixel umzurechnen, sonst würde ein
@@ -588,6 +615,12 @@ export function renderModularRack(container, machine) {
    *  plötzlich kein Scrollen mehr, und jedes Kabel muss auf die neuen
    *  Jack-Positionen umgezeichnet werden. */
   let isCanvasFullscreen = false;
+  // Schnappschuss der Modul-Positionen vor dem automatischen Zentrieren
+  // beim Öffnen des Vollbilds (s. centerModulesInView weiter unten) --
+  // ermöglicht es, sie beim Schliessen wiederherzustellen, s.
+  // setCanvasFullscreen.
+  let fullscreenPositionSnapshot = null;
+  let modulesMovedInFullscreen = false;
 
   /** Setzt die Vollbild-Höhe direkt per Inline-Style aus window.visualViewport
    *  statt sich auf --app-vh (aus window.innerHeight, s. main.js
@@ -613,6 +646,13 @@ export function renderModularRack(container, machine) {
 
   function setCanvasFullscreen(next) {
     isCanvasFullscreen = next;
+    if (next) {
+      // Vor dem automatischen Zentrieren unten sichern, was gerade in der
+      // kleinen eingebetteten Ansicht sichtbar war -- s. Kommentar bei
+      // restoreModulePositions().
+      fullscreenPositionSnapshot = new Map([...patch.modules.entries()].map(([id, m]) => [id, { x: m.x, y: m.y }]));
+      modulesMovedInFullscreen = false;
+    }
     canvasOuterEl.classList.toggle('is-fullscreen', next);
     // Aus dem verschachtelten .machine-focus__panel (overflow-y:auto,
     // eigenes Padding) heraus DIREKT an <body> umhängen, statt nur per
@@ -653,9 +693,34 @@ export function renderModularRack(container, machine) {
     }
     updateCanvasSize();
     updateCables();
-    if (next) centerModulesInView();
+    if (next) {
+      centerModulesInView();
+    } else if (fullscreenPositionSnapshot && !modulesMovedInFullscreen) {
+      restoreModulePositions(fullscreenPositionSnapshot);
+      fullscreenPositionSnapshot = null;
+    }
   }
   fullscreenBtn.addEventListener('click', () => setCanvasFullscreen(!isCanvasFullscreen));
+
+  /** Setzt Modul-Positionen exakt auf einen zuvor gesicherten Stand zurück
+   *  -- macht das automatische Zentrieren beim Öffnen des Vollbilds (s.
+   *  centerModulesInView) rückgängig, WENN der Nutzer während des Vollbilds
+   *  selbst nichts verschoben hat (sonst gingen dessen bewusste Änderungen
+   *  verloren, s. modulesMovedInFullscreen). Ohne das blieben Module beim
+   *  Zurückwechseln in die kleine eingebettete Ansicht an Positionen
+   *  hängen, die nur für den viel grösseren Vollbild-Bildschirm zentriert
+   *  waren -- dort dann ausserhalb des sichtbaren 320px-Fensters
+   *  (Nutzer-Feedback: "sieht man sie nun in der kleinen Ansicht nicht
+   *  mehr"). */
+  function restoreModulePositions(snapshot) {
+    for (const [id, pos] of snapshot) {
+      patch.moveModuleTo(id, pos.x, pos.y);
+      const box = jacksEl.querySelector(`.modrack__mod-box[data-module-id="${id}"]`);
+      if (box) { box.style.left = `${pos.x}px`; box.style.top = `${pos.y}px`; }
+    }
+    updateCanvasSize();
+    updateCables();
+  }
 
   /** Rückt beim Öffnen des Vollbilds die Bounding-Box aller Module einmalig
    *  in die Mitte des (jetzt viel grösseren) Sichtfensters -- als
