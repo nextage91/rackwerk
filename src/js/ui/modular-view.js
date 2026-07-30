@@ -324,6 +324,14 @@ export function renderModularRack(container, machine) {
   const TAP_MOVE_TOLERANCE = 8;
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 2;
+  // Schutz gegen überempfindlichen Zoom, wenn eine Pinch-Geste mit eng
+  // beieinander liegenden Fingern beginnt (Nutzer-Feedback: "der zoom ist
+  // ungewohnt sensibel"): zoom skaliert mit dist/pinchStartDist -- bei
+  // einem kleinen Nenner (Finger starten nah beieinander) macht schon
+  // kleinstes Fingerzittern riesige Zoom-Sprünge. Ein Mindestabstand hält
+  // den Nenner in einem Bereich, in dem eine normale Fingerbewegung eine
+  // vergleichbar grosse, kontrollierbare Zoom-Änderung ergibt.
+  const MIN_PINCH_START_DIST = 60;
 
   let armedFrom = null; // { moduleId, port } -- per Tap scharf geschalteter Ausgang
   let dragFrom = null; // { moduleId, port } -- währenddessen evtl. gezogener Ausgang
@@ -370,7 +378,7 @@ export function renderModularRack(container, machine) {
       dragFrom = null; dragMoved = false; clearSnapTarget(); pendingCablePath = null;
       moveFrom = null; moveMoved = false;
       const pts = [...activePointers.values()];
-      pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartDist = Math.max(MIN_PINCH_START_DIST, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
       pinchStartZoom = zoom;
       for (const id of activePointers.keys()) {
         try { jacksWrapEl.setPointerCapture(id); } catch { /* Testumgebung */ }
