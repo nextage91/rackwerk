@@ -1388,6 +1388,31 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
    eigener Pan-Code nötig). Eine Kachel-Kopfzeile ziehen verschiebt nur
    diese Kachel (touch-action:none dort, s. .modrack__mod-box-head);
    überall sonst auf der Fläche bleibt natives Scrollen aktiv. */
+/* Äusserer Rahmen -- trägt den Vollbild-Knopf UND die Steckfläche als
+   GEMEINSAME Einheit. Wichtig: der Vollbild-Zustand (position:fixed)
+   sitzt HIER am äusseren Rahmen, nicht an .modrack__canvas-wrap selbst --
+   sonst wären Knopf (bliebe normal positioniert, würde beim Pannen der
+   inneren, dann fixierten Steckfläche mitscrollen, weil sein eigener
+   Elternrahmen nicht mit "fixed" wird) und Steckfläche in zwei
+   VERSCHIEDENEN Stacking-Kontexten unterwegs -- der fixierte z-index:56
+   der Steckfläche läge dann unabhängig vom Knopf-z-index IMMER obenauf
+   (beide haben keinen gemeinsamen positionierten Vorfahren dazwischen),
+   der Knopf wäre nach dem Umschalten unklickbar UND würde beim Pannen der
+   Fläche sichtbar wegwandern (per Reproduktion gefunden: beides trat 1:1
+   so ein, bevor der Vollbild-Zustand hierher verschoben wurde). Mit BEIDEM
+   im selben fixierten Rahmen bewegen sich Knopf und Fläche als eine
+   Einheit, kein Stacking-Konflikt mehr. */
+.modrack__canvas-outer { position: relative; }
+.modrack__canvas-outer[hidden] { display: none; }
+.modrack__canvas-fullscreen {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+}
 .modrack__canvas-wrap {
   position: relative;
   height: 320px;
@@ -1396,6 +1421,26 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border: 1px solid var(--ink-faint);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+/* Vollbild: löst den GESAMTEN äusseren Rahmen (Knopf + Steckfläche) aus dem
+   Maschinen-Editor (.machine-focus, z-index 55) und deckt den kompletten
+   Bildschirm ab -- reines CSS statt Fullscreen-API (auf iOS Safari für
+   beliebige Elemente ohnehin nicht verfügbar, derselbe Ansatz wie
+   .machine-focus selbst). z-index knapp darüber, aber klar UNTER Sheets/
+   Popups (60+), damit z. B. das Halten-Menü oder der Modul-Picker
+   weiterhin darüber erscheinen, während die Steckfläche Vollbild ist. */
+.modrack__canvas-outer.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+  background: var(--bg-panel);
+}
+.modrack__canvas-outer.is-fullscreen .modrack__canvas-wrap {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  border-radius: 0;
+  border: none;
 }
 .modrack__canvas {
   /* width/height werden von ui/modular-view.js#updateCanvasSize() inline

@@ -77,10 +77,13 @@ export function renderModularRack(container, machine) {
     <p class="modrack__hint" data-hint>Hold a module for options · tap + to add one</p>
     <div class="modrack__list" data-list></div>
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
-    <div class="modrack__canvas-wrap" data-jackswrap hidden>
-      <div class="modrack__canvas" data-canvas>
-        <svg class="modrack__cables" data-cables></svg>
-        <div class="modrack__boxes" data-jacks></div>
+    <div class="modrack__canvas-outer" data-canvas-outer hidden>
+      <button type="button" class="m-btn modrack__canvas-fullscreen" data-fullscreen aria-label="Toggle fullscreen patch bay">⛶</button>
+      <div class="modrack__canvas-wrap" data-jackswrap>
+        <div class="modrack__canvas" data-canvas>
+          <svg class="modrack__cables" data-cables></svg>
+          <div class="modrack__boxes" data-jacks></div>
+        </div>
       </div>
     </div>
   `;
@@ -89,11 +92,13 @@ export function renderModularRack(container, machine) {
   const listEl = root.querySelector('[data-list]');
   const addBtn = root.querySelector('[data-add-module]');
   const hintEl = root.querySelector('[data-hint]');
+  const canvasOuterEl = root.querySelector('[data-canvas-outer]');
   const jacksWrapEl = root.querySelector('[data-jackswrap]');
   const canvasEl = root.querySelector('[data-canvas]');
   const jacksEl = root.querySelector('[data-jacks]');
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
+  const fullscreenBtn = root.querySelector('[data-fullscreen]');
 
   /* ---------- Vorderseite: Regler-Liste ---------- */
 
@@ -547,7 +552,7 @@ export function renderModularRack(container, machine) {
     const isFront = face === 'front';
     listEl.hidden = !isFront;
     addBtn.hidden = !isFront;
-    jacksWrapEl.hidden = isFront;
+    canvasOuterEl.hidden = isFront;
     flipBtn.textContent = isFront ? '🔄 Flip to Patch Bay' : '🔄 Flip to Controls';
     hintEl.textContent = isFront
       ? 'Hold a module for options · tap + to add one'
@@ -556,6 +561,34 @@ export function renderModularRack(container, machine) {
     if (!isFront) renderBack(); // faul -- s. Dateikopf-Kommentar
   }
   flipBtn.addEventListener('click', () => setFace(face === 'front' ? 'back' : 'front'));
+
+  /* ---------- Vollbild-Steckfläche ---------- */
+
+  /** Blendet die Steckfläche (Rückseite) auf den ganzen Bildschirm auf --
+   *  bei vielen Modulen/Kabeln ist die eingebettete 320px-Box im Maschinen-
+   *  Editor schnell zu eng (Chat: "eine vollansicht möglichkeit für die
+   *  patch bay"). Rein optisch per CSS-Klasse (position:fixed/inset:0,
+   *  s. components.css) -- kein echtes Fullscreen-API nötig (auf iOS
+   *  Safari ohnehin nur eingeschränkt verfügbar), derselbe Ansatz wie schon
+   *  .machine-focus selbst. Derselbe Knopf schaltet zurück -- Symbol UND
+   *  aria-label wechseln mit, wie beim Flip-Button oben.
+   *
+   *  updateCanvasSize()/updateCables() müssen NACH dem Klassenwechsel neu
+   *  laufen: beide messen echte Bildschirm-Masse (getBoundingClientRect),
+   *  die sich mit der Fenstergrösse der Steckfläche ändern -- ein Modul,
+   *  das im 320px-Fenster ausserhalb lag, braucht z. B. im Vollbild
+   *  plötzlich kein Scrollen mehr, und jedes Kabel muss auf die neuen
+   *  Jack-Positionen umgezeichnet werden. */
+  let isCanvasFullscreen = false;
+  function setCanvasFullscreen(next) {
+    isCanvasFullscreen = next;
+    canvasOuterEl.classList.toggle('is-fullscreen', next);
+    fullscreenBtn.textContent = next ? '✕' : '⛶';
+    fullscreenBtn.setAttribute('aria-label', next ? 'Exit fullscreen patch bay' : 'Toggle fullscreen patch bay');
+    updateCanvasSize();
+    updateCables();
+  }
+  fullscreenBtn.addEventListener('click', () => setCanvasFullscreen(!isCanvasFullscreen));
 
   /* ---------- Hinzufügen / Halten-Menü ---------- */
 
