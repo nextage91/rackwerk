@@ -357,6 +357,7 @@ export function renderModularRack(container, machine) {
   let moveFrom = null; // { id, startX, startY, origX, origY } -- gerade per Kopfzeile verschobenes Modul
   let moveMoved = false;
   let panFrom = null; // { startX, startY, origX, origY } -- Ein-Finger-Ziehen auf leerer Fläche verschiebt panX/panY
+  let cableTapFrom = null; // { cableId, startX, startY } -- Antippen eines Kabels zum Trennen, wartet auf pointerup
   // Zwei-Finger-Pinch-Zoom (Chat: "mit zwei fingern rein und raus zoomen").
   // activePointers zählt gleichzeitig aufliegende Finger unabhängig vom
   // Rest der Zieh-/Verbinden-Logik oben -- sobald ein ZWEITER Finger dazu-
@@ -394,6 +395,7 @@ export function renderModularRack(container, machine) {
       dragFrom = null; dragMoved = false; clearSnapTarget(); pendingCablePath = null;
       moveFrom = null; moveMoved = false;
       panFrom = null;
+      cableTapFrom = null;
       const pts = [...activePointers.values()];
       pinchStartDist = Math.max(MIN_PINCH_START_DIST, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
       pinchStartZoom = zoom;
@@ -438,6 +440,23 @@ export function renderModularRack(container, machine) {
       dragFrom = { moduleId: Number(outPort.dataset.moduleId), port: outPort.dataset.portKey };
       dragMoved = false;
       dragStartX = e.clientX; dragStartY = e.clientY;
+      try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
+      e.stopPropagation();
+      return;
+    }
+    const cablePath = e.target.closest('[data-cable-id]');
+    if (cablePath) {
+      // Trennen erst bei pointerup entscheiden, NICHT sofort hier --
+      // sonst reisst ein Pinch-Zoom, der zufällig mit einem Finger auf
+      // einem Kabel beginnt, dieses Kabel schon raus, bevor überhaupt klar
+      // ist, dass gleich ein zweiter Finger dazukommt und daraus ein Pinch
+      // wird (Nutzer-Feedback: "ich habe beim Zoomen versehentlich Kabel
+      // entfernt"). cableTapFrom wird wie jede andere Ein-Finger-Geste vom
+      // Zwei-Finger-Start oben abgebrochen (activePointers.size === 2);
+      // pointerup trennt nur, wenn es dabei geblieben ist (kein
+      // nennenswerter Zug, kein zweiter Finger dazwischen).
+      e.preventDefault();
+      cableTapFrom = { cableId: Number(cablePath.dataset.cableId), startX: e.clientX, startY: e.clientY };
       try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
       e.stopPropagation();
       return;
@@ -506,6 +525,9 @@ export function renderModularRack(container, machine) {
       applyTransform();
       return;
     }
+    // cableTapFrom entscheidet erst bei pointerup (Tippen vs. Zug/zweiter
+    // Finger, s. Kommentar dort) -- hier bewusst nichts tun.
+    if (cableTapFrom) return;
     if (moveFrom) {
       const dx = e.clientX - moveFrom.startX;
       const dy = e.clientY - moveFrom.startY;
@@ -574,6 +596,19 @@ export function renderModularRack(container, machine) {
   jacksWrapEl.addEventListener('pointerup', (e) => {
     activePointers.delete(e.pointerId);
     if (activePointers.size < 2) pinchStartDist = 0; // Pinch endet, sobald ein Finger loslässt
+    if (cableTapFrom) {
+      // Nur trennen, wenn's dabei geblieben ist: kein nennenswerter Zug UND
+      // kein zweiter Finger ist dazwischengekommen (der hätte cableTapFrom
+      // schon oben beim Pinch-Start auf null gesetzt) -- s. Kommentar beim
+      // Setzen von cableTapFrom.
+      const moved = Math.hypot(e.clientX - cableTapFrom.startX, e.clientY - cableTapFrom.startY);
+      if (moved <= TAP_MOVE_TOLERANCE) {
+        patch.disconnect(cableTapFrom.cableId);
+        renderBack();
+      }
+      cableTapFrom = null;
+      return;
+    }
     if (panFrom) { panFrom = null; return; }
     if (moveFrom) {
       // Ein blosses Antippen der Kopfzeile (kein nennenswerter Zug) ist
@@ -588,19 +623,13 @@ export function renderModularRack(container, machine) {
   jacksWrapEl.addEventListener('pointercancel', (e) => {
     activePointers.delete(e.pointerId);
     if (activePointers.size < 2) pinchStartDist = 0;
+    if (cableTapFrom) { cableTapFrom = null; return; }
     if (panFrom) { panFrom = null; return; }
     if (moveFrom) { moveFrom = null; moveMoved = false; return; }
     dragFrom = null; dragMoved = false;
     clearSnapTarget();
     pendingCablePath = null;
     updateCables();
-  });
-
-  svgEl.addEventListener('pointerdown', (e) => {
-    const path = e.target.closest('[data-cable-id]');
-    if (!path) return;
-    patch.disconnect(Number(path.dataset.cableId));
-    renderBack();
   });
 
   /* ---------- Flip ---------- */
