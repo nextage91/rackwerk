@@ -1445,7 +1445,22 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
    weiterhin darüber erscheinen, während die Steckfläche Vollbild ist. */
 .modrack__canvas-outer.is-fullscreen {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* height statt "inset:0"/bottom:0 -- dieselbe --app-vh-Technik wie schon
+     bei html/body (s. app.css Dateikopf-Kommentar): "inset:0" verlässt
+     sich auf Safaris eigene Vorstellung von der Viewport-Höhe für
+     position:fixed, die demselben WebKit-Bug unterliegt wie 100dvh (auf
+     iOS, v. a. als Homescreen-App, bleibt da ein realer Streifen am
+     Bildschirmrand frei -- Nutzer-Screenshot: die Rack-Liste dahinter war
+     oben UND unten als schmaler Streifen sichtbar, kein Stacking-Problem,
+     sondern die Steckfläche deckte den Bildschirm schlicht nicht ganz ab).
+     --app-vh wird per JS aus window.innerHeight gepflegt (s. main.js
+     #syncViewportHeight) und trifft den wirklich sichtbaren Bereich
+     zuverlässig. */
+  height: 100dvh;
+  height: var(--app-vh, 100dvh);
   z-index: 56;
   background: var(--bg-panel);
 }
