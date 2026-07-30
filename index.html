@@ -3233,6 +3233,31 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
    eigener Pan-Code nötig). Eine Kachel-Kopfzeile ziehen verschiebt nur
    diese Kachel (touch-action:none dort, s. .modrack__mod-box-head);
    überall sonst auf der Fläche bleibt natives Scrollen aktiv. */
+/* Äusserer Rahmen -- trägt den Vollbild-Knopf UND die Steckfläche als
+   GEMEINSAME Einheit. Wichtig: der Vollbild-Zustand (position:fixed)
+   sitzt HIER am äusseren Rahmen, nicht an .modrack__canvas-wrap selbst --
+   sonst wären Knopf (bliebe normal positioniert, würde beim Pannen der
+   inneren, dann fixierten Steckfläche mitscrollen, weil sein eigener
+   Elternrahmen nicht mit "fixed" wird) und Steckfläche in zwei
+   VERSCHIEDENEN Stacking-Kontexten unterwegs -- der fixierte z-index:56
+   der Steckfläche läge dann unabhängig vom Knopf-z-index IMMER obenauf
+   (beide haben keinen gemeinsamen positionierten Vorfahren dazwischen),
+   der Knopf wäre nach dem Umschalten unklickbar UND würde beim Pannen der
+   Fläche sichtbar wegwandern (per Reproduktion gefunden: beides trat 1:1
+   so ein, bevor der Vollbild-Zustand hierher verschoben wurde). Mit BEIDEM
+   im selben fixierten Rahmen bewegen sich Knopf und Fläche als eine
+   Einheit, kein Stacking-Konflikt mehr. */
+.modrack__canvas-outer { position: relative; }
+.modrack__canvas-outer[hidden] { display: none; }
+.modrack__canvas-fullscreen {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+}
 .modrack__canvas-wrap {
   position: relative;
   height: 320px;
@@ -3241,6 +3266,26 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border: 1px solid var(--ink-faint);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+/* Vollbild: löst den GESAMTEN äusseren Rahmen (Knopf + Steckfläche) aus dem
+   Maschinen-Editor (.machine-focus, z-index 55) und deckt den kompletten
+   Bildschirm ab -- reines CSS statt Fullscreen-API (auf iOS Safari für
+   beliebige Elemente ohnehin nicht verfügbar, derselbe Ansatz wie
+   .machine-focus selbst). z-index knapp darüber, aber klar UNTER Sheets/
+   Popups (60+), damit z. B. das Halten-Menü oder der Modul-Picker
+   weiterhin darüber erscheinen, während die Steckfläche Vollbild ist. */
+.modrack__canvas-outer.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+  background: var(--bg-panel);
+}
+.modrack__canvas-outer.is-fullscreen .modrack__canvas-wrap {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  border-radius: 0;
+  border: none;
 }
 .modrack__canvas {
   /* width/height werden von ui/modular-view.js#updateCanvasSize() inline
@@ -21357,10 +21402,13 @@ function renderModularRack(container, machine) {
     <p class="modrack__hint" data-hint>Hold a module for options · tap + to add one</p>
     <div class="modrack__list" data-list></div>
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
-    <div class="modrack__canvas-wrap" data-jackswrap hidden>
-      <div class="modrack__canvas" data-canvas>
-        <svg class="modrack__cables" data-cables></svg>
-        <div class="modrack__boxes" data-jacks></div>
+    <div class="modrack__canvas-outer" data-canvas-outer hidden>
+      <button type="button" class="m-btn modrack__canvas-fullscreen" data-fullscreen aria-label="Toggle fullscreen patch bay">⛶</button>
+      <div class="modrack__canvas-wrap" data-jackswrap>
+        <div class="modrack__canvas" data-canvas>
+          <svg class="modrack__cables" data-cables></svg>
+          <div class="modrack__boxes" data-jacks></div>
+        </div>
       </div>
     </div>
   `;
@@ -21369,11 +21417,13 @@ function renderModularRack(container, machine) {
   const listEl = root.querySelector('[data-list]');
   const addBtn = root.querySelector('[data-add-module]');
   const hintEl = root.querySelector('[data-hint]');
+  const canvasOuterEl = root.querySelector('[data-canvas-outer]');
   const jacksWrapEl = root.querySelector('[data-jackswrap]');
   const canvasEl = root.querySelector('[data-canvas]');
   const jacksEl = root.querySelector('[data-jacks]');
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
+  const fullscreenBtn = root.querySelector('[data-fullscreen]');
 
   /* ---------- Vorderseite: Regler-Liste ---------- */
 
@@ -21827,7 +21877,7 @@ function renderModularRack(container, machine) {
     const isFront = face === 'front';
     listEl.hidden = !isFront;
     addBtn.hidden = !isFront;
-    jacksWrapEl.hidden = isFront;
+    canvasOuterEl.hidden = isFront;
     flipBtn.textContent = isFront ? '🔄 Flip to Patch Bay' : '🔄 Flip to Controls';
     hintEl.textContent = isFront
       ? 'Hold a module for options · tap + to add one'
@@ -21836,6 +21886,34 @@ function renderModularRack(container, machine) {
     if (!isFront) renderBack(); // faul -- s. Dateikopf-Kommentar
   }
   flipBtn.addEventListener('click', () => setFace(face === 'front' ? 'back' : 'front'));
+
+  /* ---------- Vollbild-Steckfläche ---------- */
+
+  /** Blendet die Steckfläche (Rückseite) auf den ganzen Bildschirm auf --
+   *  bei vielen Modulen/Kabeln ist die eingebettete 320px-Box im Maschinen-
+   *  Editor schnell zu eng (Chat: "eine vollansicht möglichkeit für die
+   *  patch bay"). Rein optisch per CSS-Klasse (position:fixed/inset:0,
+   *  s. components.css) -- kein echtes Fullscreen-API nötig (auf iOS
+   *  Safari ohnehin nur eingeschränkt verfügbar), derselbe Ansatz wie schon
+   *  .machine-focus selbst. Derselbe Knopf schaltet zurück -- Symbol UND
+   *  aria-label wechseln mit, wie beim Flip-Button oben.
+   *
+   *  updateCanvasSize()/updateCables() müssen NACH dem Klassenwechsel neu
+   *  laufen: beide messen echte Bildschirm-Masse (getBoundingClientRect),
+   *  die sich mit der Fenstergrösse der Steckfläche ändern -- ein Modul,
+   *  das im 320px-Fenster ausserhalb lag, braucht z. B. im Vollbild
+   *  plötzlich kein Scrollen mehr, und jedes Kabel muss auf die neuen
+   *  Jack-Positionen umgezeichnet werden. */
+  let isCanvasFullscreen = false;
+  function setCanvasFullscreen(next) {
+    isCanvasFullscreen = next;
+    canvasOuterEl.classList.toggle('is-fullscreen', next);
+    fullscreenBtn.textContent = next ? '✕' : '⛶';
+    fullscreenBtn.setAttribute('aria-label', next ? 'Exit fullscreen patch bay' : 'Toggle fullscreen patch bay');
+    updateCanvasSize();
+    updateCables();
+  }
+  fullscreenBtn.addEventListener('click', () => setCanvasFullscreen(!isCanvasFullscreen));
 
   /* ---------- Hinzufügen / Halten-Menü ---------- */
 
