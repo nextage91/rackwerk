@@ -18241,22 +18241,20 @@ const MODULE_DEFS = {
     build(ctx, p) {
       const osc = ctx.createOscillator();
       osc.type = p.wave;
-      // Bewusst NICHT mit einer hörbaren Tonhöhe (z. B. C4) starten: der
-      // Oscillator läuft seit Modul-Erstellung durchgehend, bevor je eine
-      // Note gespielt wurde -- normalerweise unhörbar, weil der VCA bis
-      // zum ersten Envelope-Trigger komplett zu ist (s. VCA#build). Auf
-      // manchen Geräten reproduzierbar (Nutzer-Bugreport): GENAU beim
-      // allerersten je ausgelösten Trigger ist kurz die bis dahin
-      // geltende (Default-)Tonhöhe zu hören, bevor sie auf die Zielnote
-      // springt -- ein setValueAtTime()-Priming direkt beim Bauen (frühere
-      // Fassung) hat das NICHT behoben, der genaue Mechanismus auf dem
-      // betroffenen Gerät bleibt unklar. Statt weiter zu raten, WARUM kurz
-      // etwas durchsickert: einfach dafür sorgen, dass das, was in diesem
-      // Fenster durchsickern könnte, keine hörbare Tonhöhe hat -- 1 Hz
-      // liegt weit unter dem Hörbereich, klingt also wie Stille statt wie
-      // eine falsche Note, ganz gleich was den genauen Kaltstart-Effekt
-      // auslöst.
-      osc.frequency.value = 1;
+      // Zurückgesetzt auf C4 (s. Chat: ein 1Hz-Default -- Versuch, das
+      // Kaltstart-Problem beim allerersten Trigger unhörbar zu machen --
+      // machte die Sache SCHLIMMER statt besser, deutlich hörbar). Das ist
+      // ein wichtiger Hinweis auf den tatsächlichen Mechanismus: was auf
+      // dem betroffenen Gerät beim allerersten je geplanten
+      // setValueAtTime()-Aufruf passiert, ist offenbar kein sauberer
+      // Sprung, sondern etwas wie ein Gleiten/Glide -- dessen Hörbarkeit
+      // mit dem Frequenz-ABSTAND zwischen Startwert und Zielnote wächst.
+      // Ein Startwert nahe C4 (wie hier) hält diesen Abstand für die
+      // allermeisten Noten in einem für eine kurze Sequenzer-Note kaum
+      // wahrnehmbaren Rahmen; ein Startwert bei 1Hz macht denselben Effekt
+      // über mehrere Oktaven hinweg brutal hörbar. Der zugrunde liegende
+      // Bug ist damit NICHT gelöst, nur nicht mehr verschlimmert.
+      osc.frequency.value = midiToHz(60);
       osc.start();
       const output = safeOutput(ctx, osc);
       return {
