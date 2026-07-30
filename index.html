@@ -3301,6 +3301,17 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border-radius: 0;
   border: none;
 }
+/* Transport-Leiste (oben) und Bottom-Bar (unten) bleiben sonst IMMER
+   sichtbar, auch im normalen Vollbild-Maschinen-Editor (.machine-focus
+   lässt bewusst Lücken für sie frei) -- für die Patch-Bay speziell
+   unerwünscht: sie deckten sichtbar einen Teil der neu gewonnenen
+   Vollbild-Fläche zu (Nutzer-Feedback samt Screenshot). Body-Klasse statt
+   Scoping über .modrack, weil beide Leisten ausserhalb von .modrack im
+   DOM liegen. */
+body.modular-canvas-fullscreen #transport,
+body.modular-canvas-fullscreen #bottombar {
+  display: none;
+}
 .modrack__canvas {
   /* width/height werden von ui/modular-view.js#updateCanvasSize() inline
      gesetzt, gross genug für alle Kacheln + Rand -- Positionierungs-
@@ -21930,12 +21941,73 @@ function renderModularRack(container, machine) {
   function setCanvasFullscreen(next) {
     isCanvasFullscreen = next;
     canvasOuterEl.classList.toggle('is-fullscreen', next);
+    // Transport-Leiste (oben) und Bottom-Bar (unten) bleiben normalerweise
+    // IMMER sichtbar, auch im Vollbild-Maschinen-Editor (.machine-focus
+    // lässt bewusst Lücken dafür, s. dessen top/bottom-Offsets) -- für die
+    // Patch-Bay speziell aber unerwünscht: sie deckten einen Teil der neu
+    // gewonnenen Vollbild-Fläche wieder zu (Nutzer-Feedback samt
+    // Screenshot: beide Leisten lagen sichtbar über der Steckfläche).
+    // Nur für DIESEN Vollbild-Zustand blenden wir sie zusätzlich aus, statt
+    // grundsätzlich (s. body-Klasse in components.css).
+    document.body.classList.toggle('modular-canvas-fullscreen', next);
     fullscreenBtn.textContent = next ? '✕' : '⛶';
     fullscreenBtn.setAttribute('aria-label', next ? 'Exit fullscreen patch bay' : 'Toggle fullscreen patch bay');
     updateCanvasSize();
     updateCables();
+    if (next) centerModulesInView();
   }
   fullscreenBtn.addEventListener('click', () => setCanvasFullscreen(!isCanvasFullscreen));
+
+  /** Rückt beim Öffnen des Vollbilds die Bounding-Box aller Module einmalig
+   *  in die Mitte des (jetzt viel grösseren) Sichtfensters -- als
+   *  einheitliche Verschiebung ALLER Module um denselben Betrag (relative
+   *  Anordnung zueinander UND alle Kabelverbindungen bleiben exakt
+   *  erhalten, s. ModularPatch#moveModuleTo/serialize), nicht als reiner
+   *  Scroll: die Steckfläche ist genau so gross wie ihr Inhalt + etwas
+   *  Rand (s. updateCanvasSize()) -- passt der Inhalt (wie meist bei
+   *  einem frischen/kleinen Patch) schon in den Vollbild-Rahmen, gibt es
+   *  gar keinen Scroll-Spielraum, in den man "hineinscrollen" könnte
+   *  (reine Scroll-Positionierung blieb deshalb wirkungslos bei einem
+   *  kürzeren Testlauf). Nur EINMAL beim Öffnen, nicht bei jedem Render --
+   *  ein Nutzer, der Module gerade bewusst an den Rand geschoben hat, soll
+   *  nicht bei jedem Wechsel wieder mittig zurückgesetzt werden (Chat:
+   *  "vielleicht per default die module in der mitte des vollbildcanvas
+   *  platzieren" -- explizit als Vorschlag fürs DEFAULT-Layout formuliert,
+   *  nicht als Dauerzustand). */
+  function centerModulesInView() {
+    const boxes = [...jacksEl.querySelectorAll('.modrack__mod-box')];
+    if (!boxes.length) return;
+    let left = Infinity, top = Infinity, right = 0, bottom = 0;
+    for (const box of boxes) {
+      const m = patch.modules.get(Number(box.dataset.moduleId));
+      if (!m) continue;
+      left = Math.min(left, m.x);
+      top = Math.min(top, m.y);
+      right = Math.max(right, m.x + box.offsetWidth);
+      bottom = Math.max(bottom, m.y + box.offsetHeight);
+    }
+    if (!Number.isFinite(left)) return;
+    const wrapRect = jacksWrapEl.getBoundingClientRect();
+    const dx = (wrapRect.width / zoom - (right + left)) / 2;
+    const dy = (wrapRect.height / zoom - (bottom + top)) / 2;
+    // Nur verschieben, wenn's die Module tatsächlich weiter zur Mitte hin
+    // bewegt (dx/dy > 0 -- Inhalt ist kleiner als der sichtbare Bereich);
+    // bei einem Patch, der schon grösser als der Bildschirm ist, bliebe
+    // sonst alles unverändert am linken/oberen Rand hängen, exakt wie
+    // zuvor -- kein negatives "Reinquetschen" nötig oder gewünscht.
+    if (dx <= 0 && dy <= 0) return;
+    for (const box of boxes) {
+      const m = patch.modules.get(Number(box.dataset.moduleId));
+      if (!m) continue;
+      const nx = Math.max(0, m.x + Math.max(0, dx));
+      const ny = Math.max(0, m.y + Math.max(0, dy));
+      box.style.left = `${nx}px`;
+      box.style.top = `${ny}px`;
+      patch.moveModuleTo(Number(box.dataset.moduleId), nx, ny);
+    }
+    updateCanvasSize();
+    updateCables();
+  }
 
   /* ---------- Hinzufügen / Halten-Menü ---------- */
 

@@ -1456,6 +1456,17 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border-radius: 0;
   border: none;
 }
+/* Transport-Leiste (oben) und Bottom-Bar (unten) bleiben sonst IMMER
+   sichtbar, auch im normalen Vollbild-Maschinen-Editor (.machine-focus
+   lässt bewusst Lücken für sie frei) -- für die Patch-Bay speziell
+   unerwünscht: sie deckten sichtbar einen Teil der neu gewonnenen
+   Vollbild-Fläche zu (Nutzer-Feedback samt Screenshot). Body-Klasse statt
+   Scoping über .modrack, weil beide Leisten ausserhalb von .modrack im
+   DOM liegen. */
+body.modular-canvas-fullscreen #transport,
+body.modular-canvas-fullscreen #bottombar {
+  display: none;
+}
 .modrack__canvas {
   /* width/height werden von ui/modular-view.js#updateCanvasSize() inline
      gesetzt, gross genug für alle Kacheln + Rand -- Positionierungs-
