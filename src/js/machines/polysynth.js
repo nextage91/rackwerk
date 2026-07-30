@@ -116,9 +116,10 @@ export class PolySynth extends StepSequencedSynth {
       const { osc, filter } = this.#buildVoice(midi, time);
 
       const env = engine.ctx.createGain();
-      const atk = Math.min(p.attack, dur * 0.5);
+      // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
+      // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
       env.gain.setValueAtTime(0, time);
-      env.gain.linearRampToValueAtTime(headroom, time + atk);
+      env.gain.linearRampToValueAtTime(headroom, time + p.attack);
       env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
       osc.connect(filter).connect(env).connect(this.output);
@@ -248,8 +249,8 @@ export class PolySynth extends StepSequencedSynth {
       <x-knob label="Reso"   min="0.5" max="20"  value="3"  data-p="resonance" data-auto></x-knob>
       <x-knob label="Env Amt" min="0" max="1" value="0.2" data-p="envAmt" data-auto></x-knob>
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.3" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Transpose" min="-24" max="24" step="1" default="0" value="0" data-p="transpose" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;

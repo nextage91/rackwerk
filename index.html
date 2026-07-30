@@ -18720,8 +18720,8 @@ const MODULE_UI_PARAMS = {
     { key: 'resonance', label: 'Reso', min: 0.1, max: 15, curve: 'log', unit: '' },
   ],
   envelope: [
-    { key: 'attack', label: 'Attack', min: 0.002, max: 1, curve: 'log', unit: 's' },
-    { key: 'release', label: 'Release', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
+    { key: 'attack', label: 'Attack', min: 0.002, max: 10, curve: 'log', unit: 's' },
+    { key: 'release', label: 'Release', min: 0.01, max: 10, curve: 'log', unit: 's' },
   ],
   lfo: [
     { key: 'rateHz', label: 'Rate', min: 0.05, max: 20, curve: 'log', unit: 'Hz' },
@@ -25012,9 +25012,16 @@ class SubSynth extends StepSequencedSynth {
     applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
-    const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
+    // KEIN Math.min(p.attack, dur * 0.5) mehr (frühere Fassung) -- die
+    // anschliessende setTargetAtTime(0, time+dur, ...) startet ihre
+    // Abklingkurve ohnehin korrekt von dem Wert, den die noch laufende
+    // Attack-Rampe zu diesem Zeitpunkt tatsächlich hätte (kein expliziter
+    // "Sprung"-Anker wie beim alten Modular-Envelope-Bug, s. dort) --
+    // die Kappe verhinderte hier gar keinen Sprung, sie machte den Regler
+    // bei kurzen Sequenzer-Schritten nur wirkungslos (Chat: "kann es sein
+    // das der attack wert der envelope mit bis max. 1s zu tief ist").
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filter).connect(env).connect(this.output);
@@ -25106,8 +25113,8 @@ class SubSynth extends StepSequencedSynth {
       <x-knob label="Reso"   min="0.5" max="20"  value="4"  data-p="resonance" data-auto></x-knob>
       <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
@@ -25626,9 +25633,10 @@ class PolySynth extends StepSequencedSynth {
       const { osc, filter } = this.#buildVoice(midi, time);
 
       const env = engine.ctx.createGain();
-      const atk = Math.min(p.attack, dur * 0.5);
+      // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
+      // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
       env.gain.setValueAtTime(0, time);
-      env.gain.linearRampToValueAtTime(headroom, time + atk);
+      env.gain.linearRampToValueAtTime(headroom, time + p.attack);
       env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
       osc.connect(filter).connect(env).connect(this.output);
@@ -25758,8 +25766,8 @@ class PolySynth extends StepSequencedSynth {
       <x-knob label="Reso"   min="0.5" max="20"  value="3"  data-p="resonance" data-auto></x-knob>
       <x-knob label="Env Amt" min="0" max="1" value="0.2" data-p="envAmt" data-auto></x-knob>
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.3" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Transpose" min="-24" max="24" step="1" default="0" value="0" data-p="transpose" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
@@ -27048,9 +27056,9 @@ class Sampler extends Machine {
     envRow.className = 'machine__row machine__row--track';
     envRow.innerHTML = `
       <span class="track-row__label">Envelope</span>
-      <x-knob label="Attack" min="0.002" max="1" value="0.002" curve="log" unit="s" data-p="ampAttack"></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.002" curve="log" unit="s" data-p="ampAttack"></x-knob>
       <x-knob label="Decay" min="0.05" max="5" value="2" curve="log" unit="s" data-p="ampDecay"></x-knob>
-      <x-knob label="Release" min="0.01" max="2" value="0.05" curve="log" unit="s" data-p="ampRelease"></x-knob>
+      <x-knob label="Release" min="0.01" max="10" value="0.05" curve="log" unit="s" data-p="ampRelease"></x-knob>
     `;
     envRow.addEventListener('input', (e) => {
       const key = e.target.dataset?.p;
@@ -27997,9 +28005,10 @@ class FMSynth extends StepSequencedSynth {
     this.#applyFmEnv(modGain, modFreq, time);
 
     const ampEnv = engine.ctx.createGain();
-    const atk = Math.min(p.attack, dur * 0.5);
+    // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
+    // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
+    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     filter.connect(ampEnv).connect(this.output);
 
@@ -28112,8 +28121,8 @@ class FMSynth extends StepSequencedSynth {
     ampRow.innerHTML = `
       <x-knob label="Cutoff"  min="200" max="16000" value="8000" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
       <x-knob label="Reso"    min="0.5" max="12" value="0.7" data-p="resonance" data-auto></x-knob>
-      <x-knob label="Attack"  min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.4" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack"  min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.4" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume"  min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
     ampRow.addEventListener('input', (e) => {
@@ -29285,9 +29294,10 @@ class PsySynth extends StepSequencedSynth {
     const ampEnv = engine.ctx.createGain();
     note.ampEnv = ampEnv;
     const headroom = VOICE_HEADROOM / Math.sqrt(n);
-    const atk = Math.min(p.attack, dur * 0.5);
+    // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
+    // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(headroom, time + atk);
+    ampEnv.gain.linearRampToValueAtTime(headroom, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     note.filter.connect(ampEnv).connect(this.output);
 
@@ -29376,8 +29386,8 @@ class PsySynth extends StepSequencedSynth {
     ampRow.innerHTML = `
       <x-knob label="Cutoff" min="200" max="16000" value="3000" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
       <x-knob label="Reso" min="0.5" max="12" value="2" data-p="resonance" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.6" data-p="volume" data-auto></x-knob>
     `;
     container.appendChild(ampRow);

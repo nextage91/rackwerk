@@ -585,8 +585,8 @@ export const MODULE_UI_PARAMS = {
     { key: 'resonance', label: 'Reso', min: 0.1, max: 15, curve: 'log', unit: '' },
   ],
   envelope: [
-    { key: 'attack', label: 'Attack', min: 0.002, max: 1, curve: 'log', unit: 's' },
-    { key: 'release', label: 'Release', min: 0.01, max: 1.5, curve: 'log', unit: 's' },
+    { key: 'attack', label: 'Attack', min: 0.002, max: 10, curve: 'log', unit: 's' },
+    { key: 'release', label: 'Release', min: 0.01, max: 10, curve: 'log', unit: 's' },
   ],
   lfo: [
     { key: 'rateHz', label: 'Rate', min: 0.05, max: 20, curve: 'log', unit: 'Hz' },
