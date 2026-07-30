@@ -49,7 +49,28 @@ class AudioEngine {
       await this.ctx.resume();
     }
     this.unlocked = this.ctx.state === 'running';
+    if (this.unlocked) this.#primeAudioPipeline();
     return this.unlocked;
+  }
+
+  /** Ein einziger, lautloser Sample-Frame direkt nach dem Aufwecken --
+   *  ohne das bleibt die allererste AudioParam-Automation, die je auf
+   *  dieser Session geplant wird (z. B. eine Oszillator-Tonhöhe beim
+   *  ersten je gespielten Modular-Ton), auf manchen Geräten für ein paar
+   *  Dutzend Millisekunden hörbar auf ihrem Startwert hängen, bevor sie
+   *  greift (Nutzer-Bugreport: "vor der ersten Note im Modular höre ich
+   *  noch einen höher gepitchten Sound" -- reproduzierbar exakt beim
+   *  ersten Notenanschlag nach App-Start, danach nie wieder). Bekannter
+   *  Kaltstart-Effekt frisch aufgeweckter AudioContexts, u. a. auf iOS
+   *  Safari; das gängige Gegenmittel ist genau das hier: die Render-Pipeline
+   *  einmal mit echtem (wenn auch lautlosem) Audiomaterial anlaufen lassen,
+   *  BEVOR die erste echte Automation eines Nutzer-Tons drankommt. */
+  #primeAudioPipeline() {
+    const buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(this.ctx.destination);
+    src.start();
   }
 
   #buildMasterChain() {
