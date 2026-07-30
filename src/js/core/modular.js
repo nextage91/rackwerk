@@ -192,10 +192,21 @@ const MODULE_DEFS = {
           // richtig: der Regler setzt die Basisfrequenz, ein gepatchtes
           // LFO/Hüllkurven-Signal schwingt/verschiebt sie zusätzlich --
           // dieselbe Konvention wie bei echten Analogfiltern (Cutoff-Knopf
-          // + CV-Eingang addieren sich). Der Regler schreibt deshalb IMMER
-          // direkt auf .value, unabhängig davon, ob gerade ein Kabel hängt.
-          else if (key === 'cutoff') { p.cutoff = v; filter.frequency.value = v; }
-          else if (key === 'resonance') filter.Q.value = v;
+          // + CV-Eingang addieren sich).
+          //
+          // setTargetAtTime statt direktem .value= (Chat: "das Knacksen
+          // kommt erst wenn ich den Filter (LP) zudrehe"): eine Regler-
+          // Zieh-Geste feuert viele 'input'-Events hintereinander, jedes
+          // ein SPRUNGHAFTES .value= auf die frequency-AudioParam -- bei
+          // einem resonanten Biquad-Filter reisst so ein harter Sprung das
+          // Filter kurz zum Klingeln/Überschwingen (per Reproduktion
+          // bestätigt: ein Sprung von +0.59 auf den Clip-Deckel -0.76
+          // innerhalb weniger Samples beim schnellen Runterdrehen). Eine
+          // kurze setTargetAtTime-Glättung (10ms Zeitkonstante -- spürbar
+          // sofort, aber ohne den harten Sprung) behebt das, ohne die
+          // Reaktionsfreudigkeit des Reglers merklich zu verändern.
+          else if (key === 'cutoff') { p.cutoff = v; filter.frequency.setTargetAtTime(v, engine.now, 0.01); }
+          else if (key === 'resonance') filter.Q.setTargetAtTime(v, engine.now, 0.01);
         },
         dispose() { input.disconnect(); filter.disconnect(); disposeOutput(output); },
       };
@@ -229,7 +240,24 @@ const MODULE_DEFS = {
    * dort, wo die alte Rampe zur Zeit t tatsächlich stünde -- die neue
    * Attack-Rampe (linearRampToValueAtTime(1, ...)) läuft dann OHNE Sprung
    * von genau diesem Punkt aus weiter, egal ob die Hüllkurve gerade bei 0
-   * (normaler Fall) oder mitten im Release (Nachtriggern) steht. */
+   * (normaler Fall) oder mitten im Release (Nachtriggern) steht.
+   *
+   * Attack wird NICHT MEHR auf die halbe Notenlänge gekappt (frühere
+   * Fassung, von subsynth.js übernommen): bei der dort üblichen kurzen
+   * Schrittlänge (s. step-sequenced-synth.js: dur = stepDuration * 0.8,
+   * bei 120 BPM/16teln nur 0.1s) lag die Kappe fast immer weit UNTER dem,
+   * was der Regler überhaupt einstellen kann (0.002-1s) -- der Regler
+   * wirkte dadurch effektiv immer gleich (Chat: "ich habe das Gefühl der
+   * Attack Regler macht nichts", per Reproduktion bestätigt: 0.1s- und
+   * 1.0s-Attack ergaben für dieselbe kurze Note exakt denselben Endwert).
+   * Damit ein noch nicht fertiger Attack beim Notenende (t+dur) nicht
+   * hart auf 1 springt (das WAR der eigentliche Zweck der alten Kappe),
+   * wird stattdessen genau der Wert angepinnt, den die noch laufende
+   * Attack-Rampe zu diesem Zeitpunkt rechnerisch hätte (linear
+   * interpoliert) -- der Release setzt dann nahtlos von DORT aus fort,
+   * statt erst auf 1 hochzuspringen. Ist der Attack dagegen schon fertig
+   * (der Normalfall bei kurzem Attack/langer Note), bleibt das Verhalten
+   * exakt wie zuvor: auf vollem Pegel halten bis zum Notenende. */
   envelope: {
     name: 'Envelope',
     defaults: { attack: 0.002, release: 0.05 },
@@ -242,11 +270,18 @@ const MODULE_DEFS = {
         inputs: {},
         outputs: { cv: output },
         trigger(t, dur) {
-          const attack = Math.max(0.0001, Math.min(p.attack, dur * 0.5)); // nie länger als die halbe Note, s. subsynth.js
+          const attack = Math.max(0.0001, p.attack);
           const release = Math.max(0.005, p.release);
           src.offset.cancelAndHoldAtTime(t);
           src.offset.linearRampToValueAtTime(1, t + attack);
-          src.offset.setValueAtTime(1, t + dur); // Halten auf vollem Pegel bis zum Notenende
+          if (attack <= dur) {
+            src.offset.setValueAtTime(1, t + dur); // Attack längst fertig -- auf vollem Pegel halten bis zum Notenende
+          } else {
+            // Attack ist beim Notenende noch nicht fertig -- den Wert
+            // anpinnen, den die Rampe dort rechnerisch hätte, statt hart
+            // auf 1 zu springen (s. Kommentar oben).
+            src.offset.setValueAtTime(dur / attack, t + dur);
+          }
           src.offset.linearRampToValueAtTime(0, t + dur + release);
         },
         setParam(key, v) { p[key] = v; },
