@@ -614,6 +614,27 @@ export function renderModularRack(container, machine) {
   function setCanvasFullscreen(next) {
     isCanvasFullscreen = next;
     canvasOuterEl.classList.toggle('is-fullscreen', next);
+    // Aus dem verschachtelten .machine-focus__panel (overflow-y:auto,
+    // eigenes Padding) heraus DIREKT an <body> umhängen, statt nur per
+    // position:fixed "auszubrechen" -- drei Versuche, die Vollbild-Höhe
+    // rein über CSS/JS-Höhenberechnung zu treffen (--app-vh,
+    // window.visualViewport), haben auf dem Testgerät NICHTS geändert
+    // (Nutzer-Feedback, mehrfach: "leider immer noch nicht", sowohl im
+    // Browser als auch als Homescreen-App). Ein position:fixed-Element
+    // bricht zwar aus dem NORMALEN Fluss seines Elternteils aus, bleibt
+    // aber ein Kind davon -- auf manchen WebKit-Ständen reicht das
+    // offenbar nicht, um zuverlässig über verschachtelte Scroll-/Padding-
+    // Container hinweg wirklich die komplette Bildschirmfläche zu
+    // bekommen. .machine-focus selbst (das nachweislich echt Vollbild
+    // ist) hängt dagegen als DIREKTES Kind von <body> -- hier also
+    // dieselbe Struktur: beim Öffnen wirklich an <body> verschieben (Event-
+    // Listener bleiben beim Verschieben erhalten), beim Schliessen exakt
+    // dorthin zurück, wo es im Template stand (letztes Kind von .modrack).
+    if (next) {
+      document.body.appendChild(canvasOuterEl);
+    } else if (canvasOuterEl.parentElement !== root) {
+      root.appendChild(canvasOuterEl);
+    }
     // Transport-Leiste (oben) und Bottom-Bar (unten) bleiben normalerweise
     // IMMER sichtbar, auch im Vollbild-Maschinen-Editor (.machine-focus
     // lässt bewusst Lücken dafür, s. dessen top/bottom-Offsets) -- für die
