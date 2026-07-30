@@ -3266,6 +3266,20 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border: 1px solid var(--ink-faint);
   border-radius: 8px;
   background: var(--bg-panel);
+  /* pan-x/pan-y statt des Defaults "auto": erlaubt weiterhin natives
+     Zwei-Achsen-Scrollen per Finger, unterbindet aber Safaris eigene
+     Pinch-zu-Zoom-Geste auf diesem Element. Ohne das kämpfen zwei Zoom-
+     Mechanismen um dieselbe Zwei-Finger-Geste -- Safaris systemweiter
+     Seiten-Zoom UND der eigene Pinch-Handler unten (der die Kachel-Ebene
+     per transform:scale() skaliert) -- gleichzeitig (die viewport-Meta
+     `user-scalable=no` verhindert das auf iOS Safari bekanntermassen
+     NICHT zuverlässig). Nutzer-Feedback: Zoom fühlte sich "ungewohnt
+     sensibel"/"fummelig" an, und Module liessen sich nicht mehr per
+     Scrollen erreichen -- beides erklärt sich durch den nebenbei
+     mitlaufenden System-Zoom, der die tatsächliche Bildschirm-Skalierung
+     gegenüber dem verschiebt, was updateCanvasSize()/updateCables() aus
+     getBoundingClientRect() lesen. */
+  touch-action: pan-x pan-y;
 }
 /* Vollbild: löst den GESAMTEN äusseren Rahmen (Knopf + Steckfläche) aus dem
    Maschinen-Editor (.machine-focus, z-index 55) und deckt den kompletten
@@ -21649,6 +21663,14 @@ function renderModularRack(container, machine) {
   const TAP_MOVE_TOLERANCE = 8;
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 2;
+  // Schutz gegen überempfindlichen Zoom, wenn eine Pinch-Geste mit eng
+  // beieinander liegenden Fingern beginnt (Nutzer-Feedback: "der zoom ist
+  // ungewohnt sensibel"): zoom skaliert mit dist/pinchStartDist -- bei
+  // einem kleinen Nenner (Finger starten nah beieinander) macht schon
+  // kleinstes Fingerzittern riesige Zoom-Sprünge. Ein Mindestabstand hält
+  // den Nenner in einem Bereich, in dem eine normale Fingerbewegung eine
+  // vergleichbar grosse, kontrollierbare Zoom-Änderung ergibt.
+  const MIN_PINCH_START_DIST = 60;
 
   let armedFrom = null; // { moduleId, port } -- per Tap scharf geschalteter Ausgang
   let dragFrom = null; // { moduleId, port } -- währenddessen evtl. gezogener Ausgang
@@ -21695,7 +21717,7 @@ function renderModularRack(container, machine) {
       dragFrom = null; dragMoved = false; clearSnapTarget(); pendingCablePath = null;
       moveFrom = null; moveMoved = false;
       const pts = [...activePointers.values()];
-      pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartDist = Math.max(MIN_PINCH_START_DIST, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
       pinchStartZoom = zoom;
       for (const id of activePointers.keys()) {
         try { jacksWrapEl.setPointerCapture(id); } catch { /* Testumgebung */ }

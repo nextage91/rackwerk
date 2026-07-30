@@ -1421,6 +1421,20 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   border: 1px solid var(--ink-faint);
   border-radius: 8px;
   background: var(--bg-panel);
+  /* pan-x/pan-y statt des Defaults "auto": erlaubt weiterhin natives
+     Zwei-Achsen-Scrollen per Finger, unterbindet aber Safaris eigene
+     Pinch-zu-Zoom-Geste auf diesem Element. Ohne das kämpfen zwei Zoom-
+     Mechanismen um dieselbe Zwei-Finger-Geste -- Safaris systemweiter
+     Seiten-Zoom UND der eigene Pinch-Handler unten (der die Kachel-Ebene
+     per transform:scale() skaliert) -- gleichzeitig (die viewport-Meta
+     `user-scalable=no` verhindert das auf iOS Safari bekanntermassen
+     NICHT zuverlässig). Nutzer-Feedback: Zoom fühlte sich "ungewohnt
+     sensibel"/"fummelig" an, und Module liessen sich nicht mehr per
+     Scrollen erreichen -- beides erklärt sich durch den nebenbei
+     mitlaufenden System-Zoom, der die tatsächliche Bildschirm-Skalierung
+     gegenüber dem verschiebt, was updateCanvasSize()/updateCables() aus
+     getBoundingClientRect() lesen. */
+  touch-action: pan-x pan-y;
 }
 /* Vollbild: löst den GESAMTEN äusseren Rahmen (Knopf + Steckfläche) aus dem
    Maschinen-Editor (.machine-focus, z-index 55) und deckt den kompletten
