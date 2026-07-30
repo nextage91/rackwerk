@@ -87,6 +87,19 @@ const MODULE_DEFS = {
       osc.type = p.wave;
       osc.frequency.value = midiToHz(60);
       osc.start();
+      // Ohne dieses "Priming" wäre der ERSTE je auf diesem Parameter
+      // geplante setValueAtTime()-Aufruf (s. trigger() unten) tatsächlich
+      // der allererste Automations-Event überhaupt auf einem Parameter,
+      // der seit Modul-Erstellung durchgehend ohne jede Automation lief --
+      // auf manchen Geräten reproduzierbar hörbar (Nutzer-Bugreport: die
+      // allererste je gespielte Modular-Note klingt kurz auf der Default-
+      // Tonhöhe C4 an, bevor sie auf die Zieltonhöhe springt; passiert
+      // NICHT bei anderen Maschinen, deren Oszillatoren pro Note neu
+      // gebaut werden und ihre Frequenz per direktem .value VOR dem Start
+      // bekommen, nie per Automation auf einem langlebigen Parameter).
+      // Ein no-op-Event auf den ohnehin schon aktuellen Wert "verbraucht"
+      // diesen Sonderfall harmlos, bevor die erste echte Note drankommt.
+      osc.frequency.setValueAtTime(osc.frequency.value, ctx.currentTime);
       const output = safeOutput(ctx, osc);
       return {
         inputs: { pitch: osc.frequency, fine: osc.detune },
@@ -265,6 +278,11 @@ const MODULE_DEFS = {
       const src = ctx.createConstantSource();
       src.offset.value = 0;
       src.start();
+      // Priming, s. Oscillator#build für die ausführliche Begründung --
+      // derselbe langlebige, nie automatisierte Parameter (hier: das CV-
+      // Offset), derselbe potenzielle Kaltstart-Sonderfall beim allerersten
+      // trigger()/cancelAndHoldAtTime()-Aufruf.
+      src.offset.setValueAtTime(0, ctx.currentTime);
       const output = safeOutput(ctx, src);
       return {
         inputs: {},
@@ -407,6 +425,8 @@ const MODULE_DEFS = {
       const held = ctx.createConstantSource();
       held.offset.value = 0;
       held.start();
+      // Priming, s. Oscillator#build für die ausführliche Begründung.
+      held.offset.setValueAtTime(0, ctx.currentTime);
       const output = safeOutput(ctx, held);
       return {
         inputs: { signal: input },
