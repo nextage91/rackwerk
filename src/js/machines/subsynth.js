@@ -95,9 +95,16 @@ export class SubSynth extends StepSequencedSynth {
     applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
-    const atk = Math.min(p.attack, dur * 0.5); // Attack nie länger als die Note
+    // KEIN Math.min(p.attack, dur * 0.5) mehr (frühere Fassung) -- die
+    // anschliessende setTargetAtTime(0, time+dur, ...) startet ihre
+    // Abklingkurve ohnehin korrekt von dem Wert, den die noch laufende
+    // Attack-Rampe zu diesem Zeitpunkt tatsächlich hätte (kein expliziter
+    // "Sprung"-Anker wie beim alten Modular-Envelope-Bug, s. dort) --
+    // die Kappe verhinderte hier gar keinen Sprung, sie machte den Regler
+    // bei kurzen Sequenzer-Schritten nur wirkungslos (Chat: "kann es sein
+    // das der attack wert der envelope mit bis max. 1s zu tief ist").
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + atk);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filter).connect(env).connect(this.output);
@@ -189,8 +196,8 @@ export class SubSynth extends StepSequencedSynth {
       <x-knob label="Reso"   min="0.5" max="20"  value="4"  data-p="resonance" data-auto></x-knob>
       <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
-      <x-knob label="Attack" min="0.002" max="1" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
-      <x-knob label="Release" min="0.02" max="2" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
+      <x-knob label="Release" min="0.02" max="10" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {

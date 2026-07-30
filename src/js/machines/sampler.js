@@ -583,9 +583,9 @@ export class Sampler extends Machine {
     envRow.className = 'machine__row machine__row--track';
     envRow.innerHTML = `
       <span class="track-row__label">Envelope</span>
-      <x-knob label="Attack" min="0.002" max="1" value="0.002" curve="log" unit="s" data-p="ampAttack"></x-knob>
+      <x-knob label="Attack" min="0.002" max="10" value="0.002" curve="log" unit="s" data-p="ampAttack"></x-knob>
       <x-knob label="Decay" min="0.05" max="5" value="2" curve="log" unit="s" data-p="ampDecay"></x-knob>
-      <x-knob label="Release" min="0.01" max="2" value="0.05" curve="log" unit="s" data-p="ampRelease"></x-knob>
+      <x-knob label="Release" min="0.01" max="10" value="0.05" curve="log" unit="s" data-p="ampRelease"></x-knob>
     `;
     envRow.addEventListener('input', (e) => {
       const key = e.target.dataset?.p;
