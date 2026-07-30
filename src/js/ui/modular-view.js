@@ -24,18 +24,34 @@
  * nicht indem die App eine cleverere Anordnung errät. Deshalb hier: Modul-
  * Kopfzeile ziehen verschiebt die Kachel (Position wird in ModularPatch
  * gespeichert, s. core/modular.js#moveModuleTo/serialize), leere Fläche
- * ziehen scrollt/pan't die ganze Steckfläche (natives 2-Achsen-
- * overflow:auto -- kein eigener Pan-Code nötig, dieselbe Technik, die schon
- * die vorige waagrechte Buchsenleiste nutzte, nur auf beide Achsen
- * ausgeweitet).
+ * ziehen pan't die ganze Steckfläche.
  *
- * Kabel-Koordinaten sind bewusst relativ zur SCROLLENDEN Fläche selbst
- * (.modrack__canvas), nicht zum fixen Sichtfenster darum -- dadurch bleiben
- * sie beim Pan automatisch korrekt (Kachel UND ihre Ports verschieben sich
- * beim Scrollen um denselben Betrag, die Differenz bleibt invariant),
- * ANDERS als in der vorigen Fassung, die noch einen eigenen scroll-Listener
- * brauchte, weil dort das SVG am fixen Wrap hing statt an der scrollenden
- * Fläche selbst.
+ * Pan (Ziehen) UND Zoom (Pinch) laufen VOLLSTÄNDIG selbst gebaut über
+ * Pointer Events, NICHT über natives overflow:auto-Scrollen (frühere
+ * Fassung) -- exakt das Muster, das praktisch jeder unendliche Canvas im
+ * Web nutzt (Figma, tldraw, die panzoom-Bibliothek): ein einziger
+ * `transform: translate(panX,panY) scale(zoom)` auf der Kachel-Ebene
+ * (.modrack__boxes), panX/panY/zoom sind reiner ANSICHTS-Zustand (nie in
+ * ModularPatch gespeichert, nie mit Modul-x/y verwechselt). Der Wechsel weg
+ * von nativem Scrollen hat einen konkreten, recherchierten Grund: iOS
+ * Safari setzt scrollLeft/scrollTop, die man WÄHREND einer laufenden
+ * Touch-Geste per JS zuweist (z. B. um beim Pinch-Zoom den Punkt unter den
+ * Fingern festzuhalten), unzuverlässig um -- das ist ein bekanntes,
+ * dokumentiertes WebKit-Verhalten, keine Vermutung (Nutzer-Feedback nach
+ * genau so einem Versuch: "touch steuerung ist eher schlimmer geworden").
+ * Ein selbst verwalteter Zahlenwert (panX/panY) plus CSS-Transform umgeht
+ * das vollständig -- kein Scroll-Engine-Verhalten, das sich einmischen
+ * könnte.
+ *
+ * Das Kabel-SVG (.modrack__cables) hängt bewusst NICHT innerhalb der
+ * transformierten Ebene, sondern als eigenes, UNVERÄNDERTES Geschwister-
+ * Element direkt im (fixen) .modrack__canvas-wrap -- sonst würde es doppelt
+ * skaliert (transform würde vom Elternteil geerbt UND updateCables() misst
+ * bereits die echten, bereits transformierten Bildschirm-Koordinaten der
+ * Ports). Kabel-Koordinaten sind deshalb relativ zum WRAP (nicht zur
+ * transformierten Kachel-Ebene) -- bleiben dadurch bei jedem Pan/Zoom
+ * automatisch korrekt, weil sie aus den tatsächlichen (transformierten)
+ * Port-Positionen gemessen werden, s. updateCables().
  *
  * Die Listen-Reihenfolge (ModularPatch#moveModule) bleibt die Sortierung
  * der VORDERSEITE -- x/y (Rückseite) ist davon unabhängig, ein Modul in der
@@ -64,7 +80,11 @@ import { MODULE_TYPES, MODULE_PORTS, MODULE_UI_PARAMS, OSCILLATOR_WAVES, FILTER_
 export function renderModularRack(container, machine) {
   const patch = machine.patch;
   let face = 'front';
-  let zoom = 1; // Pinch-Zoom-Stufe der Steckfläche (Rückseite), s. weiter unten
+  // Ansichts-Zustand der Steckfläche (Rückseite) -- reines Pan/Zoom der
+  // KAMERA, nie in ModularPatch gespeichert und nie mit Modul-x/y
+  // verwechselt, s. Dateikopf-Kommentar.
+  let zoom = 1;
+  let panX = 0, panY = 0;
 
   const root = document.createElement('div');
   root.className = 'modrack';
@@ -80,8 +100,8 @@ export function renderModularRack(container, machine) {
     <div class="modrack__canvas-outer" data-canvas-outer hidden>
       <button type="button" class="m-btn modrack__canvas-fullscreen" data-fullscreen aria-label="Toggle fullscreen patch bay">⛶</button>
       <div class="modrack__canvas-wrap" data-jackswrap>
+        <svg class="modrack__cables" data-cables></svg>
         <div class="modrack__canvas" data-canvas>
-          <svg class="modrack__cables" data-cables></svg>
           <div class="modrack__boxes" data-jacks></div>
         </div>
       </div>
@@ -94,7 +114,6 @@ export function renderModularRack(container, machine) {
   const hintEl = root.querySelector('[data-hint]');
   const canvasOuterEl = root.querySelector('[data-canvas-outer]');
   const jacksWrapEl = root.querySelector('[data-jackswrap]');
-  const canvasEl = root.querySelector('[data-canvas]');
   const jacksEl = root.querySelector('[data-jacks]');
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
@@ -217,45 +236,33 @@ export function renderModularRack(container, machine) {
       jacksEl.querySelector(`.port--out[data-module-id="${armedFrom.moduleId}"][data-port-key="${armedFrom.port}"]`)
         ?.classList.add('port--armed');
     }
-    updateCanvasSize();
     updateCables();
   }
 
-  /** Steckfläche mindestens so gross wie das Sichtfenster, sonst genau so
-   *  gross, dass jede Kachel (+ etwas Rand) hineinpasst -- damit man auch
-   *  weit verschobene Module per natives Scrollen erreichen kann. Läuft
-   *  nach jedem Render UND nach jedem Verschieben (s. Zieh-Logik unten).
-   *
-   *  box.offsetWidth/offsetHeight und m.x/m.y sind IMMER unskalierte
-   *  Modell-Pixel (offsetWidth ignoriert CSS-transform per Definition) --
-   *  der benötigte Platz wird deshalb erst am Ende mit `zoom`
-   *  multipliziert, s. applyZoom(). */
-  function updateCanvasSize() {
-    const wrapRect = jacksWrapEl.getBoundingClientRect();
-    let right = 0;
-    let bottom = 0;
+  /** Bounding-Box aller Kacheln in Modell-Pixeln (unskaliert, unabhängig von
+   *  pan/zoom) -- von updateCables() (SVG-Grösse) und fitContentToView()
+   *  (Ansicht zentrieren) gemeinsam genutzt. null bei einem leeren Patch. */
+  function contentBounds() {
+    let left = Infinity, top = Infinity, right = 0, bottom = 0;
     for (const box of jacksEl.querySelectorAll('.modrack__mod-box')) {
       const m = patch.modules.get(Number(box.dataset.moduleId));
       if (!m) continue;
-      right = Math.max(right, m.x + box.offsetWidth + 40);
-      bottom = Math.max(bottom, m.y + box.offsetHeight + 40);
+      left = Math.min(left, m.x);
+      top = Math.min(top, m.y);
+      right = Math.max(right, m.x + box.offsetWidth);
+      bottom = Math.max(bottom, m.y + box.offsetHeight);
     }
-    canvasEl.style.width = `${Math.max(wrapRect.width, right * zoom)}px`;
-    canvasEl.style.height = `${Math.max(wrapRect.height, bottom * zoom)}px`;
+    return Number.isFinite(left) ? { left, top, right, bottom } : null;
   }
 
-  /** Zoomstufe anwenden -- skaliert NUR die Kachel-Ebene (.modrack__boxes),
-   *  NICHT .modrack__canvas selbst: das Kabel-SVG hängt als Geschwister
-   *  DANEBEN (nicht als Kind der skalierten Ebene), sonst würde es doppelt
-   *  skaliert (einmal, weil updateCables() bereits die echten,
-   *  BILDSCHIRM-Koordinaten der (skaliert gerenderten) Ports misst, ein
-   *  zweites Mal, weil das SVG selbst zusätzlich denselben Transform vom
-   *  Elternelement geerbt hätte). transform-origin 0/0 (s. CSS) hält die
-   *  linke obere Ecke fest, damit Modul-x/y weiterhin direkt (nur mit
-   *  `zoom` multipliziert) der Bildschirmposition entsprechen. */
-  function applyZoom() {
-    jacksEl.style.transform = `scale(${zoom})`;
-    updateCanvasSize();
+  /** Pan/Zoom anwenden -- EIN gemeinsamer Transform auf die Kachel-Ebene
+   *  (.modrack__boxes), s. Dateikopf-Kommentar. Das Kabel-SVG bekommt
+   *  bewusst NIE diesen Transform (hängt unverändert direkt im Wrap) --
+   *  updateCables() misst stattdessen die echten, bereits transformierten
+   *  Bildschirm-Positionen der Ports, bleibt also unabhängig davon korrekt,
+   *  wie genau pan/zoom gerade steht. */
+  function applyTransform() {
+    jacksEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
     updateCables();
   }
 
@@ -267,16 +274,19 @@ export function renderModularRack(container, machine) {
    *  Kontrollpunkt weiter links), das ergibt eine natürliche Kurve
    *  unabhängig davon, wie die Kacheln zueinander stehen.
    *
-   *  Koordinaten sind relativ zu .modrack__canvas (der scrollenden Fläche
-   *  SELBST, nicht zum fixen Wrap) -- bleiben dadurch beim Pan automatisch
-   *  korrekt, s. Dateikopf-Kommentar. */
+   *  Koordinaten sind relativ zum WRAP (dem fixen Sichtfenster), NICHT zur
+   *  transformierten Kachel-Ebene -- das Kabel-SVG selbst bekommt nie den
+   *  pan/zoom-Transform (s. Dateikopf-Kommentar), bleibt also bei jedem
+   *  Pan/Zoom automatisch korrekt, weil hier direkt die tatsächlichen
+   *  (schon transformierten) Bildschirm-Positionen der Ports gemessen
+   *  werden, statt Modell-Koordinaten selbst umzurechnen. */
   function updateCables() {
-    const canvasRect = canvasEl.getBoundingClientRect();
+    const wrapRect = jacksWrapEl.getBoundingClientRect();
     const portCenter = (moduleId, dir, key) => {
       const el = jacksEl.querySelector(`.port[data-module-id="${moduleId}"][data-port-dir="${dir}"][data-port-key="${key}"] .port__dot`);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2 - canvasRect.left, y: r.top + r.height / 2 - canvasRect.top };
+      return { x: r.left + r.width / 2 - wrapRect.left, y: r.top + r.height / 2 - wrapRect.top };
     };
     const bend = (fx, tx) => Math.max(40, Math.abs(tx - fx) / 2);
 
@@ -298,9 +308,14 @@ export function renderModularRack(container, machine) {
     // Breite UND Höhe explizit als Attribute setzen statt sich für die
     // Breite auf CSS width:100% zu verlassen -- ein <svg> ohne viewBox
     // bildet Pfad-Koordinaten sonst nicht zuverlässig browserübergreifend
-    // 1:1 auf CSS-Pixel ab, wenn nur eines von beiden gesetzt ist.
-    svgEl.setAttribute('width', String(canvasEl.offsetWidth));
-    svgEl.setAttribute('height', String(canvasEl.offsetHeight));
+    // 1:1 auf CSS-Pixel ab, wenn nur eines von beiden gesetzt ist. Grösse
+    // ist die des WRAPS (fixes Sichtfenster) -- das SVG selbst wächst nicht
+    // mit dem Inhalt mit (kein Scrollbereich mehr, s. Dateikopf-Kommentar),
+    // overflow:visible (s. CSS) lässt Pfade trotzdem über den Rand
+    // hinausragen, falls Kabel gerade ausserhalb des sichtbaren Bereichs
+    // liegen.
+    svgEl.setAttribute('width', String(Math.round(wrapRect.width)));
+    svgEl.setAttribute('height', String(Math.round(wrapRect.height)));
     svgEl.innerHTML = paths + (pendingCablePath ?? '');
   }
 
@@ -341,6 +356,7 @@ export function renderModularRack(container, machine) {
   let pendingCablePath = null;
   let moveFrom = null; // { id, startX, startY, origX, origY } -- gerade per Kopfzeile verschobenes Modul
   let moveMoved = false;
+  let panFrom = null; // { startX, startY, origX, origY } -- Ein-Finger-Ziehen auf leerer Fläche verschiebt panX/panY
   // Zwei-Finger-Pinch-Zoom (Chat: "mit zwei fingern rein und raus zoomen").
   // activePointers zählt gleichzeitig aufliegende Finger unabhängig vom
   // Rest der Zieh-/Verbinden-Logik oben -- sobald ein ZWEITER Finger dazu-
@@ -377,6 +393,7 @@ export function renderModularRack(container, machine) {
       // denselben ersten Finger konkurrieren.
       dragFrom = null; dragMoved = false; clearSnapTarget(); pendingCablePath = null;
       moveFrom = null; moveMoved = false;
+      panFrom = null;
       const pts = [...activePointers.values()];
       pinchStartDist = Math.max(MIN_PINCH_START_DIST, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
       pinchStartZoom = zoom;
@@ -445,8 +462,14 @@ export function renderModularRack(container, machine) {
       e.stopPropagation();
       return;
     }
-    // Leere Fläche angetippt -- eine offene Auswahl verwerfen.
+    // Leere Fläche angetippt -- verwirft eine offene Auswahl UND startet
+    // einen Pan (kein natives Scrollen mehr, s. Dateikopf-Kommentar: alles
+    // hier selbst gebaut, deshalb explizit preventDefault()+
+    // setPointerCapture() wie bei jeder anderen Zieh-Geste oben).
     if (armedFrom) setArmed(null);
+    e.preventDefault();
+    panFrom = { startX: e.clientX, startY: e.clientY, origX: panX, origY: panY };
+    try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
   });
   jacksWrapEl.addEventListener('pointermove', (e) => {
     if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -455,28 +478,32 @@ export function renderModularRack(container, machine) {
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchStartZoom * (dist / pinchStartDist)));
       // Zoom um den Mittelpunkt der beiden Finger herum, nicht um die linke
-      // obere Ecke der Steckfläche (das war der bisherige Effekt, weil
-      // transform-origin auf .modrack__boxes fest bei 0/0 liegt, s.
-      // applyZoom()-Kommentar): Scroll-Position so nachführen, dass genau
-      // der Punkt UNTER den Fingern an derselben Bildschirmstelle bleibt --
-      // ohne das rutscht der Inhalt bei jedem Reinzoomen sichtbar weg, was
-      // sich "nicht optimiert"/unnatürlich anfühlt (Nutzer-Feedback).
+      // obere Ecke der Steckfläche -- ohne das rutscht der Inhalt bei jedem
+      // Reinzoomen sichtbar weg, was sich "nicht optimiert"/unnatürlich
+      // anfühlt (Nutzer-Feedback). panX/panY werden so nachgeführt, dass
+      // GENAU der Modell-Punkt unter dem Fingerpaar an derselben
+      // Bildschirmstelle bleibt (Standard-Herleitung für einen
+      // translate+scale-Transform, s. Dateikopf-Kommentar/Recherche) --
+      // rein arithmetisch, ohne natives Scrollen involviert.
       if (newZoom !== zoom) {
         const midX = (pts[0].x + pts[1].x) / 2;
         const midY = (pts[0].y + pts[1].y) / 2;
         const wrapRect = jacksWrapEl.getBoundingClientRect();
-        const localX = midX - wrapRect.left;
-        const localY = midY - wrapRect.top;
-        // Modell-Pixel (unskaliert, wie m.x/m.y), die gerade unter dem
-        // Fingerpaar liegen -- s. updateCanvasSize()-Kommentar zur
-        // Modell-vs-Bildschirm-Pixel-Unterscheidung.
-        const contentX = (jacksWrapEl.scrollLeft + localX) / zoom;
-        const contentY = (jacksWrapEl.scrollTop + localY) / zoom;
+        const fx = midX - wrapRect.left;
+        const fy = midY - wrapRect.top;
+        const modelX = (fx - panX) / zoom;
+        const modelY = (fy - panY) / zoom;
+        panX = fx - modelX * newZoom;
+        panY = fy - modelY * newZoom;
         zoom = newZoom;
-        applyZoom();
-        jacksWrapEl.scrollLeft = contentX * zoom - localX;
-        jacksWrapEl.scrollTop = contentY * zoom - localY;
+        applyTransform();
       }
+      return;
+    }
+    if (panFrom) {
+      panX = panFrom.origX + (e.clientX - panFrom.startX);
+      panY = panFrom.origY + (e.clientY - panFrom.startY);
+      applyTransform();
       return;
     }
     if (moveFrom) {
@@ -485,11 +512,6 @@ export function renderModularRack(container, machine) {
       if (!moveMoved) {
         if (Math.hypot(dx, dy) <= TAP_MOVE_TOLERANCE) return;
         moveMoved = true;
-        // Nutzer verschiebt selbst ein Modul, während die Steckfläche
-        // Vollbild ist -- die automatische Zentrierung beim Schliessen des
-        // Vollbilds NICHT rückgängig machen (s. setCanvasFullscreen), sonst
-        // ginge genau diese bewusste Änderung wieder verloren.
-        if (isCanvasFullscreen) modulesMovedInFullscreen = true;
       }
       // dx/dy sind reale Bildschirm-Pixel (Fingerbewegung) -- durch `zoom`
       // teilen, um sie in Modell-Pixel umzurechnen, sonst würde ein
@@ -503,7 +525,6 @@ export function renderModularRack(container, machine) {
       // Kommentar. Kein separater "Übernehmen"-Schritt, wie jeder andere
       // Regler in der App.
       patch.moveModuleTo(moveFrom.id, nx, ny);
-      updateCanvasSize();
       updateCables();
       return;
     }
@@ -512,16 +533,16 @@ export function renderModularRack(container, machine) {
       if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) <= TAP_MOVE_TOLERANCE) return;
       dragMoved = true; // erst ab hier ist es wirklich ein Zug, kein Tippen
     }
-    const canvasRect = canvasEl.getBoundingClientRect();
+    const wrapRect = jacksWrapEl.getBoundingClientRect();
     const fromDot = jacksEl.querySelector(`.port[data-module-id="${dragFrom.moduleId}"][data-port-dir="out"][data-port-key="${dragFrom.port}"] .port__dot`);
     if (!fromDot) return;
     const r = fromDot.getBoundingClientRect();
-    const fx = r.left + r.width / 2 - canvasRect.left;
-    const fy = r.top + r.height / 2 - canvasRect.top;
+    const fx = r.left + r.width / 2 - wrapRect.left;
+    const fy = r.top + r.height / 2 - wrapRect.top;
     const pointerX = e.clientX;
     const pointerY = e.clientY - GHOST_OFFSET_Y; // über dem Finger, nicht darunter (Viewport-Koordinaten, s. Fang-Radius unten)
-    const tx = pointerX - canvasRect.left;
-    const ty = pointerY - canvasRect.top;
+    const tx = pointerX - wrapRect.left;
+    const ty = pointerY - wrapRect.top;
 
     let best = null, bestDist = SNAP_RADIUS;
     for (const inPort of jacksEl.querySelectorAll('.port--in')) {
@@ -553,6 +574,7 @@ export function renderModularRack(container, machine) {
   jacksWrapEl.addEventListener('pointerup', (e) => {
     activePointers.delete(e.pointerId);
     if (activePointers.size < 2) pinchStartDist = 0; // Pinch endet, sobald ein Finger loslässt
+    if (panFrom) { panFrom = null; return; }
     if (moveFrom) {
       // Ein blosses Antippen der Kopfzeile (kein nennenswerter Zug) ist
       // kein Verschieben -- verwirft dann wie ein Tap auf leere Fläche
@@ -566,6 +588,7 @@ export function renderModularRack(container, machine) {
   jacksWrapEl.addEventListener('pointercancel', (e) => {
     activePointers.delete(e.pointerId);
     if (activePointers.size < 2) pinchStartDist = 0;
+    if (panFrom) { panFrom = null; return; }
     if (moveFrom) { moveFrom = null; moveMoved = false; return; }
     dragFrom = null; dragMoved = false;
     clearSnapTarget();
@@ -593,7 +616,14 @@ export function renderModularRack(container, machine) {
       ? 'Hold a module for options · tap + to add one'
       : 'Drag a module\'s header to move it · tap an output, then an input to connect · tap a cable to remove it';
     armedFrom = null; // keine über einen Flip hinweg "hängende" Auswahl
-    if (!isFront) renderBack(); // faul -- s. Dateikopf-Kommentar
+    if (!isFront) {
+      renderBack(); // faul -- s. Dateikopf-Kommentar
+      // Ansicht (pan/zoom) jedes Mal frisch auf den aktuellen Patch
+      // zentrieren, wenn man auf die Steckfläche wechselt -- reine
+      // Kamera-Sache (fitContentToView() rührt nie an Modul-x/y), also
+      // jederzeit gefahrlos wiederholbar, s. dort.
+      fitContentToView();
+    }
   }
   flipBtn.addEventListener('click', () => setFace(face === 'front' ? 'back' : 'front'));
 
@@ -608,19 +638,10 @@ export function renderModularRack(container, machine) {
    *  .machine-focus selbst. Derselbe Knopf schaltet zurück -- Symbol UND
    *  aria-label wechseln mit, wie beim Flip-Button oben.
    *
-   *  updateCanvasSize()/updateCables() müssen NACH dem Klassenwechsel neu
-   *  laufen: beide messen echte Bildschirm-Masse (getBoundingClientRect),
-   *  die sich mit der Fenstergrösse der Steckfläche ändern -- ein Modul,
-   *  das im 320px-Fenster ausserhalb lag, braucht z. B. im Vollbild
-   *  plötzlich kein Scrollen mehr, und jedes Kabel muss auf die neuen
-   *  Jack-Positionen umgezeichnet werden. */
+   *  fitContentToView() muss NACH dem Klassenwechsel neu laufen: sie misst
+   *  echte Bildschirm-Masse (getBoundingClientRect), die sich mit der
+   *  Fenstergrösse der Steckfläche ändern. */
   let isCanvasFullscreen = false;
-  // Schnappschuss der Modul-Positionen vor dem automatischen Zentrieren
-  // beim Öffnen des Vollbilds (s. centerModulesInView weiter unten) --
-  // ermöglicht es, sie beim Schliessen wiederherzustellen, s.
-  // setCanvasFullscreen.
-  let fullscreenPositionSnapshot = null;
-  let modulesMovedInFullscreen = false;
 
   /** Setzt die Vollbild-Höhe direkt per Inline-Style aus window.visualViewport
    *  statt sich auf --app-vh (aus window.innerHeight, s. main.js
@@ -646,13 +667,6 @@ export function renderModularRack(container, machine) {
 
   function setCanvasFullscreen(next) {
     isCanvasFullscreen = next;
-    if (next) {
-      // Vor dem automatischen Zentrieren unten sichern, was gerade in der
-      // kleinen eingebetteten Ansicht sichtbar war -- s. Kommentar bei
-      // restoreModulePositions().
-      fullscreenPositionSnapshot = new Map([...patch.modules.entries()].map(([id, m]) => [id, { x: m.x, y: m.y }]));
-      modulesMovedInFullscreen = false;
-    }
     canvasOuterEl.classList.toggle('is-fullscreen', next);
     // Aus dem verschachtelten .machine-focus__panel (overflow-y:auto,
     // eigenes Padding) heraus DIREKT an <body> umhängen, statt nur per
@@ -691,86 +705,34 @@ export function renderModularRack(container, machine) {
     } else {
       canvasOuterEl.style.height = '';
     }
-    updateCanvasSize();
     updateCables();
-    if (next) {
-      centerModulesInView();
-    } else if (fullscreenPositionSnapshot && !modulesMovedInFullscreen) {
-      restoreModulePositions(fullscreenPositionSnapshot);
-      fullscreenPositionSnapshot = null;
-    }
+    fitContentToView();
   }
   fullscreenBtn.addEventListener('click', () => setCanvasFullscreen(!isCanvasFullscreen));
 
-  /** Setzt Modul-Positionen exakt auf einen zuvor gesicherten Stand zurück
-   *  -- macht das automatische Zentrieren beim Öffnen des Vollbilds (s.
-   *  centerModulesInView) rückgängig, WENN der Nutzer während des Vollbilds
-   *  selbst nichts verschoben hat (sonst gingen dessen bewusste Änderungen
-   *  verloren, s. modulesMovedInFullscreen). Ohne das blieben Module beim
-   *  Zurückwechseln in die kleine eingebettete Ansicht an Positionen
-   *  hängen, die nur für den viel grösseren Vollbild-Bildschirm zentriert
-   *  waren -- dort dann ausserhalb des sichtbaren 320px-Fensters
-   *  (Nutzer-Feedback: "sieht man sie nun in der kleinen Ansicht nicht
-   *  mehr"). */
-  function restoreModulePositions(snapshot) {
-    for (const [id, pos] of snapshot) {
-      patch.moveModuleTo(id, pos.x, pos.y);
-      const box = jacksEl.querySelector(`.modrack__mod-box[data-module-id="${id}"]`);
-      if (box) { box.style.left = `${pos.x}px`; box.style.top = `${pos.y}px`; }
-    }
-    updateCanvasSize();
-    updateCables();
-  }
-
-  /** Rückt beim Öffnen des Vollbilds die Bounding-Box aller Module einmalig
-   *  in die Mitte des (jetzt viel grösseren) Sichtfensters -- als
-   *  einheitliche Verschiebung ALLER Module um denselben Betrag (relative
-   *  Anordnung zueinander UND alle Kabelverbindungen bleiben exakt
-   *  erhalten, s. ModularPatch#moveModuleTo/serialize), nicht als reiner
-   *  Scroll: die Steckfläche ist genau so gross wie ihr Inhalt + etwas
-   *  Rand (s. updateCanvasSize()) -- passt der Inhalt (wie meist bei
-   *  einem frischen/kleinen Patch) schon in den Vollbild-Rahmen, gibt es
-   *  gar keinen Scroll-Spielraum, in den man "hineinscrollen" könnte
-   *  (reine Scroll-Positionierung blieb deshalb wirkungslos bei einem
-   *  kürzeren Testlauf). Nur EINMAL beim Öffnen, nicht bei jedem Render --
-   *  ein Nutzer, der Module gerade bewusst an den Rand geschoben hat, soll
-   *  nicht bei jedem Wechsel wieder mittig zurückgesetzt werden (Chat:
-   *  "vielleicht per default die module in der mitte des vollbildcanvas
-   *  platzieren" -- explizit als Vorschlag fürs DEFAULT-Layout formuliert,
-   *  nicht als Dauerzustand). */
-  function centerModulesInView() {
-    const boxes = [...jacksEl.querySelectorAll('.modrack__mod-box')];
-    if (!boxes.length) return;
-    let left = Infinity, top = Infinity, right = 0, bottom = 0;
-    for (const box of boxes) {
-      const m = patch.modules.get(Number(box.dataset.moduleId));
-      if (!m) continue;
-      left = Math.min(left, m.x);
-      top = Math.min(top, m.y);
-      right = Math.max(right, m.x + box.offsetWidth);
-      bottom = Math.max(bottom, m.y + box.offsetHeight);
-    }
-    if (!Number.isFinite(left)) return;
+  /** Zentriert die ANSICHT (pan/zoom) auf die aktuelle Bounding-Box aller
+   *  Module -- rührt NIE an m.x/m.y (reine Kamera-Sache, s. Dateikopf-
+   *  Kommentar), anders als der vorige Ansatz, der die Module tatsächlich
+   *  verschoben hat (Git-Historie): der überschrieb die für die kleine
+   *  Ansicht sinnvolle Position dauerhaft, sobald man einmal im Vollbild
+   *  zentriert hatte (Nutzer-Feedback: "sieht man sie nun in der kleinen
+   *  Ansicht nicht mehr"). Weil hier nur pan/zoom geändert wird, ist das
+   *  jederzeit gefahrlos wiederholbar -- läuft deshalb bei JEDEM Wechsel
+   *  auf die Rückseite UND bei JEDEM Umschalten des Vollbilds (in beide
+   *  Richtungen, s. setFace()/setCanvasFullscreen()), nicht nur einmalig.
+   *  Ein Patch, der grösser als das Sichtfenster ist, wird dafür verkleinert
+   *  (fitZoom <= 1) statt nur die linke obere Ecke zu zeigen. */
+  function fitContentToView() {
+    const bounds = contentBounds();
+    if (!bounds) return;
     const wrapRect = jacksWrapEl.getBoundingClientRect();
-    const dx = (wrapRect.width / zoom - (right + left)) / 2;
-    const dy = (wrapRect.height / zoom - (bottom + top)) / 2;
-    // Nur verschieben, wenn's die Module tatsächlich weiter zur Mitte hin
-    // bewegt (dx/dy > 0 -- Inhalt ist kleiner als der sichtbare Bereich);
-    // bei einem Patch, der schon grösser als der Bildschirm ist, bliebe
-    // sonst alles unverändert am linken/oberen Rand hängen, exakt wie
-    // zuvor -- kein negatives "Reinquetschen" nötig oder gewünscht.
-    if (dx <= 0 && dy <= 0) return;
-    for (const box of boxes) {
-      const m = patch.modules.get(Number(box.dataset.moduleId));
-      if (!m) continue;
-      const nx = Math.max(0, m.x + Math.max(0, dx));
-      const ny = Math.max(0, m.y + Math.max(0, dy));
-      box.style.left = `${nx}px`;
-      box.style.top = `${ny}px`;
-      patch.moveModuleTo(Number(box.dataset.moduleId), nx, ny);
-    }
-    updateCanvasSize();
-    updateCables();
+    const contentW = Math.max(1, bounds.right - bounds.left);
+    const contentH = Math.max(1, bounds.bottom - bounds.top);
+    const fitZoom = Math.min(1, wrapRect.width / contentW, wrapRect.height / contentH);
+    zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fitZoom));
+    panX = (wrapRect.width - contentW * zoom) / 2 - bounds.left * zoom;
+    panY = (wrapRect.height - contentH * zoom) / 2 - bounds.top * zoom;
+    applyTransform();
   }
 
   /* ---------- Hinzufügen / Halten-Menü ---------- */

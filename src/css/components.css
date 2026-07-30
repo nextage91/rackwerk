@@ -1383,11 +1383,17 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 
 /* Rückseite: frei verschiebbare Steckfläche (wie Caustics Modular, s.
    ui/modular-view.js Dateikopf-Kommentar) -- Kacheln liegen absolut
-   positioniert (Modul-x/y) auf .modrack__canvas, das seinerseits in
-   .modrack__canvas-wrap in BEIDEN Achsen nativ scrollt/pan't (kein
-   eigener Pan-Code nötig). Eine Kachel-Kopfzeile ziehen verschiebt nur
-   diese Kachel (touch-action:none dort, s. .modrack__mod-box-head);
-   überall sonst auf der Fläche bleibt natives Scrollen aktiv. */
+   positioniert (Modul-x/y) auf .modrack__boxes, das per JS einen einzigen
+   `transform: translate(panX,panY) scale(zoom)` bekommt (Pan+Zoom, s.
+   ui/modular-view.js#applyTransform). BEWUSST kein natives Scrollen mehr
+   (frühere Fassung) -- eigens gebaute Pointer-Event-Gesten wie bei jedem
+   modernen unendlichen Canvas (Figma, tldraw, panzoom-Bibliothek), weil
+   natives Scrollen sich auf iOS Safari nicht zuverlässig per JS
+   WÄHREND einer laufenden Touch-Geste umsetzen lässt (dokumentiertes
+   WebKit-Verhalten, s. Dateikopf-Kommentar der JS-Datei). Eine Kachel-
+   Kopfzeile ziehen verschiebt nur diese Kachel (touch-action:none dort,
+   s. .modrack__mod-box-head); überall sonst auf der Fläche pan't man die
+   ganze Steckfläche. */
 /* Äusserer Rahmen -- trägt den Vollbild-Knopf UND die Steckfläche als
    GEMEINSAME Einheit. Wichtig: der Vollbild-Zustand (position:fixed)
    sitzt HIER am äusseren Rahmen, nicht an .modrack__canvas-wrap selbst --
@@ -1416,25 +1422,21 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 .modrack__canvas-wrap {
   position: relative;
   height: 320px;
-  overflow: auto;
-  -webkit-overflow-scrolling: touch;
+  /* Kein natives Scrollen mehr (overflow:hidden statt auto) -- Pan+Zoom
+     laufen komplett selbst gebaut über Pointer Events (s. Dateikopf-
+     Kommentar/ui/modular-view.js), overflow:hidden clippt nur noch Inhalt,
+     der ausserhalb des Sichtfensters liegt. touch-action:none unterbindet
+     JEDE native Touch-Geste hier (Scrollen UND Safaris eigenes Pinch-Zoom)
+     -- ohne das kämpften früher zwei Zoom-Mechanismen um dieselbe
+     Zwei-Finger-Geste gleichzeitig (die viewport-Meta `user-scalable=no`
+     verhindert Safaris eigenes Pinch-Zoom bekanntermassen NICHT
+     zuverlässig), was sich "ungewohnt sensibel"/"fummelig" anfühlte
+     (Nutzer-Feedback). */
+  overflow: hidden;
+  touch-action: none;
   border: 1px solid var(--ink-faint);
   border-radius: 8px;
   background: var(--bg-panel);
-  /* pan-x/pan-y statt des Defaults "auto": erlaubt weiterhin natives
-     Zwei-Achsen-Scrollen per Finger, unterbindet aber Safaris eigene
-     Pinch-zu-Zoom-Geste auf diesem Element. Ohne das kämpfen zwei Zoom-
-     Mechanismen um dieselbe Zwei-Finger-Geste -- Safaris systemweiter
-     Seiten-Zoom UND der eigene Pinch-Handler unten (der die Kachel-Ebene
-     per transform:scale() skaliert) -- gleichzeitig (die viewport-Meta
-     `user-scalable=no` verhindert das auf iOS Safari bekanntermassen
-     NICHT zuverlässig). Nutzer-Feedback: Zoom fühlte sich "ungewohnt
-     sensibel"/"fummelig" an, und Module liessen sich nicht mehr per
-     Scrollen erreichen -- beides erklärt sich durch den nebenbei
-     mitlaufenden System-Zoom, der die tatsächliche Bildschirm-Skalierung
-     gegenüber dem verschiebt, was updateCanvasSize()/updateCables() aus
-     getBoundingClientRect() lesen. */
-  touch-action: pan-x pan-y;
 }
 /* Vollbild: löst den GESAMTEN äusseren Rahmen (Knopf + Steckfläche) aus dem
    Maschinen-Editor (.machine-focus, z-index 55) und deckt den kompletten
@@ -1495,9 +1497,9 @@ body.modular-canvas-fullscreen #bottombar {
   display: none;
 }
 .modrack__canvas {
-  /* width/height werden von ui/modular-view.js#updateCanvasSize() inline
-     gesetzt, gross genug für alle Kacheln + Rand -- Positionierungs-
-     Kontext sowohl für das Kabel-SVG als auch für jede Kachel. */
+  /* Reiner Positionierungs-Rahmen für .modrack__boxes -- braucht selbst
+     keine explizite Grösse mehr (kein Scrollbereich zu bemessen, s.
+     Dateikopf-Kommentar der JS-Datei). */
   position: relative;
 }
 .modrack__boxes {
@@ -1510,13 +1512,23 @@ body.modular-canvas-fullscreen #bottombar {
      der die vorige Buchsenleiste kurzzeitig komplett unbedienbar
      gemacht hat). */
   position: relative;
-  /* Pinch-Zoom (s. ui/modular-view.js#applyZoom) skaliert GENAU diese
-     Ebene per transform -- transform-origin 0/0 hält die linke obere Ecke
-     fest, damit Modul-x/y weiterhin direkt (nur mit dem Zoomfaktor
-     multipliziert) der Bildschirmposition entspricht. */
+  /* Pan+Zoom (s. ui/modular-view.js#applyTransform) sitzen GENAU hier als
+     EIN gemeinsamer translate+scale-Transform -- transform-origin 0/0
+     hält die linke obere Ecke als Bezugspunkt fest, damit Modul-x/y
+     weiterhin direkt (nur mit dem Zoomfaktor multipliziert, plus die
+     panX/panY-Verschiebung) der Bildschirmposition entspricht. Das
+     Kabel-SVG (.modrack__cables) hängt bewusst NICHT hier drunter,
+     sondern als Geschwister im Wrap -- sonst würde es denselben
+     Transform erben und doppelt skaliert werden, s. Dateikopf-Kommentar
+     der JS-Datei. */
   transform-origin: 0 0;
 }
 .modrack__cables {
+  /* Bewusst ein Geschwister von .modrack__canvas (nicht dessen Kind) --
+     bekommt NIE den Pan/Zoom-Transform der Kachel-Ebene, bleibt also ein
+     unverändertes, wrap-grosses Overlay; updateCables() zeichnet die
+     Pfade direkt aus den echten (bereits transformierten) Bildschirm-
+     Positionen der Ports, s. Dateikopf-Kommentar der JS-Datei. */
   position: absolute;
   top: 0; left: 0;
   pointer-events: none;
