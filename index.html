@@ -21953,6 +21953,29 @@ function renderModularRack(container, machine) {
    *  plötzlich kein Scrollen mehr, und jedes Kabel muss auf die neuen
    *  Jack-Positionen umgezeichnet werden. */
   let isCanvasFullscreen = false;
+
+  /** Setzt die Vollbild-Höhe direkt per Inline-Style aus window.visualViewport
+   *  statt sich auf --app-vh (aus window.innerHeight, s. main.js
+   *  #syncViewportHeight) oder 100dvh zu verlassen -- beide blieben auf
+   *  iOS Safari weiterhin zu klein (Nutzer-Feedback: "ist leider noch
+   *  nicht vollbild", trotz des --app-vh-Fixes). Vermuteter Grund:
+   *  --app-vh wird nur bei 'resize'/'orientationchange' aktualisiert, aber
+   *  Safaris einklappende Adressleiste (typischerweise beim Scrollen --
+   *  genau das, was man in der Patch-Bay ständig tut) ändert
+   *  window.innerHeight OHNE zuverlässig ein 'resize'-Event auf window
+   *  auszulösen, während sichtbar bleibt. window.visualViewport ist die
+   *  extra dafür gedachte API (u. a. fürs Tastatur-Einblenden entworfen)
+   *  und feuert IHR EIGENES 'resize', wenn sich die tatsächlich sichtbare
+   *  Fläche ändert -- hier deshalb direkt und live nachgeführt, statt nur
+   *  einmalig beim Öffnen gemessen. */
+  function syncFullscreenCanvasHeight() {
+    if (!isCanvasFullscreen) return;
+    const vv = window.visualViewport;
+    canvasOuterEl.style.height = `${vv ? vv.height : window.innerHeight}px`;
+  }
+  window.visualViewport?.addEventListener('resize', syncFullscreenCanvasHeight);
+  window.addEventListener('resize', syncFullscreenCanvasHeight);
+
   function setCanvasFullscreen(next) {
     isCanvasFullscreen = next;
     canvasOuterEl.classList.toggle('is-fullscreen', next);
@@ -21967,6 +21990,11 @@ function renderModularRack(container, machine) {
     document.body.classList.toggle('modular-canvas-fullscreen', next);
     fullscreenBtn.textContent = next ? '✕' : '⛶';
     fullscreenBtn.setAttribute('aria-label', next ? 'Exit fullscreen patch bay' : 'Toggle fullscreen patch bay');
+    if (next) {
+      syncFullscreenCanvasHeight();
+    } else {
+      canvasOuterEl.style.height = '';
+    }
     updateCanvasSize();
     updateCables();
     if (next) centerModulesInView();
