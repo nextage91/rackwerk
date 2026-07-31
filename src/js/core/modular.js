@@ -59,22 +59,56 @@ function microDelay(ctx) {
  *  tatsächlich abgreifen (s. Dateikopf-Kommentar). Bei kleinen (CV-
  *  typischen) Pegeln ist der Begrenzer praktisch identisch zur Identität
  *  (tanh(x)≈x nahe 0), also auch für Steuerspannungs-Ausgänge unauffällig --
- *  deshalb pauschal auf ALLE Ausgänge angewendet statt nur auf Audio-Ports. */
-function safeOutput(ctx, rawNode) {
+ *  deshalb pauschal auf ALLE Ausgänge angewendet statt nur auf Audio-Ports.
+ *
+ *  `scale` (Default 1, für alle Module ausser util unverändert): der
+ *  WaveShaper bildet seine curve IMMER über den FESTEN Eingabebereich
+ *  -1..1 ab -- jeder Wert ausserhalb wird laut Spezifikation auf den
+ *  jeweiligen Rand-Wert der Kurve GEKAPPT, unabhängig davon, wie die Kurve
+ *  selbst aussieht (per Reproduktion gefunden: util#build mit stark
+ *  vergrössertem amount-Bereich, s. dort, erzeugte trotzdem nie mehr als
+ *  ±0.76 am Ausgang -- der Begrenzer klemmte lange VOR jeder hörbaren
+ *  Filter-Cutoff-Modulation). scale skaliert das Signal vor der Kurve
+ *  herunter und danach wieder hoch (derselbe tanh-Verlauf, nur auf einen
+ *  vielfachen Wertebereich gestreckt) -- bei util reicht das bis weit über
+ *  den eigentlich nutzbaren Amount/Offset-Bereich hinaus transparent,
+ *  schützt aber weiterhin vor einem unbegrenzten Aufschaukeln, falls
+ *  jemand utils eigenen Ausgang in seinen eigenen Eingang zurückpatcht. */
+function safeOutput(ctx, rawNode, scale = 1) {
   const delay = microDelay(ctx);
+  rawNode.connect(delay);
+  const chain = [delay];
+  let node = delay;
+  if (scale !== 1) {
+    const pre = ctx.createGain();
+    pre.gain.value = 1 / scale;
+    node.connect(pre);
+    node = pre;
+    chain.push(pre);
+  }
   const shaper = ctx.createWaveShaper();
   shaper.curve = clipCurve();
-  rawNode.connect(delay);
-  delay.connect(shaper);
-  shaper.__preDelay = delay; // s. disposeOutput()
-  return shaper;
+  node.connect(shaper);
+  node = shaper;
+  chain.push(shaper);
+  if (scale !== 1) {
+    const post = ctx.createGain();
+    post.gain.value = scale;
+    node.connect(post);
+    node = post;
+    chain.push(post);
+  }
+  node.__disposeChain = chain; // s. disposeOutput()
+  return node;
 }
 
-/** Gegenstück zu safeOutput() -- trennt Weichbegrenzer UND den vorgeschalteten
- *  Mini-Delay wieder ab. Jedes Modul ruft das statt eines blossen
- *  `output.disconnect()` in seinem eigenen dispose() auf. */
+/** Gegenstück zu safeOutput() -- trennt die GESAMTE interne Kette (Mini-
+ *  Delay, evtl. Vor-/Nachverstärkung bei scale!==1, Weichbegrenzer) wieder
+ *  ab, nicht nur den zurückgegebenen letzten Knoten. Jedes Modul ruft das
+ *  statt eines blossen `output.disconnect()` in seinem eigenen dispose()
+ *  auf. */
 function disposeOutput(output) {
-  output.__preDelay?.disconnect();
+  for (const node of output.__disposeChain ?? []) node.disconnect();
   output.disconnect();
 }
 
@@ -479,7 +513,26 @@ const MODULE_DEFS = {
    *  Offset eines CV-/Audiosignals, das kleine "Schweizer Taschenmesser"-
    *  Werkzeug jedes Modularsystems (z. B. Doepfer A-183-1). Fehlte bisher
    *  komplett: keines der anderen Module kann ein Signal umkehren oder
-   *  einen konstanten Versatz draufaddieren. */
+   *  einen konstanten Versatz draufaddieren.
+   *
+   *  Amount/Offset gehen bis ±3000 (nicht nur ±1, wie ein reiner
+   *  Abschwächer/Invertierer bräuchte) -- Cutoff- und alle anderen CV-Ziele
+   *  im Modular sind additiv gebaut (Reglerwert + Kabel, s. Kommentar bei
+   *  filter#build): Envelope/LFO liefern aber nur 0..1 bzw. ±1, was auf
+   *  einen Cutoff im Hundert-/Tausender-Hz-Bereich addiert schlicht nicht
+   *  hörbar ist. Dieses Modul ist deshalb zugleich der einzige Weg, ein
+   *  CV-Signal erst auf eine für sein Ziel sinnvolle Grössenordnung hoch-
+   *  zuskalieren (Envelope -> Utility (Amount hoch) -> Filter Cutoff),
+   *  bevor es dort ankommt -- genau der Weg, den ein echtes Modularsystem
+   *  dafür vorsieht (Nutzer-Feedback: Envelope modulierte den Cutoff
+   *  technisch, aber unhörbar wenig).
+   *
+   *  UTIL_OUTPUT_SCALE (s. safeOutput()): amount+offset können sich im
+   *  ungünstigsten Fall auf bis zu ±6000 aufaddieren -- ohne die skalierte
+   *  Variante würde der geteilte Weichbegrenzer (fest auf ±1 Eingabebereich
+   *  ausgelegt, s. safeOutput()-Kommentar) ALLES darüber auf ~±0.76 kappen
+   *  und die grosszügigeren Wertebereiche oben komplett wirkungslos
+   *  machen. */
   util: {
     name: 'Utility',
     defaults: { amount: 1, offset: 0 },
@@ -492,13 +545,20 @@ const MODULE_DEFS = {
       const sum = ctx.createGain();
       scale.connect(sum);
       offsetSrc.connect(sum);
-      const output = safeOutput(ctx, sum);
+      const UTIL_OUTPUT_SCALE = 6000;
+      const output = safeOutput(ctx, sum, UTIL_OUTPUT_SCALE);
       return {
         inputs: { in: scale },
         outputs: { audio: output },
         setParam(key, v) {
-          if (key === 'amount') { p.amount = v; scale.gain.value = v; }
-          else if (key === 'offset') { p.offset = v; offsetSrc.offset.value = v; }
+          // setTargetAtTime statt direktem .value= -- derselbe Grund wie
+          // beim Filter-Cutoff (s. dort): eine Regler-Zieh-Geste feuert
+          // viele 'input'-Events, ein harter Sprung wäre bei den jetzt
+          // deutlich grösseren Wertebereichen (bis ±5000, s. Kommentar
+          // oben) hörbar als Klick/Knacksen, sobald ein Audiosignal (statt
+          // langsamer CV) durch dieses Modul läuft.
+          if (key === 'amount') { p.amount = v; scale.gain.setTargetAtTime(v, engine.now, 0.01); }
+          else if (key === 'offset') { p.offset = v; offsetSrc.offset.setTargetAtTime(v, engine.now, 0.01); }
         },
         dispose() { scale.disconnect(); offsetSrc.stop(); offsetSrc.disconnect(); sum.disconnect(); disposeOutput(output); },
       };
@@ -623,8 +683,8 @@ export const MODULE_UI_PARAMS = {
   samplehold: [],
   slew: [{ key: 'time', label: 'Time', min: 0.001, max: 2, curve: 'log', unit: 's' }],
   util: [
-    { key: 'amount', label: 'Amount', min: -1, max: 1, unit: '' },
-    { key: 'offset', label: 'Offset', min: -1, max: 1, unit: '' },
+    { key: 'amount', label: 'Amount', min: -3000, max: 3000, unit: '' },
+    { key: 'offset', label: 'Offset', min: -3000, max: 3000, unit: '' },
   ],
   delay: [
     { key: 'time', label: 'Time', min: 0.02, max: 1.5, curve: 'log', unit: 's' },
