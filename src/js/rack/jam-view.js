@@ -29,8 +29,11 @@
  *   gerade aktiven Clip als benannten Schnappschuss; ein Launch triggert
  *   exakt diese Clips neu UND stoppt jede Maschine, die beim Speichern
  *   KEINEN aktiven Clip hatte — "einen ganzen Song-Abschnitt mit einem Tap
- *   wechseln", das Ableton-Scene-Äquivalent. Rein Jam-Performance-Zustand
- *   wie activeClipId/stopped (s. unten) — nicht im Projekt gespeichert.
+ *   wechseln", das Ableton-Scene-Äquivalent. Anders als activeClipId/
+ *   stopped (reiner Live-Zustand, s. unten) werden Scenes über
+ *   serializeScenes()/deserializeScenes() im Projekt gespeichert — per
+ *   Maschinen-INDEX statt -ID referenziert, weil Maschinen-IDs (und
+ *   Clip-IDs) beim Laden neu vergeben werden (s. project.js).
  * - Reglerwerte (Fader/Pan/Sends/Makro-Knobs) laufen über dieselben
  *   Setter/Custom-Elemente wie überall sonst in der App (x-knob/x-fader,
  *   setLevel/setSend/…) — keine Parallel-Implementierung.
@@ -1291,15 +1294,14 @@ function openMacroPopup(machine, anchorEl) {
 }
 
 /* ---------- Scenes (Ableton-Style Song-Abschnitt launchen) ----------
- * Rein Jam-Performance-Zustand wie activeClipId/stopped oben -- lebt nur
- * für die Dauer der Session (nicht im Projekt gespeichert), ein Neuladen
- * setzt die Liste zurück wie jeden anderen Jam-Zustand auch. `entries`
- * merkt sich pro Maschinen-ID (nicht Objekt-Referenz -- Scenes müssen
- * einfache, GC-unabhängige Daten bleiben) den Clip, der beim Speichern
- * aktiv war. Verweist eine Scene auf eine inzwischen entfernte Maschine
- * oder einen gelöschten Clip, läuft launchScene() einfach am betroffenen
- * Eintrag vorbei (dieselbe "stale Referenz = No-Op"-Toleranz wie beim
- * X/Y-Pad-Mapping, s. dort) -- kein Aufräumen nötig. */
+ * Wird im Projekt gespeichert (s. serializeScenes()/deserializeScenes()
+ * unten), genau wie Clips/Modulatoren/Inserts. `entries` merkt sich pro
+ * Maschinen-ID (nicht Objekt-Referenz -- Scenes müssen einfache,
+ * GC-unabhängige Daten bleiben) den Clip, der beim Speichern aktiv war.
+ * Verweist eine Scene auf eine inzwischen entfernte Maschine oder einen
+ * gelöschten Clip, läuft launchScene() einfach am betroffenen Eintrag
+ * vorbei (dieselbe "stale Referenz = No-Op"-Toleranz wie beim X/Y-Pad-
+ * Mapping, s. dort) -- kein Aufräumen nötig. */
 let scenes = [];
 let nextSceneId = 1;
 let scenesEl = null;
@@ -1337,6 +1339,46 @@ function deleteScene(id) {
   const idx = scenes.findIndex((s) => s.id === id);
   if (idx === -1) return;
   scenes.splice(idx, 1);
+  renderScenes();
+}
+
+/** Für project.js -- Scenes projektfähig machen. `entries` referenziert
+ *  live per Maschinen-/Clip-ID, aber BEIDE werden beim Laden neu vergeben
+ *  (s. project.js#loadProject, machine.js#deserializeClips) -- deshalb hier
+ *  auf Maschinen-Index im Rack und Clip-Index in dessen `clips`-Array
+ *  umgerechnet, die einzigen über einen Speichern/Laden-Zyklus stabilen
+ *  Referenzen. Ein Eintrag, dessen Maschine oder Clip nicht mehr existiert,
+ *  fällt beim Umrechnen einfach weg (dieselbe Toleranz wie launchScene()). */
+export function serializeScenes(rack) {
+  return scenes.map((s) => {
+    const entries = [];
+    for (const [machineId, clipId] of Object.entries(s.entries)) {
+      const mIdx = rack.machines.findIndex((m) => m.id === Number(machineId));
+      if (mIdx === -1) continue;
+      const cIdx = rack.machines[mIdx].clips.findIndex((c) => c.id === clipId);
+      if (cIdx === -1) continue;
+      entries.push([mIdx, cIdx]);
+    }
+    return { name: s.name, entries };
+  });
+}
+
+/** Kehrt serializeScenes() um. Muss in project.js NACH dem Laden aller
+ *  Maschinen laufen (deren Clips zu dem Zeitpunkt schon ihre frischen IDs
+ *  für DIESE Session tragen), damit rack.machines[mIdx]/.clips[cIdx] auf
+ *  das richtige Ziel zeigen. Ein leeres/fehlendes `list` setzt die
+ *  Szenenliste einfach zurück (newProject() oder ein altes Projekt ohne
+ *  gespeicherte Scenes). */
+export function deserializeScenes(rack, list) {
+  scenes = (list ?? []).map((s) => {
+    const entries = {};
+    for (const [mIdx, cIdx] of s.entries ?? []) {
+      const m = rack.machines[mIdx];
+      const clip = m?.clips[cIdx];
+      if (clip) entries[m.id] = clip.id;
+    }
+    return { id: nextSceneId++, name: s.name, entries };
+  });
   renderScenes();
 }
 
