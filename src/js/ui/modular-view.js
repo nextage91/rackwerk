@@ -99,6 +99,7 @@ export function renderModularRack(container, machine) {
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
     <div class="modrack__canvas-outer" data-canvas-outer hidden>
       <button type="button" class="m-btn modrack__canvas-fullscreen" data-fullscreen aria-label="Toggle fullscreen patch bay">⛶</button>
+      <button type="button" class="m-btn modrack__canvas-add" data-add-module-back aria-label="Add module">+</button>
       <div class="modrack__canvas-wrap" data-jackswrap>
         <svg class="modrack__cables" data-cables></svg>
         <div class="modrack__canvas" data-canvas>
@@ -118,6 +119,7 @@ export function renderModularRack(container, machine) {
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
   const fullscreenBtn = root.querySelector('[data-fullscreen]');
+  const addBackBtn = root.querySelector('[data-add-module-back]');
 
   /* ---------- Vorderseite: Regler-Liste ---------- */
 
@@ -775,6 +777,23 @@ export function renderModularRack(container, machine) {
     openModulePicker((type) => {
       patch.addModule(type);
       refreshAll();
+    });
+  });
+
+  // Dieselbe Sheet-Instanz, aber vom Vollbild/eingebetteten Steckfläche
+  // aus erreichbar -- bisher gab es "+ Add Module" nur auf der Vorderseite
+  // (Regler-Liste), man musste dafür immer erst zurückklappen (Chat: "auch
+  // im fullscreen [...] module hinzufügen können"). fitContentToView() NUR
+  // hier zusätzlich, nicht bei jedem refreshAll() -- ein frisch
+  // hinzugefügtes Modul landet per autoPosition() an der nächsten freien
+  // Stelle, die bei einem grösseren/verschobenen Patch ausserhalb des
+  // aktuellen Bildausschnitts liegen kann; rührt (wie jeder Aufruf von
+  // fitContentToView()) nie an Modul-x/y, ist also gefahrlos.
+  addBackBtn.addEventListener('click', () => {
+    openModulePicker((type) => {
+      patch.addModule(type);
+      refreshAll();
+      fitContentToView();
     });
   });
 

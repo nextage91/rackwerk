@@ -3264,6 +3264,19 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   font-size: 14px;
   line-height: 1;
 }
+/* Gegenüberliegende Ecke des Vollbild-Knopfs -- Module auch von der
+   Steckfläche selbst aus hinzufügen können (Chat: "auch im fullscreen
+   [...] module hinzufügen können"), statt zwingend erst auf die
+   Reglerliste zurückklappen zu müssen. */
+.modrack__canvas-add {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+}
 .modrack__canvas-wrap {
   position: relative;
   height: 320px;
@@ -3328,6 +3341,14 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   top: auto;
   bottom: 16px;
   right: 16px;
+  z-index: 3;
+}
+/* Gleicher Grund wie beim Vollbild-Knopf oben (Daumen-Reichweite, weg von
+   der System-Statusleiste) -- gegenüberliegende untere Ecke. */
+.modrack__canvas-outer.is-fullscreen .modrack__canvas-add {
+  top: auto;
+  bottom: 16px;
+  left: 16px;
   z-index: 3;
 }
 /* Transport-Leiste (oben) und Bottom-Bar (unten) bleiben sonst IMMER
@@ -21488,6 +21509,7 @@ function renderModularRack(container, machine) {
     <button type="button" class="rack__add modrack__add" data-add-module>+ Add Module</button>
     <div class="modrack__canvas-outer" data-canvas-outer hidden>
       <button type="button" class="m-btn modrack__canvas-fullscreen" data-fullscreen aria-label="Toggle fullscreen patch bay">⛶</button>
+      <button type="button" class="m-btn modrack__canvas-add" data-add-module-back aria-label="Add module">+</button>
       <div class="modrack__canvas-wrap" data-jackswrap>
         <svg class="modrack__cables" data-cables></svg>
         <div class="modrack__canvas" data-canvas>
@@ -21507,6 +21529,7 @@ function renderModularRack(container, machine) {
   const svgEl = root.querySelector('[data-cables]');
   const flipBtn = root.querySelector('[data-flip]');
   const fullscreenBtn = root.querySelector('[data-fullscreen]');
+  const addBackBtn = root.querySelector('[data-add-module-back]');
 
   /* ---------- Vorderseite: Regler-Liste ---------- */
 
@@ -22164,6 +22187,23 @@ function renderModularRack(container, machine) {
     openModulePicker((type) => {
       patch.addModule(type);
       refreshAll();
+    });
+  });
+
+  // Dieselbe Sheet-Instanz, aber vom Vollbild/eingebetteten Steckfläche
+  // aus erreichbar -- bisher gab es "+ Add Module" nur auf der Vorderseite
+  // (Regler-Liste), man musste dafür immer erst zurückklappen (Chat: "auch
+  // im fullscreen [...] module hinzufügen können"). fitContentToView() NUR
+  // hier zusätzlich, nicht bei jedem refreshAll() -- ein frisch
+  // hinzugefügtes Modul landet per autoPosition() an der nächsten freien
+  // Stelle, die bei einem grösseren/verschobenen Patch ausserhalb des
+  // aktuellen Bildausschnitts liegen kann; rührt (wie jeder Aufruf von
+  // fitContentToView()) nie an Modul-x/y, ist also gefahrlos.
+  addBackBtn.addEventListener('click', () => {
+    openModulePicker((type) => {
+      patch.addModule(type);
+      refreshAll();
+      fitContentToView();
     });
   });
 
