@@ -148,7 +148,7 @@ export function renderModularRack(container, machine) {
     return `
       <div class="modrack__row" data-module-id="${id}">
         <div class="modrack__row-head">
-          <span class="modrack__row-name">${moduleMeta(m.type).name}</span>
+          <span class="modrack__row-name">${patch.displayName(id)}</span>
           <span class="modrack__row-move">
             <button type="button" class="m-btn rack-row__move-btn" data-move="-1" aria-label="Move up" ${index === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="m-btn rack-row__move-btn" data-move="1" aria-label="Move down" ${index === count - 1 ? 'disabled' : ''}>▼</button>
@@ -215,7 +215,7 @@ export function renderModularRack(container, machine) {
     const ports = MODULE_PORTS[m.type];
     return `
       <div class="modrack__mod-box" data-module-id="${id}" style="left:${m.x}px; top:${m.y}px;">
-        <div class="modrack__mod-box-head">${moduleMeta(m.type).name}</div>
+        <div class="modrack__mod-box-head">${patch.displayName(id)}</div>
         <div class="modrack__mod-box-ports">
           <div class="modrack__mod-box-ports--in">
             ${ports.inputs.map((p) => inPortHtml(id, p)).join('')}
@@ -915,6 +915,15 @@ function openModuleMenu(patch, moduleId, anchorEl, onChange) {
   });
   moduleMenuEl.appendChild(dupBtn);
 
+  const renameBtn = document.createElement('button');
+  renameBtn.className = 'pat-chip__btn';
+  renameBtn.textContent = '✏️ Rename';
+  renameBtn.addEventListener('click', () => {
+    dismissModuleMenu();
+    openModuleRenamePopup(patch, moduleId, anchorEl, onChange);
+  });
+  moduleMenuEl.appendChild(renameBtn);
+
   // Der Output-Baustein ist der feste Endpunkt jedes Patches (s.
   // machines/modular.js#connectOutputs) -- der LETZTE darf nicht entfernbar
   // sein, sonst verstummt die Maschine ohne jeden sichtbaren Grund.
@@ -938,4 +947,65 @@ function openModuleMenu(patch, moduleId, anchorEl, onChange) {
   moduleMenuEl.style.left = `${left}px`;
   moduleMenuEl.style.top = `${Math.max(8, r.top - moduleMenuEl.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideModuleMenu, true), 0);
+}
+
+/* ---------- Modul umbenennen -- dasselbe Popup-Muster wie
+   machines/machine.js#openRenamePopup (dort an machine.label/setLabel
+   gebunden, hier eigenständig an ModularPatch#renameModule/autoName), s.
+   .rename-pop-CSS (rein visuell, ohne JS-Kopplung an Maschinen). ---------- */
+
+let moduleRenamePop = null;
+const dismissModuleRenamePop = (commit, patch, moduleId, onChange) => {
+  if (!moduleRenamePop) return;
+  if (commit) {
+    patch.renameModule(moduleId, moduleRenamePop._input.value);
+    onChange();
+  }
+  moduleRenamePop.remove();
+  moduleRenamePop = null;
+  document.removeEventListener('pointerdown', onOutsideModuleRenamePop, true);
+};
+let onOutsideModuleRenamePop = null;
+
+function openModuleRenamePopup(patch, moduleId, anchorEl, onChange) {
+  const m = patch.modules.get(moduleId);
+  if (!m) return;
+  if (moduleRenamePop) dismissModuleRenamePop(true, moduleRenamePop._patch, moduleRenamePop._moduleId, moduleRenamePop._onChange);
+
+  moduleRenamePop = document.createElement('div');
+  moduleRenamePop.className = 'rename-pop';
+  moduleRenamePop._patch = patch;
+  moduleRenamePop._moduleId = moduleId;
+  moduleRenamePop._onChange = onChange;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-pop__input';
+  input.maxLength = 30;
+  input.placeholder = patch.autoName(moduleId);
+  input.value = m.label ?? '';
+  moduleRenamePop._input = input;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); dismissModuleRenamePop(true, patch, moduleId, onChange); }
+    else if (e.key === 'Escape') { e.preventDefault(); dismissModuleRenamePop(false, patch, moduleId, onChange); }
+  });
+  moduleRenamePop.appendChild(input);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'rename-pop__reset';
+  resetBtn.textContent = '↺';
+  resetBtn.setAttribute('aria-label', 'Reset to automatic name');
+  resetBtn.addEventListener('click', () => { input.value = ''; dismissModuleRenamePop(true, patch, moduleId, onChange); });
+  moduleRenamePop.appendChild(resetBtn);
+
+  document.body.appendChild(moduleRenamePop);
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - moduleRenamePop.offsetWidth - 8, r.left));
+  moduleRenamePop.style.left = `${left}px`;
+  moduleRenamePop.style.top = `${Math.max(8, r.top - moduleRenamePop.offsetHeight - 8)}px`;
+  input.focus();
+  input.select();
+  onOutsideModuleRenamePop = (e) => { if (moduleRenamePop && !moduleRenamePop.contains(e.target)) dismissModuleRenamePop(true, patch, moduleId, onChange); };
+  setTimeout(() => document.addEventListener('pointerdown', onOutsideModuleRenamePop, true), 0);
 }
