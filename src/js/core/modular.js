@@ -115,7 +115,7 @@ function disposeOutput(output) {
 const MODULE_DEFS = {
   oscillator: {
     name: 'Oscillator',
-    defaults: { wave: 'sawtooth', coarse: 0 },
+    defaults: { wave: 'sawtooth', coarse: 0, fine: 0 },
     build(ctx, p) {
       const osc = ctx.createOscillator();
       osc.type = p.wave;
@@ -149,6 +149,14 @@ const MODULE_DEFS = {
         setParam(key, v) {
           if (key === 'wave') osc.type = v;
           else if (key === 'coarse') p.coarse = v;
+          // Fine (Cent) sitzt auf DERSELBEN AudioParam (osc.detune) wie der
+          // patchbare "fine"-CV-Eingang oben -- Regler-Wert und ein evtl.
+          // gepatchtes Signal (Vibrato-LFO, …) addieren sich automatisch,
+          // dieselbe Konvention wie überall sonst im Modular (s. Dateikopf-
+          // Kommentar). setTargetAtTime statt direktem .value= aus demselben
+          // Grund wie beim Filter-Cutoff: eine Regler-Zieh-Geste feuert viele
+          // 'input'-Events, ein harter Sprung wäre als Knacksen hörbar.
+          else if (key === 'fine') { p.fine = v; osc.detune.setTargetAtTime(v, engine.now, 0.01); }
         },
         dispose() { osc.stop(); osc.disconnect(); disposeOutput(output); },
       };
@@ -658,7 +666,10 @@ export const MODULE_PORTS = {
  *  Form, Filtertyp) laufen über eigene Segment-Buttons, s.
  *  OSCILLATOR_WAVES/LFO_WAVES/FILTER_TYPES statt hier. */
 export const MODULE_UI_PARAMS = {
-  oscillator: [{ key: 'coarse', label: 'Coarse', min: -24, max: 24, step: 1, unit: 'st' }],
+  oscillator: [
+    { key: 'coarse', label: 'Coarse', min: -24, max: 24, step: 1, unit: 'st' },
+    { key: 'fine', label: 'Fine', min: -100, max: 100, unit: 'ct' },
+  ],
   noise: [],
   mixer: [
     { key: 'level1', label: 'In 1', min: 0, max: 1, unit: '' },
@@ -737,13 +748,51 @@ function autoPosition(existing) {
 
 export class ModularPatch {
   constructor() {
-    /** @type {Map<number, {type:string, params:object, instance:object, x:number, y:number}>} */
+    /** @type {Map<number, {type:string, params:object, instance:object, x:number, y:number, label:?string}>} */
     this.modules = new Map();
     /** @type {Array<{id:number, fromId:number, fromPort:string, toId:number, toPort:string}>} */
     this.cables = [];
   }
 
-  /** @param {{id?:number, params?:object, x?:number, y?:number}} [saved] */
+  /** Reiner Rechenname "Typname N" -- N ist die Position dieses Moduls
+   *  unter ALLEN Modulen DESSELBEN Typs (1-indiziert, Map-Reihenfolge,
+   *  dieselbe, die auch die Vorderseiten-Liste bestimmt). IGNORIERT eine
+   *  evtl. gesetzte eigene Beschriftung, anders als displayName() --
+   *  gebraucht als Reset-Vorschau im Umbenennen-Popup (s.
+   *  ui/modular-view.js) und als Basis für displayName() selbst. Läuft
+   *  immer mit (auch bei genau einem Modul dieses Typs), statt erst ab
+   *  einer zweiten Instanz einzublenden: sonst würde das Hinzufügen eines
+   *  zweiten Oszillators die Beschriftung des ERSTEN rückwirkend ändern
+   *  (von "Oscillator" auf "Oscillator 1") -- mit fester Nummerierung von
+   *  Anfang an bleibt ein bereits vorhandenes Modul immer gleich benannt,
+   *  ein neu hinzugefügtes bekommt einfach die nächste freie Nummer
+   *  (Chat: "wird schnell unübersichtlich" bei mehreren Oszillatoren im
+   *  selben Patch). */
+  autoName(id) {
+    const m = this.modules.get(id);
+    if (!m) return '';
+    const sameType = [...this.modules.keys()].filter((k) => this.modules.get(k).type === m.type);
+    return `${moduleMeta(m.type).name} ${sameType.indexOf(id) + 1}`;
+  }
+
+  /** Angezeigter Name: eigene Beschriftung (falls per renameModule()
+   *  gesetzt), sonst der automatisch nummerierte Name (s. autoName()). */
+  displayName(id) {
+    const m = this.modules.get(id);
+    if (!m) return '';
+    return m.label || this.autoName(id);
+  }
+
+  /** Eigene Beschriftung setzen/löschen (leerer String oder nur
+   *  Leerzeichen -> zurück auf den automatisch nummerierten Namen) --
+   *  dieselbe Konvention wie Machine#setLabel (s. machines/machine.js). */
+  renameModule(id, label) {
+    const m = this.modules.get(id);
+    if (!m) return;
+    m.label = label?.trim() || null;
+  }
+
+  /** @param {{id?:number, params?:object, x?:number, y?:number, label?:string}} [saved] */
   addModule(type, saved = null) {
     const def = MODULE_DEFS[type];
     if (!def) throw new Error(`Unbekannter Modul-Typ: ${type}`);
@@ -752,7 +801,7 @@ export class ModularPatch {
     if (saved?.id != null) nextModuleId = Math.max(nextModuleId, saved.id + 1);
     const instance = def.build(engine.ctx, params);
     const pos = saved?.x != null && saved?.y != null ? { x: saved.x, y: saved.y } : autoPosition(this.modules);
-    this.modules.set(id, { type, params, instance, x: pos.x, y: pos.y });
+    this.modules.set(id, { type, params, instance, x: pos.x, y: pos.y, label: saved?.label ?? null });
     return id;
   }
 
@@ -878,7 +927,7 @@ export class ModularPatch {
    *  es auf der Steckfläche steht, und umgekehrt. */
   serialize() {
     return {
-      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params }, x: m.x, y: m.y })),
+      modules: [...this.modules.entries()].map(([id, m]) => ({ id, type: m.type, params: { ...m.params }, x: m.x, y: m.y, label: m.label })),
       cables: this.cables.map((c) => ({ fromId: c.fromId, fromPort: c.fromPort, toId: c.toId, toPort: c.toPort })),
     };
   }
