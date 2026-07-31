@@ -358,6 +358,7 @@ export function renderModularRack(container, machine) {
   let pendingCablePath = null;
   let moveFrom = null; // { id, startX, startY, origX, origY } -- gerade per Kopfzeile verschobenes Modul
   let moveMoved = false;
+  let boxHoldTimer = null; // Halten auf einer Kachel (Rückseite) -- öffnet dasselbe Halten-Menü wie auf der Vorderseite
   let panFrom = null; // { startX, startY, origX, origY } -- Ein-Finger-Ziehen auf leerer Fläche verschiebt panX/panY
   let cableTapFrom = null; // { cableId, startX, startY } -- Antippen eines Kabels zum Trennen, wartet auf pointerup
   // Zwei-Finger-Pinch-Zoom (Chat: "mit zwei fingern rein und raus zoomen").
@@ -398,6 +399,7 @@ export function renderModularRack(container, machine) {
       moveFrom = null; moveMoved = false;
       panFrom = null;
       cableTapFrom = null;
+      if (boxHoldTimer) { clearTimeout(boxHoldTimer); boxHoldTimer = null; }
       const pts = [...activePointers.values()];
       pinchStartDist = Math.max(MIN_PINCH_START_DIST, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
       pinchStartZoom = zoom;
@@ -479,6 +481,19 @@ export function renderModularRack(container, machine) {
       if (!m) return;
       moveFrom = { id, startX: e.clientX, startY: e.clientY, origX: m.x, origY: m.y };
       moveMoved = false;
+      // Halten (wie auf der Vorderseite, s. listEl weiter unten) öffnet
+      // dasselbe Duplizieren/Entfernen-Menü -- bricht ab, sobald sich das
+      // hier zu einem echten Zug entwickelt (s. pointermove, moveMoved),
+      // dann gewinnt das Verschieben wie bisher.
+      boxHoldTimer = setTimeout(() => {
+        boxHoldTimer = null;
+        moveFrom = null;
+        // fitContentToView() zusätzlich zu refreshAll() -- ein Duplikat
+        // landet per autoPosition() an der nächsten freien Stelle, die
+        // ausserhalb des aktuellen Bildausschnitts liegen kann (derselbe
+        // Grund wie beim "+ Add Module"-Knopf auf der Steckfläche).
+        openModuleMenu(patch, id, box, () => { refreshAll(); fitContentToView(); });
+      }, HOLD_MS);
       try { jacksWrapEl.setPointerCapture(e.pointerId); } catch { /* Testumgebung */ }
       e.stopPropagation();
       return;
@@ -536,6 +551,8 @@ export function renderModularRack(container, machine) {
       if (!moveMoved) {
         if (Math.hypot(dx, dy) <= TAP_MOVE_TOLERANCE) return;
         moveMoved = true;
+        // Ein echter Zug -- kein Halten mehr, s. boxHoldTimer oben.
+        if (boxHoldTimer) { clearTimeout(boxHoldTimer); boxHoldTimer = null; }
       }
       // dx/dy sind reale Bildschirm-Pixel (Fingerbewegung) -- durch `zoom`
       // teilen, um sie in Modell-Pixel umzurechnen, sonst würde ein
@@ -613,6 +630,10 @@ export function renderModularRack(container, machine) {
     }
     if (panFrom) { panFrom = null; return; }
     if (moveFrom) {
+      // Losgelassen, bevor die Halten-Schwelle erreicht wurde -- Timer
+      // muss weg, sonst würde das Menü noch verspätet aufgehen, obwohl
+      // der Finger längst weg ist.
+      if (boxHoldTimer) { clearTimeout(boxHoldTimer); boxHoldTimer = null; }
       // Ein blosses Antippen der Kopfzeile (kein nennenswerter Zug) ist
       // kein Verschieben -- verwirft dann wie ein Tap auf leere Fläche
       // eine offene Auswahl, statt sie stehen zu lassen.
@@ -627,7 +648,11 @@ export function renderModularRack(container, machine) {
     if (activePointers.size < 2) pinchStartDist = 0;
     if (cableTapFrom) { cableTapFrom = null; return; }
     if (panFrom) { panFrom = null; return; }
-    if (moveFrom) { moveFrom = null; moveMoved = false; return; }
+    if (moveFrom) {
+      if (boxHoldTimer) { clearTimeout(boxHoldTimer); boxHoldTimer = null; }
+      moveFrom = null; moveMoved = false;
+      return;
+    }
     dragFrom = null; dragMoved = false;
     clearSnapTarget();
     pendingCablePath = null;
