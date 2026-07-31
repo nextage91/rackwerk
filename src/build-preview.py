@@ -58,7 +58,7 @@ MODULES = [
     ("js/machines/psysynth.js", ["PsySynth"]),
     ("js/machines/modular.js",  ["Modular"]),
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
-    ("js/rack/jam-view.js",     ["initJamView", "renderJamView", "stopAllClips"]),
+    ("js/rack/jam-view.js",     ["initJamView", "renderJamView", "stopAllClips", "serializeScenes", "deserializeScenes"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),
     ("js/main.js",              []),
 ]

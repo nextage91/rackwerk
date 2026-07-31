@@ -27,12 +27,16 @@
  *            statt einer Maschinen-ID (s. automation.js)
  *   - lanes: Automation der Maschine, Schlüssel ohne Maschinen-ID
  *     (IDs werden beim Laden neu vergeben, deshalb nur der Suffix)
+ *   - scenes: Jam-View-Scenes (s. jam-view.js#serializeScenes), referenzieren
+ *     Maschine/Clip aus demselben Grund per Index statt ID -- fehlt in
+ *     alten Projekten → keine Scenes
  */
 import { transport } from './transport.js';
 import { automation } from './automation.js';
 import { masterFX } from './fx.js';
 import { song } from './song.js';
 import { REGISTRY } from '../rack/rack.js';
+import { serializeScenes, deserializeScenes } from '../rack/jam-view.js';
 
 const BY_TYPE = Object.fromEntries(REGISTRY.map((M) => [M.meta.type, M]));
 
@@ -44,6 +48,7 @@ export function serializeProject(rack) {
     masterInserts: masterFX.serializeInserts(),
     masterLanes: automation.exportLanesWithPrefix('master:'),
     song: song.serialize(),
+    scenes: serializeScenes(rack),
     machines: rack.machines.map((m) => ({
       type: m.constructor.meta.type,
       state: m.serialize(),
@@ -72,6 +77,7 @@ export function newProject(rack) {
   song.clear();
   rack.addMachine(BY_TYPE.beatbox).seedDemo();
   rack.addMachine(BY_TYPE.subsynth).seedDemo();
+  deserializeScenes(rack, []); // Scenes gehören zum Projekt -- frisches Rack, frische (leere) Szenenliste
 }
 
 export function loadProject(rack, data) {
@@ -122,6 +128,9 @@ export function loadProject(rack, data) {
     throw new Error('None of the machines in this file could be loaded');
   }
   song.deserialize(data.song); // nach den Maschinen (Events zeigen auf deren Position)
+  // Auch nach den Maschinen -- deserializeScenes() rechnet über deren
+  // (in dieser Session frische) IDs und Clip-IDs zurück, s. dort.
+  deserializeScenes(rack, data.scenes);
 }
 
 /**
