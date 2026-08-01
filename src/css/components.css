@@ -1259,8 +1259,24 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 }
 .eq8__label--x { bottom: 1px; transform: translateX(-50%); }
 .eq8__label--y { left: 2px; transform: translateY(-50%); }
+/* Gain-Zoom-Reihe unter dem Graphen -- reuse der .pat-chip__btn-Optik
+   (gleiche Pillen wie im Halten-Menü), aber inline im Body statt als
+   floatendes Popup, da es (anders als das Halten-Menü) dauerhaft
+   sichtbar sein soll. */
+.eq8__zoom {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.eq8__zoom .pat-chip__btn {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
 .eq8__hint {
-  margin: 0;
+  margin: 8px 0 0;
   font-size: 10px;
   letter-spacing: .02em;
   color: var(--ink-dim);
