@@ -20,6 +20,7 @@ import { createModulator, MOD_DISPLAY } from '../core/modulators.js';
 import { renderModulationChain, openModulatorPicker } from '../ui/modulation-chain.js';
 import { masterFX } from '../core/fx.js';
 import { undo } from '../core/undo.js';
+import { computeLevels } from '../ui/meter.js';
 
 let nextId = 1;
 let nextClipId = 1;
@@ -166,6 +167,28 @@ function refreshLatencyCompensation() {
     m.pdcDelay.delayTime.setTargetAtTime(maxLatency - insertChainLatencySec(m.inserts), t, 0.01);
   }
 }
+
+/* ---------- Kopfzeilen-Pegelanzeige (alle Maschinen) ----------
+ * Ein einziger geteilter rAF-Ticker für ALLE gemounteten Maschinen-Panels
+ * -- läuft unabhängig davon, ob gerade Mixer/Jam/Song offen ist (die
+ * Rack-Ansicht ist die Standardansicht, "überall" mitmonitoren können war
+ * die explizite Nutzer-Anfrage), analog zum selbstständigen
+ * Master-Meter-Ticker in fx.js#startVU. Iteriert die bereits vorhandene
+ * app-weite `machines`-Registry statt einer eigenen Anmeldeliste -- eine
+ * Maschine ohne gerendertes Panel (headMeterEl noch nicht gesetzt) wird
+ * einfach übersprungen, kein Fehlerfall, kein separates Auf-/Abmelden
+ * beim Entfernen nötig (dispose() entfernt die Maschine schon aus
+ * `machines`). Ein fixer, wiederverwendeter Buffer reicht für alle
+ * Maschinen -- getMeterAnalyser() setzt fftSize immer auf 512. */
+const HEAD_METER_BUF = new Float32Array(512);
+(function tickHeadMeters() {
+  for (const m of machines) {
+    if (!m.headMeterEl) continue;
+    const { rmsDb, peakDb } = computeLevels(m.getMeterAnalyser(), HEAD_METER_BUF);
+    m.headMeterEl.update(rmsDb, peakDb);
+  }
+  requestAnimationFrame(tickHeadMeters);
+})();
 
 export class Machine {
   static meta = { type: 'machine', name: 'Machine', desc: '', color: '#888' };
@@ -345,9 +368,12 @@ export class Machine {
   /** @type {AnalyserNode|null} */
   #meterAnalyser = null;
   /**
-   * Analyser für das Kanalzug-VU-Meter im Mixer — hinter dem Mute/Solo-Gate
-   * abgegriffen, zeigt also genau das, was hörbar ist (still bei Mute).
-   * Lazy angelegt: kostet nichts, solange kein Mixer-Kanalzug ihn abfragt.
+   * Analyser fürs VU-Meter dieser Maschine -- im Mixer-Kanalzug UND in der
+   * eigenen Panel-Kopfzeile (s. headMeterEl/tickHeadMeters oben) genutzt,
+   * beide Male hinter dem Mute/Solo-Gate abgegriffen, zeigt also genau das,
+   * was hörbar ist (still bei Mute). Lazy angelegt: kostet nichts, bevor
+   * der erste Abrufer (Mixer-Kanalzug oder der Kopfzeilen-Ticker) ihn
+   * abfragt.
    */
   getMeterAnalyser() {
     if (!this.#meterAnalyser) {
@@ -639,6 +665,7 @@ export class Machine {
             <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
           </span>
         </div>
+        <x-meter compact data-head-meter></x-meter>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
@@ -672,6 +699,7 @@ export class Machine {
 
     this.headMuteBtn = el.querySelector('[data-mute]');
     this.headSoloBtn = el.querySelector('[data-solo]');
+    this.headMeterEl = el.querySelector('[data-head-meter]');
     this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 

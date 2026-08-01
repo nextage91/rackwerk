@@ -42,6 +42,7 @@ import { createInsert, makeFeedbackClipCurve } from './inserts.js';
 import { automation } from './automation.js';
 import { undo } from './undo.js';
 import { renderInsertChain, openInsertPicker, INSERT_DISPLAY } from '../ui/insert-chain.js';
+import { computeLevels } from '../ui/meter.js';
 
 /** Delay-Notenwerte: Anzahl 16tel-Steps ↔ Beschriftung. */
 const DIVISIONS = [
@@ -414,9 +415,7 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
-        <div class="vu" data-vu aria-label="Master level">
-          ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
-        </div>
+        <x-meter class="fx__meter" aria-label="Master level"></x-meter>
       </header>
       <div class="machine__body">
         <div class="machine__row fx__row">
@@ -468,29 +467,19 @@ class MasterFX {
     return el;
   }
 
-  /* ---------- VU-Meter (LED-Kette am Limiter-Ausgang) ---------- */
+  /* ---------- Pegelanzeige (dBFS-Skala + Peak-Hold + Clip-Latch, am
+   * Limiter-Ausgang, s. audio-engine.js#analyser) ---------- */
   #vuBuf;
-  #vuLit = -1;
 
   #startVU() {
     const analyser = engine.analyser;
-    const segs = this.el?.querySelectorAll('.vu__seg');
-    if (!analyser || !segs?.length || typeof analyser.getFloatTimeDomainData !== 'function') return;
+    const meterEl = this.el?.querySelector('x-meter');
+    if (!analyser || !meterEl || typeof analyser.getFloatTimeDomainData !== 'function') return;
     this.#vuBuf = new Float32Array(analyser.fftSize);
 
-    const FLOOR_DB = -45; // Anzeigebereich: −45 dB … 0 dB
     const tick = () => {
-      analyser.getFloatTimeDomainData(this.#vuBuf);
-      let sum = 0;
-      for (let i = 0; i < this.#vuBuf.length; i++) sum += this.#vuBuf[i] ** 2;
-      const rms = Math.sqrt(sum / this.#vuBuf.length);
-      const db = 20 * Math.log10(Math.max(1e-6, rms));
-      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * segs.length);
-
-      if (lit !== this.#vuLit) { // DOM nur anfassen, wenn sich etwas ändert
-        segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
-        this.#vuLit = lit;
-      }
+      const { rmsDb, peakDb } = computeLevels(analyser, this.#vuBuf);
+      meterEl.update(rmsDb, peakDb);
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);

@@ -1006,20 +1006,9 @@ button {
   justify-content: center;
   gap: 6px;
 }
-
-/* Vertikales VU-Meter neben dem Fader — dieselben LED-Segmente wie am
-   Master-FX-Meter, nur gestapelt statt in einer Reihe. Füllt die volle
-   Fader-Höhe (durchgereicht von .chstrip__meters), damit alle Kanalzüge
-   nebeneinander denselben Fader-Weg haben, wie an einem echten Pult. */
-.chstrip__vu {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 2px;
-  height: 100%;
-  min-height: 0;
-  padding: 3px 0;
-}
-.chstrip__vu .vu__seg { width: 5px; height: auto; flex: 1 1 0; }
+/* <x-meter compact vertical> füllt hier die volle Fader-Höhe (via
+   is-vertical, s. components.css) -- alle Kanalzüge nebeneinander haben
+   damit denselben Fader-Weg, wie an einem echten Pult. */
 
 .chstrip__buttons {
   display: flex;
@@ -3163,6 +3152,106 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
 .vu__seg:nth-child(11).is-lit,
 .vu__seg:nth-child(12).is-lit      { background: var(--led-on); box-shadow: 0 0 7px rgba(255,77,61,.6); }
 
+/* ===================== Pegelanzeige (x-meter) -----------------------
+ * Ersetzt schrittweise die Hand-VU-Kette oben (.vu/.vu__seg) an allen
+ * Einsatzorten (Master-FX, Mixer-Kanalzug, Maschinen-Kopfzeile,
+ * Insert-Zeile) um dieselbe dBFS-Skala/Peak-Hold/Clip-Latch, s.
+ * ui/meter.js. Segmentfarben bewusst dupliziert statt einer gemeinsamen
+ * Klasse mit .vu__seg -- eigenständige Komponente, kein Koppeln zweier
+ * unabhängiger Stellen über eine gemeinsame CSS-Klasse. */
+x-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+x-meter.is-vertical {
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 3px;
+}
+.x-meter__scale {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-lcd);
+  font-size: 8px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+x-meter.is-vertical .x-meter__scale {
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  text-align: right;
+}
+.x-meter__leds {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(0,0,0,.4);
+  box-shadow: 0 2px 4px rgba(0,0,0,.55) inset;
+}
+x-meter.is-vertical .x-meter__leds {
+  flex-direction: column-reverse;
+  height: 100%;
+  min-height: 0;
+  padding: 3px 5px;
+}
+.x-meter__seg {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: #241f17;
+  box-shadow: 0 1px 0 rgba(255,255,255,.04);
+  flex: 0 0 auto;
+}
+x-meter.is-vertical .x-meter__seg { width: 5px; height: auto; flex: 1 1 0; }
+/* Kompakte Variante (Maschinen-Kopfzeile/Insert-Zeile): keine Skala,
+   kleinere LEDs -- muss auch bei 320px-Breite in die knappe Kopfzeile
+   passen, s. tools/layout-check.mjs. */
+x-meter.is-compact .x-meter__leds { padding: 3px 5px; gap: 1px; }
+x-meter.is-compact .x-meter__seg { width: 4px; height: 10px; }
+x-meter.is-compact .x-meter__clip { width: 4px; height: 10px; }
+.x-meter__seg.is-lit               { background: var(--led-play); box-shadow: 0 0 6px rgba(127,217,122,.55); }
+.x-meter__seg:nth-child(9).is-lit,
+.x-meter__seg:nth-child(10).is-lit { background: var(--g-yellow); box-shadow: 0 0 6px rgba(242,193,78,.55); }
+.x-meter__seg:nth-child(11).is-lit,
+.x-meter__seg:nth-child(12).is-lit { background: var(--led-on); box-shadow: 0 0 7px rgba(255,77,61,.6); }
+/* Peak-Hold: der zuletzt gemessene Spitzenwert, unabhängig davon ob das
+   betroffene Segment gerade auch is-lit ist (RMS kann unter dem
+   gehaltenen Peak liegen) -- heller Rand statt Füllfarbe, additiv zur
+   normalen Farbstaffelung oben. */
+.x-meter__seg.is-peak {
+  box-shadow: 0 0 0 1px #fff, 0 0 8px 1px rgba(255,255,255,.85);
+}
+/* Eigene Clip-LED, unabhängig von der 12er-Kette -- latcht bis zum
+   Antippen (s. XMeter#resetClip), deshalb ein eigenständiges Element
+   statt einer weiteren Farbe in der Staffelung oben. */
+.x-meter__clip {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: #3a1210;
+  flex: 0 0 auto;
+  margin-left: 4px;
+  cursor: pointer;
+}
+x-meter.is-vertical .x-meter__clip { margin-left: 0; margin-bottom: 4px; }
+.x-meter__clip.is-lit {
+  background: var(--led-on);
+  box-shadow: 0 0 8px 2px rgba(255,77,61,.8);
+}
+
+/* Der volle Meter (LEDs + Zahlen-Skala) ist deutlich breiter als die
+   frühere reine LED-Kette -- passt bei schmalen Handybreiten nicht mehr
+   neben Titel/Typenschild in eine Zeile (gemessen: >200px bei 272px
+   verfügbarer Kopfzeilenbreite bei 320px-Viewport). Eigene Zeile statt
+   Kürzen der Skala -- die Zahlen sind ja gerade der Punkt der Anzeige. */
+.machine--master .machine__head { flex-wrap: wrap; row-gap: 4px; }
+.fx__meter { flex-basis: 100%; margin-left: 0; }
+
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */
 .machine--master .fx__row { align-items: center; }
 .machine--master .seg { margin-bottom: 0; margin-right: 4px; }
@@ -4370,6 +4459,148 @@ class XFader extends HTMLElement {
 customElements.define('x-fader', XFader);
 
 return { XFader };
+})();
+
+/* ===== js/ui/meter.js ===== */
+const { XMeter, computeLevels } = (() => {
+/**
+ * <x-meter> — Pegelanzeige mit dBFS-Skala, Peak-Hold und Clip-Latch.
+ *
+ * Anders als <x-knob>/<x-fader> hat <x-meter> keinen eigenen Wert und
+ * pollt nichts selbst -- der Aufrufer bringt seinen eigenen (schon
+ * etablierten) rAF-Ticker mit und ruft pro Frame update(rmsDb, peakDb)
+ * auf (s. computeLevels() unten für die RMS/Peak-Berechnung aus einem
+ * AnalyserNode). Segmentfarben/-tokens identisch zur bisherigen
+ * VU-Kette (.vu/.vu__seg) -- LED-Anzahl bewusst fest auf 12 (die
+ * Farbstaffelung in CSS ist positionsbasiert, s. dort).
+ *
+ * Attribute (beim Mount gelesen, nicht live änderbar):
+ *  - compact: keine Zahlen-Skala daneben (Maschinen-Kopfzeile/Insert-
+ *    Zeile, wenig Platz)
+ *  - vertical: LEDs gestapelt statt in einer Reihe (Mixer-Kanalzug, neben
+ *    dem vertikalen Fader)
+ *
+ * Peak-Hold: der lauteste in den letzten PEAK_HOLD_MS gemessene Pegel
+ * bleibt als eigenes, helleres Segment stehen und klingt danach linear
+ * ab -- klassisches Meter-Verhalten, damit kurze Transienten nicht
+ * einfach zwischen zwei Frames verschwinden.
+ *
+ * Clip-Latch: sobald peakDb >= CLIP_DB, bleibt die separate Clip-LED an,
+ * bis man die Anzeige antippt (Standard-Metering-UX, wie an echten
+ * Pulten) -- kein Warten auf einen automatischen Reset nötig, gerade
+ * WEIL man eine kurze Übersteuerung sonst leicht verpasst.
+ *
+ * Wichtige Einschränkung: das ist der reale Sample-Peak aus
+ * AnalyserNode.getFloatTimeDomainData(), kein True-Peak/Oversampling
+ * (das misst z. B. ffmpegs loudnorm-Filter beim Export) -- für
+ * Echtzeit-Feedback beim Mischen ist das der richtige Kompromiss, kann
+ * aber in Grenzfällen grün stehen, während ein Export-Tool minimal
+ * Inter-Sample-Clipping meldet. Dieselbe Einschränkung hat praktisch
+ * jedes DAW-Meter ohne dedizierten True-Peak-Modus.
+ */
+const SEG_COUNT = 12;
+const FLOOR_DB = -45;
+const CLIP_DB = -0.3;
+const PEAK_HOLD_MS = 1200;
+const PEAK_DECAY_DB_PER_SEC = 20;
+
+/** RMS + Peak (beide in dBFS) aus einem AnalyserNode -- `buf` ist ein
+ *  wiederverwendeter Float32Array(analyser.fftSize), damit der Aufrufer
+ *  pro Tick keine neue Allokation macht (gleiche Konvention wie die
+ *  bisherigen VU-Meter in main.js/fx.js). */
+function computeLevels(analyser, buf) {
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  let peak = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const s = buf[i];
+    sum += s * s;
+    const abs = Math.abs(s);
+    if (abs > peak) peak = abs;
+  }
+  const rms = Math.sqrt(sum / buf.length);
+  return {
+    rmsDb: 20 * Math.log10(Math.max(1e-6, rms)),
+    peakDb: 20 * Math.log10(Math.max(1e-6, peak)),
+  };
+}
+
+class XMeter extends HTMLElement {
+  connectedCallback() {
+    if (this.#built) return;
+    this.#built = true;
+
+    this.compact = this.hasAttribute('compact');
+    this.vertical = this.hasAttribute('vertical');
+    this.classList.toggle('is-vertical', this.vertical);
+    this.classList.toggle('is-compact', this.compact);
+
+    const segs = Array.from({ length: SEG_COUNT }, () => '<span class="x-meter__seg"></span>').join('');
+    this.innerHTML = `
+      ${this.compact ? '' : `
+      <div class="x-meter__scale">
+        <span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−45</span>
+      </div>`}
+      <div class="x-meter__leds">${segs}<span class="x-meter__clip"></span></div>
+    `;
+    this.#segs = this.querySelectorAll('.x-meter__seg');
+    this.#clipEl = this.querySelector('.x-meter__clip');
+    this.title = 'Clip — antippen zum Zurücksetzen';
+    this.addEventListener('click', this.#resetClip);
+  }
+
+  #built = false;
+  #segs = null;
+  #clipEl = null;
+  #lastLit = -1;
+  #lastPeakSeg = -1;
+  #peakHold = -Infinity;
+  #peakHoldUntil = 0;
+  #lastTick = 0;
+  #clipped = false;
+
+  #resetClip = () => {
+    if (!this.#clipped) return;
+    this.#clipped = false;
+    this.#clipEl?.classList.remove('is-lit');
+  };
+
+  /** Vom Aufrufer aus dessen eigenem Ticker gerufen -- <x-meter> selbst
+   *  pollt nichts (s. Dateikopf-Kommentar). */
+  update(rmsDb, peakDb) {
+    if (!this.#built) return;
+    const now = performance.now();
+    const dt = this.#lastTick ? now - this.#lastTick : 16;
+    this.#lastTick = now;
+
+    if (peakDb >= this.#peakHold) {
+      this.#peakHold = peakDb;
+      this.#peakHoldUntil = now + PEAK_HOLD_MS;
+    } else if (now > this.#peakHoldUntil) {
+      this.#peakHold = Math.max(peakDb, this.#peakHold - (PEAK_DECAY_DB_PER_SEC * dt) / 1000);
+    }
+    if (peakDb >= CLIP_DB) this.#clipped = true;
+
+    const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, rmsDb)) - FLOOR_DB) / -FLOOR_DB) * SEG_COUNT);
+    if (lit !== this.#lastLit) {
+      this.#segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+      this.#lastLit = lit;
+    }
+
+    const peakLit = Math.round(((Math.max(FLOOR_DB, Math.min(0, this.#peakHold)) - FLOOR_DB) / -FLOOR_DB) * SEG_COUNT);
+    const peakSeg = Math.min(SEG_COUNT - 1, Math.max(0, peakLit - 1));
+    if (peakSeg !== this.#lastPeakSeg) {
+      this.#segs.forEach((s, i) => s.classList.toggle('is-peak', i === peakSeg));
+      this.#lastPeakSeg = peakSeg;
+    }
+
+    this.#clipEl?.classList.toggle('is-lit', this.#clipped);
+  }
+}
+
+customElements.define('x-meter', XMeter);
+
+return { XMeter, computeLevels };
 })();
 
 /* ===== js/vendor/qrcodegen.js ===== */
@@ -18240,6 +18471,13 @@ function createInsert(type, saved = null) {
   effect.output.connect(wetGain);
   wetGain.connect(output);
 
+  // Analyser fürs Pegel-Meter der Insert-Zeile (s. ui/insert-chain.js) --
+  // tapt `output`, den einzigen, für JEDEN Insert-Typ gleich geformten
+  // Ausgangsknoten dieses Wrappers (unabhängig von internen Eigenheiten
+  // wie EQ8s Ketten-Biquads oder Reverb/Resonator-Feedback-Netzen).
+  // Lazy angelegt wie Machine#getMeterAnalyser, gleiche Begründung.
+  let meterAnalyser = null;
+
   const insert = {
     id,
     type,
@@ -18267,6 +18505,14 @@ function createInsert(type, saved = null) {
       dryGain.gain.setTargetAtTime(b ? 1 : 0, t, 0.01);
       wetGain.gain.setTargetAtTime(b ? 0 : 1, t, 0.01);
     },
+    getMeterAnalyser() {
+      if (!meterAnalyser) {
+        meterAnalyser = ctx.createAnalyser();
+        meterAnalyser.fftSize = 512;
+        output.connect(meterAnalyser);
+      }
+      return meterAnalyser;
+    },
     serialize() {
       return { id, type, params: { ...params }, bypassed: insert.bypassed };
     },
@@ -18275,6 +18521,7 @@ function createInsert(type, saved = null) {
       output.disconnect();
       dryGain.disconnect();
       wetGain.disconnect();
+      meterAnalyser?.disconnect();
       effect.dispose();
     },
   };
@@ -20572,6 +20819,27 @@ function startCompMeter(row, insert) {
   requestAnimationFrame(tick);
 }
 
+/** Pegel-Meter der Insert-Zeile -- anders als die GR-Anzeige oben für JEDEN
+ *  Insert-Typ (nicht nur Compressor/Opto/Limiter), da hier der reine Signal-
+ *  pegel gezeigt wird, nicht eine Kompressions-Kennzahl. Gleiches
+ *  Selbstbeendigungsmuster wie startCompMeter() (bricht ab, sobald die
+ *  Zeile aus dem DOM verschwindet). Analyser kommt von
+ *  insert.getMeterAnalyser() (s. core/inserts.js#createInsert), tapt den
+ *  für jeden Insert-Typ gleich geformten Wrapper-Ausgang. */
+function startLevelMeter(row, insert) {
+  const meterEl = row.querySelector('x-meter');
+  if (!meterEl || typeof insert.getMeterAnalyser !== 'function') return;
+  const analyser = insert.getMeterAnalyser();
+  const buf = new Float32Array(analyser.fftSize);
+  const tick = () => {
+    if (!row.isConnected) return;
+    const { rmsDb, peakDb } = computeLevels(analyser, buf);
+    meterEl.update(rmsDb, peakDb);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
 /* ---------- 8-Band-EQ: Halten-Menü (Typ/Entfernen) ----------
  * Ein einzelnes, modulweites Popup -- gleiches Muster wie padMenu/
  * openSampleEditor in sampler.js (nie mehr als eines gleichzeitig offen). */
@@ -21121,6 +21389,7 @@ function renderInsertChain(listEl, owner) {
               <div class="machine__type">${badge} · #${insert.id}</div>
             </span>
           </div>
+          <x-meter compact></x-meter>
           <div class="machine__head-actions">
             <button type="button" class="m-btn insert-row__move" data-move="-1" aria-label="Move up" ${idx === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="m-btn insert-row__move" data-move="1" aria-label="Move down" ${idx === owner.inserts.length - 1 ? 'disabled' : ''}>▼</button>
@@ -21266,6 +21535,7 @@ function renderInsertChain(listEl, owner) {
       });
     }
     if (insert.type === 'comp' || insert.type === 'opto' || insert.type === 'limiter') startCompMeter(row, insert);
+    startLevelMeter(row, insert);
     if (insert.type === 'eq8') setupEq8Graph(row, insert);
   }
 }
@@ -22944,9 +23214,7 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
-        <div class="vu" data-vu aria-label="Master level">
-          ${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}
-        </div>
+        <x-meter class="fx__meter" aria-label="Master level"></x-meter>
       </header>
       <div class="machine__body">
         <div class="machine__row fx__row">
@@ -22998,29 +23266,19 @@ class MasterFX {
     return el;
   }
 
-  /* ---------- VU-Meter (LED-Kette am Limiter-Ausgang) ---------- */
+  /* ---------- Pegelanzeige (dBFS-Skala + Peak-Hold + Clip-Latch, am
+   * Limiter-Ausgang, s. audio-engine.js#analyser) ---------- */
   #vuBuf;
-  #vuLit = -1;
 
   #startVU() {
     const analyser = engine.analyser;
-    const segs = this.el?.querySelectorAll('.vu__seg');
-    if (!analyser || !segs?.length || typeof analyser.getFloatTimeDomainData !== 'function') return;
+    const meterEl = this.el?.querySelector('x-meter');
+    if (!analyser || !meterEl || typeof analyser.getFloatTimeDomainData !== 'function') return;
     this.#vuBuf = new Float32Array(analyser.fftSize);
 
-    const FLOOR_DB = -45; // Anzeigebereich: −45 dB … 0 dB
     const tick = () => {
-      analyser.getFloatTimeDomainData(this.#vuBuf);
-      let sum = 0;
-      for (let i = 0; i < this.#vuBuf.length; i++) sum += this.#vuBuf[i] ** 2;
-      const rms = Math.sqrt(sum / this.#vuBuf.length);
-      const db = 20 * Math.log10(Math.max(1e-6, rms));
-      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * segs.length);
-
-      if (lit !== this.#vuLit) { // DOM nur anfassen, wenn sich etwas ändert
-        segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
-        this.#vuLit = lit;
-      }
+      const { rmsDb, peakDb } = computeLevels(analyser, this.#vuBuf);
+      meterEl.update(rmsDb, peakDb);
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -24018,6 +24276,28 @@ function refreshLatencyCompensation() {
   }
 }
 
+/* ---------- Kopfzeilen-Pegelanzeige (alle Maschinen) ----------
+ * Ein einziger geteilter rAF-Ticker für ALLE gemounteten Maschinen-Panels
+ * -- läuft unabhängig davon, ob gerade Mixer/Jam/Song offen ist (die
+ * Rack-Ansicht ist die Standardansicht, "überall" mitmonitoren können war
+ * die explizite Nutzer-Anfrage), analog zum selbstständigen
+ * Master-Meter-Ticker in fx.js#startVU. Iteriert die bereits vorhandene
+ * app-weite `machines`-Registry statt einer eigenen Anmeldeliste -- eine
+ * Maschine ohne gerendertes Panel (headMeterEl noch nicht gesetzt) wird
+ * einfach übersprungen, kein Fehlerfall, kein separates Auf-/Abmelden
+ * beim Entfernen nötig (dispose() entfernt die Maschine schon aus
+ * `machines`). Ein fixer, wiederverwendeter Buffer reicht für alle
+ * Maschinen -- getMeterAnalyser() setzt fftSize immer auf 512. */
+const HEAD_METER_BUF = new Float32Array(512);
+(function tickHeadMeters() {
+  for (const m of machines) {
+    if (!m.headMeterEl) continue;
+    const { rmsDb, peakDb } = computeLevels(m.getMeterAnalyser(), HEAD_METER_BUF);
+    m.headMeterEl.update(rmsDb, peakDb);
+  }
+  requestAnimationFrame(tickHeadMeters);
+})();
+
 class Machine {
   static meta = { type: 'machine', name: 'Machine', desc: '', color: '#888' };
 
@@ -24196,9 +24476,12 @@ class Machine {
   /** @type {AnalyserNode|null} */
   #meterAnalyser = null;
   /**
-   * Analyser für das Kanalzug-VU-Meter im Mixer — hinter dem Mute/Solo-Gate
-   * abgegriffen, zeigt also genau das, was hörbar ist (still bei Mute).
-   * Lazy angelegt: kostet nichts, solange kein Mixer-Kanalzug ihn abfragt.
+   * Analyser fürs VU-Meter dieser Maschine -- im Mixer-Kanalzug UND in der
+   * eigenen Panel-Kopfzeile (s. headMeterEl/tickHeadMeters oben) genutzt,
+   * beide Male hinter dem Mute/Solo-Gate abgegriffen, zeigt also genau das,
+   * was hörbar ist (still bei Mute). Lazy angelegt: kostet nichts, bevor
+   * der erste Abrufer (Mixer-Kanalzug oder der Kopfzeilen-Ticker) ihn
+   * abfragt.
    */
   getMeterAnalyser() {
     if (!this.#meterAnalyser) {
@@ -24490,6 +24773,7 @@ class Machine {
             <div class="machine__type">${model} · #${this.id}<span class="machine__led" data-led></span></div>
           </span>
         </div>
+        <x-meter compact data-head-meter></x-meter>
         <div class="machine__head-actions">
           <button class="m-btn m-btn--solo" data-solo>SOLO</button>
           <button class="m-btn m-btn--mute" data-mute>MUTE</button>
@@ -24523,6 +24807,7 @@ class Machine {
 
     this.headMuteBtn = el.querySelector('[data-mute]');
     this.headSoloBtn = el.querySelector('[data-solo]');
+    this.headMeterEl = el.querySelector('[data-head-meter]');
     this.headMuteBtn.addEventListener('click', () => this.setMuted(!this.muted));
     this.headSoloBtn.addEventListener('click', () => this.setSoloed(!this.soloed));
 
@@ -33036,21 +33321,12 @@ function wireMixerUI(rack) {
 
   /* Ein gemeinsamer rAF-Ticker treibt alle sichtbaren VU-Meter — nur
      während der Mixer offen ist, sonst unnötige Dauerlast im Hintergrund. */
-  const FLOOR_DB = -45;
   let meterEntries = [];
   let meterRAF = null;
   const meterTick = () => {
     for (const m of meterEntries) {
-      m.analyser.getFloatTimeDomainData(m.buf);
-      let sum = 0;
-      for (let i = 0; i < m.buf.length; i++) sum += m.buf[i] ** 2;
-      const rms = Math.sqrt(sum / m.buf.length);
-      const db = 20 * Math.log10(Math.max(1e-6, rms));
-      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * m.segs.length);
-      if (lit !== m.lastLit) {
-        m.segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
-        m.lastLit = lit;
-      }
+      const { rmsDb, peakDb } = computeLevels(m.analyser, m.buf);
+      m.el.update(rmsDb, peakDb);
     }
     meterRAF = requestAnimationFrame(meterTick);
   };
@@ -33074,7 +33350,7 @@ function wireMixerUI(rack) {
         <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>
       </div>
       <div class="chstrip__meters">
-        <div class="chstrip__vu" data-vu>${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}</div>
+        <x-meter compact vertical></x-meter>
         <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
       </div>
       ${withButtons ? `
@@ -33105,8 +33381,7 @@ function wireMixerUI(rack) {
       meterEntries.push({
         analyser,
         buf: new Float32Array(analyser.fftSize),
-        segs: strip.querySelectorAll('.vu__seg'),
-        lastLit: -1,
+        el: strip.querySelector('x-meter'),
       });
     }
     return strip;

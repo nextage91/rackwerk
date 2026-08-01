@@ -909,20 +909,9 @@ button {
   justify-content: center;
   gap: 6px;
 }
-
-/* Vertikales VU-Meter neben dem Fader — dieselben LED-Segmente wie am
-   Master-FX-Meter, nur gestapelt statt in einer Reihe. Füllt die volle
-   Fader-Höhe (durchgereicht von .chstrip__meters), damit alle Kanalzüge
-   nebeneinander denselben Fader-Weg haben, wie an einem echten Pult. */
-.chstrip__vu {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 2px;
-  height: 100%;
-  min-height: 0;
-  padding: 3px 0;
-}
-.chstrip__vu .vu__seg { width: 5px; height: auto; flex: 1 1 0; }
+/* <x-meter compact vertical> füllt hier die volle Fader-Höhe (via
+   is-vertical, s. components.css) -- alle Kanalzüge nebeneinander haben
+   damit denselben Fader-Weg, wie an einem echten Pult. */
 
 .chstrip__buttons {
   display: flex;

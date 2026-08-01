@@ -20,6 +20,7 @@ MODULES = [
     ("js/core/hints.js",        ["hintOnce", "showHintToast", "hintSeen", "markHintSeen"]),
     ("js/ui/knob.js",           ["XKnob"]),
     ("js/ui/fader.js",          ["XFader"]),
+    ("js/ui/meter.js",          ["XMeter", "computeLevels"]),
     ("js/vendor/qrcodegen.js",  ["qrcodegen"]),
     ("js/vendor/jsqr.js",       ["jsQR"]),
     ("js/ui/qr.js",             ["drawQR"]),
