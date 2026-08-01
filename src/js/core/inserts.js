@@ -16,6 +16,7 @@
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { noise } from './dsp.js';
+import { EQ8_ONEPOLE_WORKLET_SRC } from './eq8-onepole-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -438,6 +439,190 @@ const GEQ_Q = 1.41;
  *  "verfeinert" sich damit die Auflösung im leisen, gewünschten Bereich. */
 const HISS_MAX_GAIN = 0.014;
 
+/* ---------- eq8: Highpass/Lowpass mit wählbarer Flankensteilheit ----------
+ * Ein "Band" ist hier nicht mehr zwingend EIN Audio-Node: bei Highpass/
+ * Lowpass entscheidet die Flankensteilheit (b.slope) über 1-4 kaskadierte
+ * Teil-Nodes (echte 1-polige Stufen für 6dB/Okt-Anteile, native Biquads für
+ * 12dB/Okt-Anteile). Jeder Teil-Node wird als { kind, input, output, ... }
+ * gekapselt, damit build()/rebuildBand() sie generisch in Serie verketten
+ * können, ohne zwischen BiquadFilterNode/AudioWorkletNode (input===output
+ * ===node) unterscheiden zu müssen.
+ *
+ * Die 1-poligen Stufen laufen über einen AudioWorkletProcessor (s.
+ * eq8-onepole-worklet.js), NICHT über eine Gain/Delay-Rückkopplungs-
+ * schleife wie das ältere makeOnePoleLowpass() (genutzt für Reverb/
+ * Resonator-Damping): eine erste Version genau so gebaut wurde per echter
+ * Audio-Messung als UNGENAU entlarvt -- die Web-Audio-Spec verlangt für
+ * jeden ZYKLUS im Graphen mindestens ein volles Render-Quantum (128
+ * Samples) Verzögerung, eine "1-Sample"-DelayNode in einer Rückkopplungs-
+ * schleife bekommt also effektiv ~128 statt 1 Sample Verzögerung, was die
+ * tatsächliche Grenzfrequenz um denselben Faktor verschiebt (gemessen: ein
+ * auf 4000Hz gestellter "Tiefpass" dämpfte bereits deutlich bei 100Hz).
+ * Ein Worklet rechnet die Rekursion dagegen sample-für-sample im eigenen
+ * JS-Code -- kein Zyklus im nativen Graphen, keine Quantum-Latenz. */
+
+/** Für peaking/lowshelf/highshelf ist Gain=0 die neutrale "aus"-Stellung
+ *  (s. bisheriger Kommentar bei DEFS.eq8) -- das gilt NICHT für Highpass/
+ *  Lowpass, deren `gain`-Parameter laut Web-Audio-Spec bei diesen Typen
+ *  gar keine Wirkung hat (ein inaktives Band würde also unverändert
+ *  weiterfiltern). Neutrale Stellung ist hier stattdessen eine Grenz-
+ *  frequenz am Rand des Hörbereichs -- praktisch nicht von echtem Bypass
+ *  zu unterscheiden. Peaking/Shelf-Bänder bleiben unverändert (eigener
+ *  Ast in setEq8BandParams unten), diese Funktion gilt nur für die
+ *  Frequenz von Highpass/Lowpass-Bändern. */
+function eq8EffectiveFreq(b) {
+  if (b.active) return b.freq;
+  if (b.type === 'lowpass') return 20000;
+  if (b.type === 'highpass') return 20;
+  return b.freq;
+}
+
+function eq8WrapBiquad(node) { return { kind: 'biquad', node, input: node, output: node }; }
+
+function eq8MakeBiquad(ctx, type, freq, q) {
+  const node = ctx.createBiquadFilter();
+  node.type = type;
+  node.frequency.value = freq;
+  node.Q.value = q;
+  return node;
+}
+
+/** Lädt das 1-Pol-Worklet-Modul GENAU EINMAL fürs App-weite AudioContext-
+ *  Singleton (gleiches Muster wie machines/acidbass.js#ensureAcidBassWorklet).
+ *  `eq8OnePoleReady` erlaubt eq8BuildBandNodes() eine SYNCHRONE Entscheidung
+ *  (build() selbst ist synchron, ein await ist dort nicht möglich) -- vor
+ *  dem ersten Laden (nur beim allerersten eq8 der Session, danach gecacht)
+ *  bekommt eine 6/18dB/Okt-Stufe übergangsweise einen transparenten
+ *  Platzhalter (s. eq8MakeOnePoleStage), der Aufrufer stösst den echten
+ *  Ersatz per rebuildOnceReady an, sobald das Modul geladen ist. */
+let eq8WorkletPromise = null;
+let eq8OnePoleReady = false;
+function eq8EnsureOnePoleWorklet(ctx) {
+  if (!eq8WorkletPromise) {
+    if (!ctx.audioWorklet) {
+      eq8WorkletPromise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([EQ8_ONEPOLE_WORKLET_SRC], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      eq8WorkletPromise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); eq8OnePoleReady = true; return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error('eq8: 1-Pol-Worklet-Modul konnte nicht geladen werden -- 6/18dB/Okt-Flanken bleiben transparent.', err);
+          return false;
+        });
+    }
+  }
+  return eq8WorkletPromise;
+}
+
+/** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil). Solange das Worklet-
+ *  Modul noch lädt (praktisch nur für den allerersten eq8 einer Session
+ *  möglich), bleibt die Stufe ein transparenter Platzhalter -- sobald das
+ *  Modul bereitsteht, ruft `rebuildOnceReady` (übergeben von build()/
+ *  rebuildBand) genau diese Band-Position neu auf, was dann den echten
+ *  Worklet-Node einsetzt. */
+function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
+  if (eq8OnePoleReady) {
+    const node = new AudioWorkletNode(ctx, 'rackwerk-eq8-onepole', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: { highpass },
+    });
+    node.parameters.get('cutoff').value = freq;
+    return { kind: 'onepoleWorklet', node, input: node, output: node };
+  }
+  eq8EnsureOnePoleWorklet(ctx).then((ok) => { if (ok) rebuildOnceReady(); });
+  const node = ctx.createGain();
+  return { kind: 'passthrough', node, input: node, output: node };
+}
+
+/** Baut die 1-4 Teil-Nodes EINES logischen Bandes, abhängig von Typ und
+ *  (bei Highpass/Lowpass) Flankensteilheit. Peaking/Shelf ist immer genau
+ *  ein Biquad (unverändert). `rebuildOnceReady` s. eq8MakeOnePoleStage. */
+function eq8BuildBandNodes(ctx, b, rebuildOnceReady) {
+  if (b.type === 'highpass' || b.type === 'lowpass') {
+    const freq = eq8EffectiveFreq(b);
+    const slope = b.slope ?? 12;
+    const highpass = b.type === 'highpass';
+    if (slope === 6) {
+      return [eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
+    }
+    if (slope === 18) {
+      const biquad = eq8MakeBiquad(ctx, b.type, freq, b.q);
+      return [eq8WrapBiquad(biquad), eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
+    }
+    if (slope === 48 && highpass) {
+      // Brickwall: 4 kaskadierte Biquads = 8-polig = -48dB/Okt (Nutzer-
+      // Vorgabe, bewusst nur für Highpass, s. EQ_SLOPES-Kommentar).
+      return Array.from({ length: 4 }, () => eq8WrapBiquad(eq8MakeBiquad(ctx, 'highpass', freq, b.q)));
+    }
+    // Default/Fallback: 12dB/Okt, ein einzelner nativer Biquad (identisch
+    // zum bisherigen Alleinstellungsfall).
+    return [eq8WrapBiquad(eq8MakeBiquad(ctx, b.type, freq, b.q))];
+  }
+  // peaking / lowshelf / highshelf -- unverändert, immer ein Biquad.
+  const node = eq8MakeBiquad(ctx, b.type, b.freq, b.q);
+  node.gain.value = b.active ? b.gain : 0;
+  return [eq8WrapBiquad(node)];
+}
+
+function eq8DisposeSub(s) {
+  if (s.kind === 'onepoleWorklet') s.node.port?.close?.();
+  s.node.disconnect();
+}
+
+/** Schreibt freq/Q (und bei peaking/shelf: gain) aller Teil-Nodes EINES
+ *  Bandes neu -- für reine Parameteränderungen (freq/gain/q/active), die
+ *  KEINEN Neuaufbau brauchen (Node-Anzahl bleibt gleich). Q gilt für ALLE
+ *  Biquad-Teil-Nodes eines Bandes gemeinsam (ein mehrpoliges resonantes
+ *  Filter wie eine Analog-Filter-Leiter teilt sich ebenfalls eine
+ *  Resonanz über alle Stufen) -- die 1-poligen Worklet-Stufen (und der
+ *  transparente Platzhalter, solange das Modul noch lädt) haben kein
+ *  Q-Konzept (physikalisch: ein 1-Pol-Filter kann nicht resonieren) und
+ *  werden hier einfach übersprungen. */
+function eq8ApplyBandParams(subs, b) {
+  const freq = (b.type === 'highpass' || b.type === 'lowpass') ? eq8EffectiveFreq(b) : b.freq;
+  for (const s of subs) {
+    if (s.kind === 'biquad') {
+      s.node.frequency.setTargetAtTime(freq, engine.now, 0.01);
+      s.node.Q.setTargetAtTime(b.q, engine.now, 0.01);
+    } else if (s.kind === 'onepoleWorklet') {
+      s.node.parameters.get('cutoff').setTargetAtTime(freq, engine.now, 0.01);
+    }
+    // 'passthrough' (Worklet lädt noch): ignoriert freq, hat nichts zu tun.
+  }
+  if (b.type === 'peaking' || b.type === 'lowshelf' || b.type === 'highshelf') {
+    subs[0].node.gain.setTargetAtTime(b.active ? b.gain : 0, engine.now, 0.01);
+  }
+}
+
+/** Betragsfrequenzgang (dB) einer 1-poligen Worklet-Stufe bei freqHz --
+ *  kein natives getFrequencyResponse() für einen AudioWorkletNode
+ *  vorhanden, deshalb direkt aus der bekannten Übertragungsfunktion
+ *  berechnet -- DIESELBEN Koeffizientenformeln wie im Worklet selbst
+ *  (eq8-onepole-worklet.js) bzw. machines/acidbass-worklet.js#OnePole:
+ *  Tiefpass H(z)=(1-a)/(1-a·z⁻¹); Hochpass H(z)=k·(1-z⁻¹)/(1-a·z⁻¹) mit
+ *  k=0.5·(1+a), a=exp(-2π·fc/fs). */
+function eq8OnePoleResponseDb(freqHz, cutoffHz, sampleRate, highpass) {
+  const a = Math.exp((-2 * Math.PI * cutoffHz) / sampleRate);
+  const w = (2 * Math.PI * freqHz) / sampleRate;
+  const cw = Math.cos(w), sw = Math.sin(w);
+  const denomRe = 1 - a * cw, denomIm = a * sw;
+  const denomMagSq = denomRe * denomRe + denomIm * denomIm;
+  let numMagSq;
+  if (!highpass) {
+    const numMag = 1 - a;
+    numMagSq = numMag * numMag;
+  } else {
+    const k = 0.5 * (1 + a);
+    const numRe = k * (1 - cw), numIm = k * sw;
+    numMagSq = numRe * numRe + numIm * numIm;
+  }
+  return 10 * Math.log10(Math.max(1e-12, numMagSq / denomMagSq));
+}
+
 const DEFS = {
   comp: {
     name: 'Compressor',
@@ -546,67 +731,120 @@ const DEFS = {
   eq8: {
     name: '8-Band EQ',
     // 8 feste Bänder (anders als 'eq' oben) -- touch-bedienbares Pendant zu
-    // EQ8/Pro-Q. Ein inaktives Band bleibt fest in der Kette (kein
-    // Umverkabeln beim An-/Ausschalten), wird aber lautlos auf neutral
-    // (Gain 0) gezwungen -- für peaking/lowshelf/highshelf ist Gain 0 in
-    // jedem Fall die neutrale, unhörbare Stellung. Deshalb bewusst nur
-    // diese drei Typen (kein High-/Lowcut, das wäre bei Gain 0 nicht neutral).
+    // EQ8/Pro-Q. Ein inaktives peaking/shelf-Band bleibt fest in der Kette
+    // (kein Umverkabeln beim An-/Ausschalten), wird aber lautlos auf
+    // neutral (Gain 0) gezwungen. Highpass/Lowpass-Bänder (s. EQ_TYPES)
+    // haben dagegen keinen Gain-Parameter, der bei diesen Typen überhaupt
+    // etwas bewirkt (Web-Audio-Spec) -- ihre neutrale Stellung ist
+    // stattdessen eine Grenzfrequenz am Rand des Hörbereichs, s.
+    // eq8EffectiveFreq() oben. gainRange ist reiner UI-Zustand (welcher
+    // dB-Ausschnitt gerade angezeigt/gezogen wird), berührt keinen
+    // Audio-Node.
     defaults: {
-      bands: Array.from({ length: 8 }, () => ({ active: false, type: 'peaking', freq: 1000, gain: 0, q: 1 })),
+      bands: Array.from({ length: 8 }, () => ({ active: false, type: 'peaking', freq: 1000, gain: 0, q: 1, slope: 12 })),
+      gainRange: 18,
     },
     build(ctx, p) {
-      const nodes = p.bands.map((b) => {
-        const node = ctx.createBiquadFilter();
-        node.type = b.type;
-        node.frequency.value = b.freq;
-        node.gain.value = b.active ? b.gain : 0;
-        node.Q.value = b.q;
-        return node;
-      });
-      for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]);
+      // Stabile Anker-Nodes: input/output dieses Objekts bleiben IMMER
+      // dieselbe Node-Referenz, auch wenn Band 0 oder Band 7 durch einen
+      // Flankensteilheit-/Typ-Wechsel intern komplett neu aufgebaut wird
+      // (s. rebuildBand) -- sonst hinge createInsert()s äusserer Dry/Wet-
+      // Wrapper irgendwann an einer bereits entsorgten toten Node.
+      const headIn = ctx.createGain();
+      const tailOut = ctx.createGain();
+      const bandNodes = p.bands.map((b, i) => eq8BuildBandNodes(ctx, b, () => rebuildBand(i)));
+      let prevOut = headIn;
+      for (const subs of bandNodes) {
+        prevOut.connect(subs[0].input);
+        for (let k = 0; k < subs.length - 1; k++) subs[k].output.connect(subs[k + 1].input);
+        prevOut = subs[subs.length - 1].output;
+      }
+      prevOut.connect(tailOut);
+
+      /** Baut die Teil-Nodes EINES Bandes komplett neu (Typ- oder
+       *  Flankensteilheit-Wechsel -- die Anzahl Teil-Nodes kann sich
+       *  ändern). Trennt die alte Kette exakt an den drei Stellen, an
+       *  denen sie mit dem Rest verbunden war (Vorgänger→erste Teil-Node,
+       *  intern zwischen den Teil-Nodes, letzte Teil-Node→Nachfolger),
+       *  entsorgt die alten Nodes, verkabelt die neuen an derselben
+       *  Stelle. Reine Parameteränderungen (freq/gain/q/active) laufen
+       *  NICHT hier durch, s. eq8ApplyBandParams(). */
+      function rebuildBand(i) {
+        const oldSubs = bandNodes[i];
+        const prevN = i === 0 ? headIn : bandNodes[i - 1][bandNodes[i - 1].length - 1].output;
+        const nextN = i === bandNodes.length - 1 ? tailOut : bandNodes[i + 1][0].input;
+
+        prevN.disconnect(oldSubs[0].input);
+        for (let k = 0; k < oldSubs.length - 1; k++) oldSubs[k].output.disconnect(oldSubs[k + 1].input);
+        oldSubs[oldSubs.length - 1].output.disconnect(nextN);
+        oldSubs.forEach(eq8DisposeSub);
+
+        const newSubs = eq8BuildBandNodes(ctx, p.bands[i], () => rebuildBand(i));
+        prevN.connect(newSubs[0].input);
+        for (let k = 0; k < newSubs.length - 1; k++) newSubs[k].output.connect(newSubs[k + 1].input);
+        newSubs[newSubs.length - 1].output.connect(nextN);
+        bandNodes[i] = newSubs;
+      }
 
       return {
-        input: nodes[0],
-        output: nodes[nodes.length - 1],
+        input: headIn,
+        output: tailOut,
         // Der generische Insert-Wrapper kennt nur ein flaches key/value-
         // setParam -- passt nicht auf "ein Feld eines von 8 Bändern".
-        // setBand/getEq8Response sind bewusst zusätzliche, eq8-eigene
-        // Methoden (gleiches Muster wie getReductionDb beim Compressor),
-        // die createInsert() unten optional durchreicht. p.bands wird
-        // von der UI direkt mutiert (dieselbe Referenz wie insert.params.
-        // bands), setBand liest daraus nur den aktuellen Wert und schreibt
-        // ihn an den echten Audio-Node.
-        setParam() {}, // eq8 läuft komplett über setBand, s. oben
+        // setBand/getEq8Response/setGainRange sind bewusst zusätzliche,
+        // eq8-eigene Methoden (gleiches Muster wie getReductionDb beim
+        // Compressor), die createInsert() unten optional durchreicht.
+        // p.bands wird von der UI direkt mutiert (dieselbe Referenz wie
+        // insert.params.bands), setBand liest daraus nur den aktuellen
+        // Wert und schreibt ihn an die echten Audio-Nodes.
+        setParam() {}, // eq8 läuft komplett über setBand/setGainRange, s. oben
         setBand(i, field) {
           const b = p.bands[i];
-          const node = nodes[i];
-          if (!node) return;
-          if (field === 'type') node.type = b.type;
-          else if (field === 'freq') node.frequency.setTargetAtTime(b.freq, engine.now, 0.01);
-          else if (field === 'gain' || field === 'active') {
-            node.gain.setTargetAtTime(b.active ? b.gain : 0, engine.now, 0.01);
-          } else if (field === 'q') node.Q.setTargetAtTime(b.q, engine.now, 0.01);
+          if (!bandNodes[i]) return;
+          if (field === 'type' || field === 'slope') rebuildBand(i);
+          else eq8ApplyBandParams(bandNodes[i], b);
         },
+        // Reine Anzeige-/Zieh-Skalierung des Touch-Graphen -- kein Audio-
+        // Node betroffen, der Gain-WERT jedes Bandes bleibt unverändert.
+        setGainRange(v) { p.gainRange = v; },
         /** Summierte dB-Antwort aller AKTIVEN Bänder über freqArray (Hz) --
-         *  echte Berechnung über das native getFrequencyResponse() jedes
-         *  Bandes statt einer geschätzten Silhouette (s. machine.js#
+         *  echte Berechnung statt einer geschätzten Silhouette (s. machine.js#
          *  eqCurvePath für den Einzelband-EQ). dB-Werte addieren sich für
          *  in Serie geschaltete Filter korrekt (Amplituden multiplizieren
-         *  sich, log(a*b) = log(a)+log(b)). */
+         *  sich, log(a*b) = log(a)+log(b)) -- gilt unverändert, egal ob ein
+         *  Band aus einem oder mehreren kaskadierten Teil-Nodes besteht. */
         getEq8Response(freqArray) {
           const mag = new Float32Array(freqArray.length);
           const phase = new Float32Array(freqArray.length);
           const totalDb = new Float32Array(freqArray.length);
-          for (let i = 0; i < nodes.length; i++) {
-            if (!p.bands[i].active) continue;
-            nodes[i].getFrequencyResponse(freqArray, mag, phase);
-            for (let j = 0; j < freqArray.length; j++) {
-              totalDb[j] += 20 * Math.log10(Math.max(1e-6, mag[j]));
+          for (let i = 0; i < bandNodes.length; i++) {
+            const b = p.bands[i];
+            if (!b.active) continue;
+            const freq = (b.type === 'highpass' || b.type === 'lowpass') ? eq8EffectiveFreq(b) : b.freq;
+            for (const s of bandNodes[i]) {
+              if (s.kind === 'biquad') {
+                s.node.getFrequencyResponse(freqArray, mag, phase);
+                for (let j = 0; j < freqArray.length; j++) {
+                  totalDb[j] += 20 * Math.log10(Math.max(1e-6, mag[j]));
+                }
+              } else if (s.kind === 'onepoleWorklet') {
+                const highpass = b.type === 'highpass';
+                for (let j = 0; j < freqArray.length; j++) {
+                  totalDb[j] += eq8OnePoleResponseDb(freqArray[j], freq, ctx.sampleRate, highpass);
+                }
+              }
+              // 'passthrough' (Worklet lädt noch): trägt 0dB bei, wird
+              // übersprungen -- die 1-Pol-Formel würde hier eine falsche
+              // Kurvenform vorgaukeln, obwohl der Node aktuell transparent ist.
             }
           }
           return totalDb;
         },
-        dispose() { nodes.forEach((n) => n.disconnect()); },
+        dispose() {
+          headIn.disconnect();
+          tailOut.disconnect();
+          bandNodes.forEach((subs) => subs.forEach(eq8DisposeSub));
+        },
       };
     },
   },
@@ -1754,7 +1992,30 @@ export const EQ_TYPES = [
   { value: 'lowshelf', label: 'Low Shelf' },
   { value: 'peaking', label: 'Peak' },
   { value: 'highshelf', label: 'High Shelf' },
+  { value: 'highpass', label: 'High Pass' },
+  { value: 'lowpass', label: 'Low Pass' },
 ];
+
+/** Flankensteilheit für eq8s Highpass/Lowpass-Bänder (s. DEFS.eq8) --
+ *  eigene Auswahl, weil Steilheit orthogonal zum Typ ist (dieselben vier
+ *  Werte gelten für Highpass UND Lowpass, bis auf Brickwall). 6/12/18
+ *  entsprechen 1/2/3 kaskadierten Polen (s. buildEq8BandNodes), 48
+ *  ("Brickwall") vier kaskadierten Biquads (8-polig) -- bewusst nur für
+ *  Highpass angeboten (Nutzer-Anfrage: tiefe Frequenzen/Rumpeln radikal
+ *  wegschneiden ist der übliche Brickwall-Anwendungsfall, ein Brickwall-
+ *  Lowpass war explizit nicht gewünscht). */
+export const EQ_SLOPES = [
+  { value: 6, label: '-6 dB/Okt' },
+  { value: 12, label: '-12 dB/Okt' },
+  { value: 18, label: '-18 dB/Okt' },
+  { value: 48, label: 'Brickwall', highpassOnly: true },
+];
+
+/** Wählbare Zoomstufen für eq8s Gain-Achse (s. DEFS.eq8.defaults.gainRange) --
+ *  ±dB, symmetrisch. Ersetzt den früher festen ±24dB-Bereich: derselbe
+ *  Ziehweg auf dem Touch-Graphen bildet bei kleinerer Zoomstufe einen
+ *  kleineren dB-Bereich ab, also mehr Auflösung für feine Anpassungen. */
+export const EQ8_GAIN_RANGES = [3, 6, 12, 18];
 
 /** Filter-Delay-Filtertyp ist ebenfalls ein Enum, kein Knob. */
 export const FILTER_DELAY_TYPES = [
@@ -1884,6 +2145,7 @@ export function createInsert(type, saved = null) {
     // Nur beim 8-Band-EQ vorhanden (s. dortigen Kommentar in DEFS.eq8).
     setBand: effect.setBand ? (i, field) => effect.setBand(i, field) : undefined,
     getEq8Response: effect.getEq8Response ? (freqArray) => effect.getEq8Response(freqArray) : undefined,
+    setGainRange: effect.setGainRange ? (v) => effect.setGainRange(v) : undefined,
     // Nur beim Resonator vorhanden (s. dortigen Kommentar in DEFS.resonator).
     setBandTune: effect.setBandTune ? (i, semitones) => effect.setBandTune(i, semitones) : undefined,
     // Nur beim Graphic EQ vorhanden (s. dortigen Kommentar in DEFS.geq).

@@ -18,7 +18,7 @@
  *   owner.removeInsert(id)
  */
 import { automation } from '../core/automation.js';
-import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
+import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -78,7 +78,7 @@ function eqCurvePath(type, freq, gain, q) {
  * BEIDSEITIG genutzt -- zum Zeichnen der Knoten/Kurve UND zum Zurückrechnen
  * von Zeigerkoordinaten auf Freq/Gain beim Ziehen (s. setupEq8Graph). */
 const EQ8_FREQ_MIN = 20, EQ8_FREQ_MAX = 20000;
-const EQ8_GAIN_RANGE = 24; // dB, symmetrisch +/- -- wie UI_PARAMS.eq.gain
+const EQ8_GAIN_RANGE_DEFAULT = 18; // dB, symmetrisch +/- -- Fallback für alte Projekte ohne insert.params.gainRange
 const EQ8_Q_MIN = 0.1, EQ8_Q_MAX = 10; // wie UI_PARAMS.eq.q
 const EQ8_W = 300, EQ8_H = 150, EQ8_MIDY = EQ8_H / 2;
 
@@ -90,26 +90,35 @@ function eq8XToFreq(x) {
   const n = Math.max(0, Math.min(1, x / EQ8_W));
   return EQ8_FREQ_MIN * (EQ8_FREQ_MAX / EQ8_FREQ_MIN) ** n;
 }
-function eq8GainToY(gain) {
-  const n = Math.max(-EQ8_GAIN_RANGE, Math.min(EQ8_GAIN_RANGE, gain)) / EQ8_GAIN_RANGE;
+/** `range` ist die aktuell gewählte Zoomstufe (insert.params.gainRange,
+ *  s. EQ8_GAIN_RANGES) -- ersetzt die früher feste ±24dB-Konstante, damit
+ *  derselbe Ziehweg bei kleinerer Zoomstufe einen kleineren dB-Bereich
+ *  abbildet (mehr Auflösung für feine Anpassungen). */
+function eq8GainToY(gain, range) {
+  const n = Math.max(-range, Math.min(range, gain)) / range;
   return EQ8_MIDY - n * (EQ8_MIDY - 8);
 }
-function eq8YToGain(y) {
+function eq8YToGain(y, range) {
   const n = (EQ8_MIDY - y) / (EQ8_MIDY - 8);
-  return Math.max(-EQ8_GAIN_RANGE, Math.min(EQ8_GAIN_RANGE, n * EQ8_GAIN_RANGE));
+  return Math.max(-range, Math.min(range, n * range));
 }
 
 /** Skalen-Hilfslinien wie bei Ableton EQ8/FabFilter Pro-Q: viele feine,
  *  unbeschriftete Frequenz-Gitterlinien, aber nur ein paar wenige BESCHRIFTETE
  *  Zehnerpotenzen -- auf Handybreite (~300-350px) wäre jede Terz beschriftet
- *  völlig überladen. dB-Linien alle 6dB, komplett beschriftet (nur 7 Werte). */
+ *  völlig überladen. dB-Linien bei ±100%/±66%/±33% der Zoomstufe, komplett
+ *  beschriftet (nur 7 Werte) -- bei range=18 ergibt das exakt die früheren
+ *  festen Werte -18/-12/-6/0/6/12/18. */
 const EQ8_FREQ_GRID = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
 const EQ8_FREQ_TICKS = [
   { hz: 100, label: '100' },
   { hz: 1000, label: '1k' },
   { hz: 10000, label: '10k' },
 ];
-const EQ8_DB_TICKS = [-18, -12, -6, 0, 6, 12, 18];
+function eq8DbTicks(range) {
+  return [-range, -range * 2 / 3, -range / 3, 0, range / 3, range * 2 / 3, range];
+}
+const eq8GainRangeOf = (insert) => insert.params.gainRange ?? EQ8_GAIN_RANGE_DEFAULT;
 
 /** Feste, log-verteilte Stützstellen für getFrequencyResponse() -- einmal
  *  berechnet (modulweit, unabhängig von einzelnen Insert-Instanzen, da rein
@@ -129,10 +138,11 @@ function eq8CurvePath(insert) {
   const freqs = getEq8FreqSamples();
   const db = insert.getEq8Response?.(freqs);
   if (!db) return `M0,${EQ8_MIDY} L${EQ8_W},${EQ8_MIDY}`;
+  const range = eq8GainRangeOf(insert);
   let d = '';
   for (let i = 0; i < freqs.length; i++) {
     const x = (i / (freqs.length - 1)) * EQ8_W;
-    const y = eq8GainToY(db[i]);
+    const y = eq8GainToY(db[i], range);
     d += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
   }
   return d.trim();
@@ -206,38 +216,71 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
   const b = insert.params.bands[i];
   eq8Menu = document.createElement('div');
   eq8Menu.className = 'pat-chip';
+  document.body.appendChild(eq8Menu);
 
-  for (const t of EQ_TYPES) {
-    const btn = document.createElement('button');
-    btn.className = `pat-chip__btn${b.type === t.value ? ' is-active' : ''}`;
-    btn.textContent = t.label;
-    btn.addEventListener('click', () => {
-      b.type = t.value;
-      insert.setBand(i, 'type');
+  const position = () => {
+    const left = Math.max(8, Math.min(window.innerWidth - eq8Menu.offsetWidth - 8, clientX - eq8Menu.offsetWidth / 2));
+    eq8Menu.style.left = `${left}px`;
+    eq8Menu.style.top = `${Math.max(8, clientY - eq8Menu.offsetHeight - 16)}px`;
+  };
+
+  // Neu aufgebaut statt einmalig gerendert: die Flankensteilheit-Reihe
+  // erscheint erst NACHDEM Highpass/Lowpass gewählt wurde (orthogonal zum
+  // Typ, ergibt vorher keinen Sinn) -- ein Tap auf Highpass/Lowpass soll
+  // die Reihe direkt im selben Menü aufklappen, statt das Menü zu
+  // schliessen und ein zweites Mal Halten nötig zu machen.
+  const rebuild = () => {
+    eq8Menu.innerHTML = '';
+    const isCutType = b.type === 'highpass' || b.type === 'lowpass';
+
+    for (const t of EQ_TYPES) {
+      const btn = document.createElement('button');
+      btn.className = `pat-chip__btn${b.type === t.value ? ' is-active' : ''}`;
+      btn.textContent = t.label;
+      btn.addEventListener('click', () => {
+        b.type = t.value;
+        insert.setBand(i, 'type');
+        onChange();
+        if (b.type === 'highpass' || b.type === 'lowpass') { rebuild(); position(); }
+        else dismissEq8Menu();
+      });
+      eq8Menu.appendChild(btn);
+    }
+
+    if (isCutType) {
+      for (const s of EQ_SLOPES) {
+        if (s.highpassOnly && b.type !== 'highpass') continue; // Brickwall nur Highpass
+        const btn = document.createElement('button');
+        btn.className = `pat-chip__btn${(b.slope ?? 12) === s.value ? ' is-active' : ''}`;
+        btn.textContent = s.label;
+        btn.addEventListener('click', () => {
+          b.slope = s.value;
+          insert.setBand(i, 'slope');
+          onChange();
+          dismissEq8Menu();
+        });
+        eq8Menu.appendChild(btn);
+      }
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'pat-chip__btn pat-chip__btn--danger';
+    removeBtn.textContent = '🗑 Remove';
+    removeBtn.addEventListener('click', () => {
+      b.active = false;
+      insert.setBand(i, 'active');
       onChange();
       dismissEq8Menu();
     });
-    eq8Menu.appendChild(btn);
-  }
+    eq8Menu.appendChild(removeBtn);
 
-  const removeBtn = document.createElement('button');
-  removeBtn.className = 'pat-chip__btn pat-chip__btn--danger';
-  removeBtn.textContent = '🗑 Remove';
-  removeBtn.addEventListener('click', () => {
-    b.active = false;
-    insert.setBand(i, 'active');
-    onChange();
-    dismissEq8Menu();
-  });
-  eq8Menu.appendChild(removeBtn);
+    clearTimeout(eq8Menu.dismissTimer);
+    eq8Menu.dismissTimer = setTimeout(dismissEq8Menu, 6000);
+  };
 
-  document.body.appendChild(eq8Menu);
-  const left = Math.max(8, Math.min(window.innerWidth - eq8Menu.offsetWidth - 8, clientX - eq8Menu.offsetWidth / 2));
-  eq8Menu.style.left = `${left}px`;
-  eq8Menu.style.top = `${Math.max(8, clientY - eq8Menu.offsetHeight - 16)}px`;
+  rebuild();
+  position();
   setTimeout(() => document.addEventListener('pointerdown', onOutsideEq8Menu, true), 0);
-  clearTimeout(eq8Menu.dismissTimer);
-  eq8Menu.dismissTimer = setTimeout(dismissEq8Menu, 6000);
 }
 
 /**
@@ -277,6 +320,13 @@ function setupEq8Graph(row, insert) {
     };
   };
 
+  // Liest insert.params.gainRange bei JEDEM Aufruf frisch (statt einmalig
+  // zu cachen) -- die Zoomstufe kann sich während der Lebensdauer dieses
+  // Graphen ändern (Zoom-Buttons, s. bodyHtml unten), ohne dass die Zeile
+  // dafür komplett neu gerendert wird.
+  const gainToY = (g) => eq8GainToY(g, eq8GainRangeOf(insert));
+  const yToGain = (y) => eq8YToGain(y, eq8GainRangeOf(insert));
+
   // Nur AKTIVE Bänder zählen als "vorhandener Knoten" -- inaktive Bänder
   // haben (noch) keinen sichtbaren Punkt (s. redraw()) und teilen sich
   // ausserdem alle denselben Default (freq 1000/gain 0). Würden sie hier
@@ -289,7 +339,7 @@ function setupEq8Graph(row, insert) {
     let best = -1, bestDist = maxDist;
     insert.params.bands.forEach((b, i) => {
       if (!b.active) return;
-      const d = Math.hypot(eq8FreqToX(b.freq) - x, eq8GainToY(b.gain) - y);
+      const d = Math.hypot(eq8FreqToX(b.freq) - x, gainToY(b.gain) - y);
       if (d < bestDist) { bestDist = d; best = i; }
     });
     return best;
@@ -315,7 +365,7 @@ function setupEq8Graph(row, insert) {
           svg.appendChild(el);
         }
         el.setAttribute('cx', eq8FreqToX(b.freq));
-        el.setAttribute('cy', eq8GainToY(b.gain));
+        el.setAttribute('cy', gainToY(b.gain));
         el.setAttribute('r', i === selectedBand ? 9 : 7);
         el.classList.toggle('is-selected', i === selectedBand);
       } else if (el) {
@@ -327,6 +377,27 @@ function setupEq8Graph(row, insert) {
   const redraw = () => {
     curvePath.setAttribute('d', eq8CurvePath(insert));
     syncNodes();
+  };
+
+  // Nur beim Wechsel der Gain-Zoomstufe nötig -- Gitterlinien/Achsen-
+  // beschriftung der dB-Achse hängen (anders als Kurve/Knoten, s. redraw()
+  // oben) an einer FESTEN Werte-Liste (eq8DbTicks), die sich nur bei einem
+  // Zoom-Wechsel ändert, nicht bei jedem Drag-Frame -- deshalb bewusst eine
+  // eigene, seltener aufgerufene Funktion statt Teil von redraw().
+  const redrawAxes = () => {
+    const range = eq8GainRangeOf(insert);
+    const ticks = eq8DbTicks(range);
+    graph.querySelectorAll('.eq8__grid--db').forEach((line, idx) => {
+      const y = gainToY(ticks[idx]).toFixed(1);
+      line.setAttribute('y1', y);
+      line.setAttribute('y2', y);
+      line.classList.toggle('eq8__grid--zero', ticks[idx] === 0);
+    });
+    graph.querySelectorAll('.eq8__label--y').forEach((label, idx) => {
+      const db = ticks[idx];
+      label.style.top = `${(gainToY(db) / EQ8_H * 100).toFixed(2)}%`;
+      label.textContent = db > 0 ? `+${Math.round(db)}` : `${Math.round(db)}`;
+    });
   };
   // setBand() ramp die echten Audio-Parameter sanft an (setTargetAtTime,
   // Klick-Vermeidung bei schnellen Touch-Änderungen) -- die Kurve liest
@@ -440,7 +511,7 @@ function setupEq8Graph(row, insert) {
       if (moved) {
         const b = insert.params.bands[dragNode];
         b.freq = eq8XToFreq(pos.x);
-        b.gain = eq8YToGain(pos.y);
+        b.gain = yToGain(pos.y);
         insert.setBand(dragNode, 'freq');
         insert.setBand(dragNode, 'gain');
         redrawSettled();
@@ -490,7 +561,7 @@ function setupEq8Graph(row, insert) {
           if (emptyIdx >= 0) {
             const b = insert.params.bands[emptyIdx];
             b.freq = eq8XToFreq(downPos.x);
-            b.gain = eq8YToGain(downPos.y);
+            b.gain = yToGain(downPos.y);
             b.active = true;
             insert.setBand(emptyIdx, 'active');
             insert.setBand(emptyIdx, 'freq');
@@ -517,6 +588,24 @@ function setupEq8Graph(row, insert) {
   };
   graph.addEventListener('pointerup', onUp);
   graph.addEventListener('pointercancel', onUp);
+
+  // Gain-Zoom-Buttons -- ändert nur, welcher dB-Ausschnitt gezeigt/gezogen
+  // wird (s. eq8GainRangeOf), keine Neuverkabelung nötig. Alle Buttons neu
+  // rendern statt nur is-active umzuschalten, weil sich beim Wechsel auch
+  // die Zahlen selbst ändern (±3/±6/±12/±18 zeigen unterschiedliche
+  // Zwischenwerte, s. eq8DbTicks) -- reicht aber, nur die Zoom-Zeile neu
+  // aufzubauen statt der ganzen Insert-Zeile.
+  const zoomRow = row.querySelector('[data-eq8-zoom]');
+  zoomRow?.querySelectorAll('[data-eq8-zoom-value]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      insert.setGainRange(Number(btn.dataset.eq8ZoomValue));
+      zoomRow.querySelectorAll('[data-eq8-zoom-value]').forEach((b) => {
+        b.classList.toggle('is-active', Number(b.dataset.eq8ZoomValue) === insert.params.gainRange);
+      });
+      redrawAxes();
+      redraw();
+    });
+  });
 }
 
 /** Eine einzige, wiederverwendete Sheet-Instanz für "+ Insert Effect" —
@@ -705,23 +794,28 @@ export function renderInsertChain(listEl, owner) {
       // wird nach dem Rendern von setupEq8Graph() imperativ bespielt,
       // damit ein Drag NICHT bei jedem Frame ein komplettes innerHTML-
       // Neubauen auslöst (s. Kommentar über renderInsertChain()).
+      const eq8Range = eq8GainRangeOf(insert);
+      const eq8Ticks = eq8DbTicks(eq8Range);
       bodyHtml = `
         <div class="eq8__graph" data-eq8-graph>
           <svg viewBox="0 0 ${EQ8_W} ${EQ8_H}" class="eq8__svg" preserveAspectRatio="none">
             ${EQ8_FREQ_GRID.map((f) => `<line x1="${eq8FreqToX(f).toFixed(1)}" y1="0" x2="${eq8FreqToX(f).toFixed(1)}" y2="${EQ8_H}" class="eq8__grid"></line>`).join('')}
-            ${EQ8_DB_TICKS.map((db) => `<line x1="0" y1="${eq8GainToY(db).toFixed(1)}" x2="${EQ8_W}" y2="${eq8GainToY(db).toFixed(1)}" class="eq8__grid${db === 0 ? ' eq8__grid--zero' : ''}"></line>`).join('')}
+            ${eq8Ticks.map((db) => `<line x1="0" y1="${eq8GainToY(db, eq8Range).toFixed(1)}" x2="${EQ8_W}" y2="${eq8GainToY(db, eq8Range).toFixed(1)}" class="eq8__grid eq8__grid--db${db === 0 ? ' eq8__grid--zero' : ''}"></line>`).join('')}
             <path class="eq8__curve" data-eq8-curve d="${eq8CurvePath(insert)}"></path>
             ${insert.params.bands.map((b, i) => (b.active ? `
               <circle class="eq8__node is-active" data-eq8-node="${i}"
-                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.gain)}" r="7"></circle>
+                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.gain, eq8Range)}" r="7"></circle>
             ` : '')).join('')}
           </svg>
           <div class="eq8__labels" aria-hidden="true">
             ${EQ8_FREQ_TICKS.map((t) => `<span class="eq8__label eq8__label--x" style="left:${(eq8FreqToX(t.hz) / EQ8_W * 100).toFixed(2)}%">${t.label}</span>`).join('')}
-            ${EQ8_DB_TICKS.map((db) => `<span class="eq8__label eq8__label--y" style="top:${(eq8GainToY(db) / EQ8_H * 100).toFixed(2)}%">${db > 0 ? `+${db}` : db}</span>`).join('')}
+            ${eq8Ticks.map((db) => `<span class="eq8__label eq8__label--y" style="top:${(eq8GainToY(db, eq8Range) / EQ8_H * 100).toFixed(2)}%">${db > 0 ? `+${Math.round(db)}` : Math.round(db)}</span>`).join('')}
           </div>
         </div>
-        <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/remove</p>
+        <div class="eq8__zoom" data-eq8-zoom aria-label="Gain-Zoom">
+          ${EQ8_GAIN_RANGES.map((r) => `<button type="button" class="pat-chip__btn${r === eq8Range ? ' is-active' : ''}" data-eq8-zoom-value="${r}">±${r}dB</button>`).join('')}
+        </div>
+        <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/slope/remove</p>
       `;
     } else {
       bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
