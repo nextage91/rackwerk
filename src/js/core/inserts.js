@@ -1860,6 +1860,13 @@ export function createInsert(type, saved = null) {
   effect.output.connect(wetGain);
   wetGain.connect(output);
 
+  // Analyser fürs Pegel-Meter der Insert-Zeile (s. ui/insert-chain.js) --
+  // tapt `output`, den einzigen, für JEDEN Insert-Typ gleich geformten
+  // Ausgangsknoten dieses Wrappers (unabhängig von internen Eigenheiten
+  // wie EQ8s Ketten-Biquads oder Reverb/Resonator-Feedback-Netzen).
+  // Lazy angelegt wie Machine#getMeterAnalyser, gleiche Begründung.
+  let meterAnalyser = null;
+
   const insert = {
     id,
     type,
@@ -1887,6 +1894,14 @@ export function createInsert(type, saved = null) {
       dryGain.gain.setTargetAtTime(b ? 1 : 0, t, 0.01);
       wetGain.gain.setTargetAtTime(b ? 0 : 1, t, 0.01);
     },
+    getMeterAnalyser() {
+      if (!meterAnalyser) {
+        meterAnalyser = ctx.createAnalyser();
+        meterAnalyser.fftSize = 512;
+        output.connect(meterAnalyser);
+      }
+      return meterAnalyser;
+    },
     serialize() {
       return { id, type, params: { ...params }, bypassed: insert.bypassed };
     },
@@ -1895,6 +1910,7 @@ export function createInsert(type, saved = null) {
       output.disconnect();
       dryGain.disconnect();
       wetGain.disconnect();
+      meterAnalyser?.disconnect();
       effect.dispose();
     },
   };

@@ -19,6 +19,7 @@
  */
 import { automation } from '../core/automation.js';
 import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
+import { computeLevels } from './meter.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
  *  getrennt vom kurzen DSP-Namen (insertMeta().name), der bleibt für den
@@ -163,6 +164,27 @@ function startCompMeter(row, insert) {
     const gr = Math.max(0, raw - restBaseline);
     const lit = Math.round(Math.min(1, gr / RANGE_DB) * segs.length);
     segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/** Pegel-Meter der Insert-Zeile -- anders als die GR-Anzeige oben für JEDEN
+ *  Insert-Typ (nicht nur Compressor/Opto/Limiter), da hier der reine Signal-
+ *  pegel gezeigt wird, nicht eine Kompressions-Kennzahl. Gleiches
+ *  Selbstbeendigungsmuster wie startCompMeter() (bricht ab, sobald die
+ *  Zeile aus dem DOM verschwindet). Analyser kommt von
+ *  insert.getMeterAnalyser() (s. core/inserts.js#createInsert), tapt den
+ *  für jeden Insert-Typ gleich geformten Wrapper-Ausgang. */
+function startLevelMeter(row, insert) {
+  const meterEl = row.querySelector('x-meter');
+  if (!meterEl || typeof insert.getMeterAnalyser !== 'function') return;
+  const analyser = insert.getMeterAnalyser();
+  const buf = new Float32Array(analyser.fftSize);
+  const tick = () => {
+    if (!row.isConnected) return;
+    const { rmsDb, peakDb } = computeLevels(analyser, buf);
+    meterEl.update(rmsDb, peakDb);
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -717,6 +739,7 @@ export function renderInsertChain(listEl, owner) {
               <div class="machine__type">${badge} · #${insert.id}</div>
             </span>
           </div>
+          <x-meter compact></x-meter>
           <div class="machine__head-actions">
             <button type="button" class="m-btn insert-row__move" data-move="-1" aria-label="Move up" ${idx === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="m-btn insert-row__move" data-move="1" aria-label="Move down" ${idx === owner.inserts.length - 1 ? 'disabled' : ''}>▼</button>
@@ -862,6 +885,7 @@ export function renderInsertChain(listEl, owner) {
       });
     }
     if (insert.type === 'comp' || insert.type === 'opto' || insert.type === 'limiter') startCompMeter(row, insert);
+    startLevelMeter(row, insert);
     if (insert.type === 'eq8') setupEq8Graph(row, insert);
   }
 }

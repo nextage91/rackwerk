@@ -3,6 +3,7 @@
  */
 import './ui/knob.js';                       // registriert <x-knob>
 import './ui/fader.js';                      // registriert <x-fader>
+import { computeLevels } from './ui/meter.js'; // registriert <x-meter>
 import { drawQR } from './ui/qr.js';
 import { jsQR } from './vendor/jsqr.js';
 import { engine } from './core/audio-engine.js';
@@ -859,21 +860,12 @@ function wireMixerUI(rack) {
 
   /* Ein gemeinsamer rAF-Ticker treibt alle sichtbaren VU-Meter — nur
      während der Mixer offen ist, sonst unnötige Dauerlast im Hintergrund. */
-  const FLOOR_DB = -45;
   let meterEntries = [];
   let meterRAF = null;
   const meterTick = () => {
     for (const m of meterEntries) {
-      m.analyser.getFloatTimeDomainData(m.buf);
-      let sum = 0;
-      for (let i = 0; i < m.buf.length; i++) sum += m.buf[i] ** 2;
-      const rms = Math.sqrt(sum / m.buf.length);
-      const db = 20 * Math.log10(Math.max(1e-6, rms));
-      const lit = Math.round(((Math.max(FLOOR_DB, Math.min(0, db)) - FLOOR_DB) / -FLOOR_DB) * m.segs.length);
-      if (lit !== m.lastLit) {
-        m.segs.forEach((s, i) => s.classList.toggle('is-lit', i < lit));
-        m.lastLit = lit;
-      }
+      const { rmsDb, peakDb } = computeLevels(m.analyser, m.buf);
+      m.el.update(rmsDb, peakDb);
     }
     meterRAF = requestAnimationFrame(meterTick);
   };
@@ -897,7 +889,7 @@ function wireMixerUI(rack) {
         <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>
       </div>
       <div class="chstrip__meters">
-        <div class="chstrip__vu" data-vu>${Array.from({ length: 12 }, () => '<span class="vu__seg"></span>').join('')}</div>
+        <x-meter compact vertical></x-meter>
         <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
       </div>
       ${withButtons ? `
@@ -928,8 +920,7 @@ function wireMixerUI(rack) {
       meterEntries.push({
         analyser,
         buf: new Float32Array(analyser.fftSize),
-        segs: strip.querySelectorAll('.vu__seg'),
-        lastLit: -1,
+        el: strip.querySelector('x-meter'),
       });
     }
     return strip;
