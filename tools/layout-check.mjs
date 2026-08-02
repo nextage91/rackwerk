@@ -35,6 +35,22 @@ for (const width of WIDTHS) {
   await page.goto(URL, { waitUntil: 'networkidle' });
   await page.click('#btn-unlock');
   await page.waitForTimeout(300);
+  const onboarding = page.locator('#onboarding-sheet [data-tut-skip]');
+  if (await onboarding.count()) await onboarding.first().click();
+  await page.waitForTimeout(200);
+
+  // Vollbild-Maschinen-Editor öffnen (Tap auf den Namen, nicht auf die
+  // Zeilenmitte -- die kann bei schmalen Breiten mit dem SOLO-Button
+  // überlappen) und prüfen, dass Kopfzeile (Titel + Kopf-Meter + Solo/
+  // Mute/Remove) nicht überläuft. Genau diese Stelle lief unbemerkt über
+  // den Rand, als das kompakte Kopf-Meter dazukam (der Remove-Button
+  // rutschte ausserhalb des Bildschirms) -- ohne diesen Check hätte
+  // dasselbe jederzeit wieder passieren können.
+  const rackRowName = page.locator('.rack-row__name').first();
+  if (await rackRowName.count()) {
+    await rackRowName.click();
+    await page.waitForSelector('.machine-focus:not([hidden])', { timeout: 5000 }).catch(() => {});
+  }
 
   const r = await page.evaluate((sels) => {
     const vw = window.innerWidth;
@@ -59,6 +75,16 @@ for (const width of WIDTHS) {
       const o = outer.getBoundingClientRect();
       if (a.left < o.left - 0.5 || a.right > o.right + 0.5) {
         out.clipped.push(`${innerSel} ragt aus ${outerSel}`);
+      }
+    }
+    // Vollbild-Maschinen-Editor (falls offen, s. oben): Remove-Button muss
+    // sichtbar bleiben, sonst lässt sich die Maschine auf dem Gerät nicht
+    // mehr löschen.
+    const focusRemove = document.querySelector('.machine-focus:not([hidden]) [data-remove]');
+    if (focusRemove) {
+      const b = focusRemove.getBoundingClientRect();
+      if (b.right > vw + 0.5 || b.left < -0.5) {
+        out.clipped.push(`Maschinen-Editor [data-remove] [${Math.round(b.left)}..${Math.round(b.right)}]`);
       }
     }
     return out;

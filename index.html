@@ -1879,6 +1879,17 @@ button {
   padding: 8px 24px;
   border-bottom: 1px solid var(--edge-dark);
   box-shadow: 0 1px 0 var(--edge-light);
+  /* Titel + Kopf-Meter + Solo/Mute/Remove passen seit dem kompakten
+     x-meter (s. [data-head-meter]) auf schmalen iPhone-Breiten nicht mehr
+     in eine Zeile -- ohne Wrap lief .machine__head-actions (u. a. der
+     Remove-Button) rechts aus dem Bild statt sichtbar zu bleiben (gemessen:
+     bei 375/390px-Viewport ~50-65px zu breit). Dieselbe Lösung wie schon
+     bei .machine--master .machine__head und .insert-module/.mod-module
+     .machine__head: die Aktionen rutschen rechtsbündig in eine zweite
+     Zeile (margin-left:auto auf .machine__head-actions sorgt dafür), statt
+     etwas abzuschneiden oder zu verschwinden. */
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 .machine__stripe {
   width: 5px;
