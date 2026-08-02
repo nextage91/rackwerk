@@ -31487,7 +31487,7 @@ return { Rack, REGISTRY };
 })();
 
 /* ===== js/rack/jam-view.js ===== */
-const { initJamView, renderJamView, stopAllClips, serializeScenes, deserializeScenes } = (() => {
+const { initJamView, renderJamView, stopAllClips, exitJamMode, serializeScenes, deserializeScenes } = (() => {
 /**
  * jam-view — Live-Performance-Ansicht: Clips starten, Sound formen, mixen,
  * eine Spalte pro Instrument (wie ein Mischpult mit Clip-Slots obendrauf).
@@ -32232,6 +32232,36 @@ function revertToPattern(machine) {
   refreshClipStates(machine);
 }
 
+/** Verlässt den Jam-Modus vollständig -- egal auf welchem Weg das Sheet
+ *  schliesst (✕-Button oder Bottom-Bar-Tab-Wechsel, s. main.js). Jede
+ *  Spur wird komplett unabhängig von ihrem letzten Live-Zustand: ein noch
+ *  gebundener Clip weicht wieder dem normalen A/B/C/D-Pattern
+ *  (revertToPattern -- derselbe Weg wie beim Löschen eines aktiven Clips),
+ *  UND eine per Jam stummgeschaltete Spur wird wieder hörbar (das
+ *  Jam-Gate ist bewusst ein SEPARATES Gate neben Mute/Solo, s. Datei-
+ *  kopf -- ausserhalb von Jam hat es nichts verloren).
+ *
+ *  Ohne das blieb eine Maschine, die einmal einen Clip gespielt oder eine
+ *  gestoppte Spur hatte, DAUERHAFT daran gebunden -- auch im Rack, weit
+ *  über das Verlassen von Jam hinaus (Nutzer-Bugreport: "wenn ich von der
+ *  Jam-Ansicht zurück ins Rack gehe, ... kann ich nicht einfach wieder
+ *  alle Geräte zusammen abspielen, es ist wie an die Clips gebunden").
+ *  `stopAllClips()` (der "Stop All"-Button IM Sheet) macht bewusst NICHT
+ *  dasselbe -- der bleibt reine Live-Performance (s. dortigen Kommentar),
+ *  nur das VERLASSEN von Jam soll auf den normalen Rack-Zustand
+ *  zurückspringen. Wer eine Spur dauerhaft stumm haben will, nutzt den
+ *  regulären Mute-Button -- ein eigener, hier bewusst NICHT angetasteter
+ *  Zustand. */
+function exitJamMode() {
+  for (const m of boundRack?.machines ?? []) {
+    const st = stateFor(m);
+    if (st.activeClipId != null || st.queuedClipId != null) revertToPattern(m);
+    st.stopped = false;
+    st.queuedStopped = null;
+    refreshJamGate(m);
+  }
+}
+
 /** Entfernt einen Clip endgültig (mit Undo-Angebot, wie Pattern-Clear in
  *  step-seq.js). Läuft/wartet der gelöschte Clip gerade, springt die
  *  Maschine zuerst auf ihr normales Pattern zurück (revertToPattern --
@@ -32967,7 +32997,7 @@ function renderJamView(listEl, scenesContainerEl) {
   }
 }
 
-return { initJamView, renderJamView, stopAllClips, serializeScenes, deserializeScenes };
+return { initJamView, renderJamView, stopAllClips, exitJamMode, serializeScenes, deserializeScenes };
 })();
 
 /* ===== js/core/project.js ===== */
@@ -34118,6 +34148,15 @@ function wireJamViewUI() {
     sheet.hidden = true;
   });
   $('#btn-jam-stop-all').addEventListener('click', stopAllClips);
+  // Jam verlassen (egal ob per ✕ hier oder per Bottom-Bar-Tab-Wechsel in
+  // wireBottomBar(), die dasselbe hidden=true setzt) -> jede Spur wieder
+  // auf ihr normales Pattern/hörbar zurückspringen lassen, s. jam-view.js#
+  // exitJamMode (Nutzer-Bugreport: Rack liess sich nach einem Jam-Besuch
+  // nicht mehr normal gemeinsam abspielen). Ein MutationObserver statt ein
+  // zweiter Aufruf im Bottom-Bar-Handler, damit KEIN Schliessweg vergessen
+  // werden kann.
+  new MutationObserver(() => { if (sheet.hidden) exitJamMode(); })
+    .observe(sheet, { attributes: true, attributeFilter: ['hidden'] });
 }
 
 /* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------

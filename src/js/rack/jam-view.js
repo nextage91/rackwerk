@@ -744,6 +744,36 @@ function revertToPattern(machine) {
   refreshClipStates(machine);
 }
 
+/** Verlässt den Jam-Modus vollständig -- egal auf welchem Weg das Sheet
+ *  schliesst (✕-Button oder Bottom-Bar-Tab-Wechsel, s. main.js). Jede
+ *  Spur wird komplett unabhängig von ihrem letzten Live-Zustand: ein noch
+ *  gebundener Clip weicht wieder dem normalen A/B/C/D-Pattern
+ *  (revertToPattern -- derselbe Weg wie beim Löschen eines aktiven Clips),
+ *  UND eine per Jam stummgeschaltete Spur wird wieder hörbar (das
+ *  Jam-Gate ist bewusst ein SEPARATES Gate neben Mute/Solo, s. Datei-
+ *  kopf -- ausserhalb von Jam hat es nichts verloren).
+ *
+ *  Ohne das blieb eine Maschine, die einmal einen Clip gespielt oder eine
+ *  gestoppte Spur hatte, DAUERHAFT daran gebunden -- auch im Rack, weit
+ *  über das Verlassen von Jam hinaus (Nutzer-Bugreport: "wenn ich von der
+ *  Jam-Ansicht zurück ins Rack gehe, ... kann ich nicht einfach wieder
+ *  alle Geräte zusammen abspielen, es ist wie an die Clips gebunden").
+ *  `stopAllClips()` (der "Stop All"-Button IM Sheet) macht bewusst NICHT
+ *  dasselbe -- der bleibt reine Live-Performance (s. dortigen Kommentar),
+ *  nur das VERLASSEN von Jam soll auf den normalen Rack-Zustand
+ *  zurückspringen. Wer eine Spur dauerhaft stumm haben will, nutzt den
+ *  regulären Mute-Button -- ein eigener, hier bewusst NICHT angetasteter
+ *  Zustand. */
+export function exitJamMode() {
+  for (const m of boundRack?.machines ?? []) {
+    const st = stateFor(m);
+    if (st.activeClipId != null || st.queuedClipId != null) revertToPattern(m);
+    st.stopped = false;
+    st.queuedStopped = null;
+    refreshJamGate(m);
+  }
+}
+
 /** Entfernt einen Clip endgültig (mit Undo-Angebot, wie Pattern-Clear in
  *  step-seq.js). Läuft/wartet der gelöschte Clip gerade, springt die
  *  Maschine zuerst auf ihr normales Pattern zurück (revertToPattern --
