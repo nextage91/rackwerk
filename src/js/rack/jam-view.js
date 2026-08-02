@@ -1539,6 +1539,31 @@ function refreshActiveScene() {
   if (active) ensureSceneProgressLoop();
 }
 
+/** Tatsächliche Zykluslänge einer Scene: der LÄNGSTE Clip ihrer beteiligten
+ *  Maschinen (ein Clip kann 1-8 Takte lang sein, s. machine.js#
+ *  getClipStepLength) -- NICHT pauschal ein einzelner Takt. Eine 4-Takte-
+ *  Bassline neben einem 1-Takt-Drumclip definiert musikalisch den
+ *  "Durchlauf" der Scene, auch wenn der Drumclip dabei 4x durchläuft
+ *  (Nutzer-Feedback: der Taktfortschritt muss sich an "der bar länge der
+ *  szene (der längste clip der szene)" orientieren, nicht an einem festen
+ *  16-Schritte-Takt). `refOffset`: der stepOffset, auf den sich der Zyklus
+ *  bezieht -- alle an EINEM gemeinsamen Scene-Launch beteiligten Maschinen
+ *  bekommen denselben stepOffset (initJamView()s Takt-Listener promoted
+ *  jede an diesem Taktanfang fällige Maschine im selben Durchlauf), eine
+ *  von ihnen reicht also als Referenz. Maschinen OHNE Eintrag in dieser
+ *  Scene zählen nicht mit -- sie spielen ja keinen ihrer Clips. */
+function activeSceneCycle(scene) {
+  let maxLen = STEPS_PER_BAR;
+  let refOffset = 0;
+  for (const m of boundRack?.machines ?? []) {
+    if (scene.entries[m.id] == null) continue;
+    const len = m.getClipStepLength?.() ?? STEPS_PER_BAR;
+    if (len > maxLen) maxLen = len;
+    refOffset = m.stepOffset;
+  }
+  return { maxLen, refOffset };
+}
+
 /** Selbstbeendende rAF-Schleife (gleiches Muster wie startCompMeter/
  *  startLevelMeter in ui/insert-chain.js), die den Taktfortschritt-Wisch
  *  der aktiven Scene live nachzieht. Bricht ab, sobald entweder keine
@@ -1548,17 +1573,23 @@ function refreshActiveScene() {
  *  bei Bedarf neu gestartet, läuft also nie sinnlos im Hintergrund weiter,
  *  während man z. B. im Rack ist. `transport.currentStep` liefert dabei
  *  bereits eine auf den echten Audio-Takt genaue, gebrochene Position
- *  (s. core/transport.js), kein eigenes Timing nötig. */
+ *  (s. core/transport.js), kein eigenes Timing nötig -- activeSceneCycle()
+ *  bildet dieselbe "relativ zu stepOffset, modulo eigene Länge"-Rechnung
+ *  nach, die jede Maschine für sich schon in ihrem eigenen onStep() macht
+ *  (s. dortigen Kommentar), nur auf den längsten Clip der Scene bezogen. */
 let progressRafId = null;
 function ensureSceneProgressLoop() {
   if (progressRafId != null) return;
   if (!scenesEl || scenesEl.offsetParent === null) return;
   const tick = () => {
     if (!scenesEl || scenesEl.offsetParent === null) { progressRafId = null; return; }
-    const fill = scenesEl.querySelector('.jam-scene-chip.is-active .jam-scene-chip__progress');
-    if (!fill) { progressRafId = null; return; }
-    const frac = (transport.currentStep % STEPS_PER_BAR) / STEPS_PER_BAR;
-    fill.style.transform = `scaleX(${frac})`;
+    const chip = scenesEl.querySelector('.jam-scene-chip.is-active[data-scene-id]');
+    const fill = chip?.querySelector('.jam-scene-chip__progress');
+    const scene = chip && scenes.find((s) => s.id === Number(chip.dataset.sceneId));
+    if (!fill || !scene) { progressRafId = null; return; }
+    const { maxLen, refOffset } = activeSceneCycle(scene);
+    const pos = (((transport.currentStep - refOffset) % maxLen) + maxLen) % maxLen;
+    fill.style.transform = `scaleX(${pos / maxLen})`;
     progressRafId = requestAnimationFrame(tick);
   };
   progressRafId = requestAnimationFrame(tick);

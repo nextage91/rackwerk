@@ -60,6 +60,15 @@ export class StepSequencedSynth extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** Länge des GERADE GEBUNDENEN Patterns/Clips in Schritten (16 pro
+   *  Takt, ein Clip kann 1-8 Takte lang sein, s. onStep()) -- für den
+   *  Taktfortschritt-Wisch der aktiven Scene in jam-view.js, die daraus
+   *  die tatsächliche Zykluslänge der Scene (der LÄNGSTE beteiligte Clip)
+   *  bestimmt statt pauschal einen einzelnen Takt anzunehmen. */
+  getClipStepLength() {
+    return this.pattern.length;
+  }
+
   /** Ob Pattern-Slot i überhaupt einen Ton enthält — für die Jam-Proto-
    *  Clip-Kacheln (jam-view.js), die leere Slots blass darstellen. */
   hasPatternContent(i) {

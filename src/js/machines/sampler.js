@@ -265,6 +265,11 @@ export class Sampler extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** s. StepSequencedSynth#getClipStepLength -- alle Spuren gleich lang. */
+  getClipStepLength() {
+    return this.tracks[0].steps.length;
+  }
+
   #cloneSlot(i) {
     return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
   }

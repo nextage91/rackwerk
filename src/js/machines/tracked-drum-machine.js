@@ -127,6 +127,12 @@ export class TrackedDrumMachine extends Machine {
     automation.setBars(this.id, this.seq?.bars ?? 1);
   }
 
+  /** s. StepSequencedSynth#getClipStepLength -- alle Spuren gleich lang
+   *  (s. onStep() unten), Spur 0 reicht als Referenz. */
+  getClipStepLength() {
+    return this.tracks[0].steps.length;
+  }
+
   /** Ob Pattern-Slot i überhaupt einen Treffer enthält (irgendeine Spur) —
    *  für die Jam-Proto-Clip-Kacheln (jam-view.js), die leere Slots blass
    *  darstellen. */
