@@ -415,21 +415,43 @@ export class Machine {
    *  'master'. */
   get laneKeyPrefix() { return String(this.id); }
 
-  /** Verbindet Output -> insert[0] -> insert[1] -> ... -> Panner neu.
-   *  output/insert-outputs haben immer nur EIN Ziel, disconnect() ohne
-   *  Argument trennt also genau die eine bestehende Verbindung. */
+  /** Merkt sich pro Knoten, an welchen Nachfolger er in der KETTE gerade
+   *  angeschlossen ist -- #rewireInsertChain() braucht das, um beim Neu-
+   *  Verbinden gezielt NUR diese eine Verbindung zu trennen
+   *  (node.disconnect(target)) statt node.disconnect() ohne Ziel.
+   *  Ein zielloser disconnect() kappt ALLE ausgehenden Verbindungen eines
+   *  Knotens -- auch den parallelen Pegel-Meter-Tap (s. core/inserts.js#
+   *  getMeterAnalyser, output.connect(analyser)), der gar nicht Teil der
+   *  Kette ist. Genau das war ein gemeldeter Bug: nach jedem Verschieben/
+   *  Hinzufügen/Entfernen eines Inserts verstummten die VU-Meter der
+   *  GESAMTEN Kette dauerhaft -- #rewireInsertChain() riss bei jedem
+   *  Aufruf erneut alle Meter-Taps mit ab, ohne sie je wieder anzu-
+   *  schliessen (getMeterAnalyser() legt den Analyser nur EINMAL an und
+   *  verbindet ihn dabei auch nur EINMAL; ein späterer erneuter Aufruf
+   *  liefert einfach den längst verwaisten, nie wieder verbundenen
+   *  Analyser zurück). */
+  #chainTarget = new WeakMap();
+
+  /** Verbindet Output -> insert[0] -> insert[1] -> ... -> Panner neu. */
   #rewireInsertChain() {
+    const disconnectChainEdge = (node) => {
+      const target = this.#chainTarget.get(node);
+      if (target) node.disconnect(target);
+    };
     // this.output -> this.volumeMod ist eine feste 1:1-Verbindung (s.
     // Konstruktor), die Kette baut deshalb ab volumeMod neu, nicht ab
     // output selbst.
-    this.volumeMod.disconnect();
-    for (const insert of this.inserts) insert.output.disconnect();
+    disconnectChainEdge(this.volumeMod);
+    for (const insert of this.inserts) disconnectChainEdge(insert.output);
+
     let prev = this.volumeMod;
     for (const insert of this.inserts) {
       prev.connect(insert.input);
+      this.#chainTarget.set(prev, insert.input);
       prev = insert.output;
     }
     prev.connect(this.panner);
+    this.#chainTarget.set(prev, this.panner);
   }
 
   addInsert(type) {
