@@ -101,14 +101,21 @@ let lastAudible = new Set();
  * ein bereits angeregter Delay-/Reverb-Schwanz weiterspielen, obwohl schon
  * alles gemutet (bzw. nichts soloed) ist.
  *
- * Schrumpft die hörbare Menge nur (z. B. eine von mehreren spielenden
- * Maschinen wird soloed, ohne dass am Ende NIEMAND mehr hörbar ist —
- * setReturnAudible allein greift dann nicht), flusht flushTails() Delay
- * und Reverb komplett: sonst hört man beim Soloen weiter den Nachhall
- * der gerade stumm gewordenen Spuren mit ("solo in place"). Wächst die
- * Menge nur (z. B. Entmuten), ist nichts Störendes drin — kein Flush,
- * das würde nur einen gerade legitim ausklingenden Nachhall unnötig
- * unterbrechen.
+ * Schrumpft die hörbare Menge NUR wegen eines AKTIVEN Solos (z. B. eine
+ * von mehreren spielenden Maschinen wird soloed, ohne dass am Ende
+ * NIEMAND mehr hörbar ist — setReturnAudible allein greift dann nicht),
+ * flusht flushTails() Delay und Reverb komplett: sonst hört man beim
+ * Soloen weiter den Nachhall der gerade stumm gewordenen Spuren mit
+ * ("solo in place"). Ein einfaches Muten oder ein Jam-Stop EINER Spur
+ * OHNE aktives Solo flusht bewusst NICHT — das ist kein "isoliere nur
+ * dieses Instrument"-Signal, und ein bereits angeregter Nachhall soll
+ * dabei ganz normal weiter (aus)klingen dürfen, auch wenn die Spur, die
+ * ihn ausgelöst hat, inzwischen still ist (Nutzer-Bugreport: "Hall und
+ * Delay klingen nicht aus, wenn ich eine Spur stoppe" — flushTails() lief
+ * vorher bei JEDEM Schrumpfen, riss den Nachhall dabei hart auf 0, ohne
+ * dass er je zurückkehrte). Wächst die Menge nur (z. B. Entmuten), ist
+ * ebenfalls nichts Störendes drin — kein Flush, das würde nur einen
+ * gerade legitim ausklingenden Nachhall unnötig unterbrechen.
  *
  * `setSoloShadowed()`: TrackedDrumMachine (BeatBox/AnalogKit) hat pro
  * Spur EIGENE Delay-/Reverb-Sends, die absichtlich parallel zum trockenen
@@ -135,7 +142,20 @@ function refreshGates() {
     m.setSoloShadowed((soloActive && !m.soloed) || !m.jamGateOpen);
   }
   masterFX.setReturnAudible(anyAudible);
-  const shrank = [...lastAudible].some((m) => !audibleNow.has(m));
+  // Nur bei AKTIVEM Solo hart zurücksetzen ("solo in place", s. Dateikopf-
+  // Kommentar) -- ein einfaches Muten oder ein Jam-Stop EINER Spur ist KEIN
+  // "isoliere nur dieses Instrument"-Signal und darf den gemeinsamen Hall-/
+  // Delay-Tank für alle anderen, weiterhin spielenden Spuren nicht abwürgen.
+  // Nutzer-Bugreport: "Hall und Delay klingen nicht aus, wenn ich eine Spur
+  // stoppe" -- per Reproduktion bestätigt: flushTails() lief bei JEDEM
+  // Schrumpfen der hörbaren Menge, nicht nur beim eigentlich gemeinten
+  // Solo-Fall, und riss den schon angeregten Nachhall sofort auf 0 (kein
+  // Ausklingen, kein Wiederkehren -- die Kette wird dabei komplett neu
+  // gebaut, s. flushTails()). Ohne aktives Solo bleibt ein schon
+  // angeregter Hall/Delay jetzt einfach normal (weiter) hörbar, genau wie
+  // bei echter Hardware: Stummschalten eines Kanals löscht dessen bereits
+  // gesendete Hall-Energie nicht rückwirkend.
+  const shrank = soloActive && [...lastAudible].some((m) => !audibleNow.has(m));
   if (shrank) masterFX.flushTails();
   lastAudible = audibleNow;
 }
