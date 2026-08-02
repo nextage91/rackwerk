@@ -9,6 +9,9 @@ per Rückgabewert in Top-Level-Konstanten destrukturiert.
 """
 import re
 import pathlib
+import shutil
+import subprocess
+import tempfile
 
 ROOT = pathlib.Path(__file__).parent
 OUT = ROOT / "rackwerk-preview.html"
@@ -29,7 +32,7 @@ MODULES = [
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/audio-engine.js", ["engine"]),
     ("js/core/dsp.js",          ["noise", "lfsrNoise", "env", "autoStop", "midiToHz", "applyFilterEnv"]),
-    ("js/core/eq8-onepole-worklet.js", ["EQ8_ONEPOLE_WORKLET_SRC"]),
+    ("js/core/onepole-worklet.js", ["ONEPOLE_WORKLET_SRC"]),
     ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "insertChainLatencySec", "UI_PARAMS", "EQ_TYPES", "EQ_SLOPES", "EQ8_GAIN_RANGES", "FILTER_DELAY_TYPES", "DELAY_SYNC_BUTTONS", "RESONATOR_INTERVALS", "INSERT_COLORS", "RATIO_MODE_BUTTONS", "OPTO_MODE_BUTTONS", "GEQ_FREQS", "makeFeedbackClipCurve"]),
     ("js/core/modular.js",      ["MODULE_TYPES", "moduleMeta", "ModularPatch", "MODULE_PORTS", "MODULE_UI_PARAMS", "OSCILLATOR_WAVES", "FILTER_TYPES"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR", "shuffleTime"]),
@@ -90,9 +93,50 @@ def bundle_js() -> str:
     return "\n\n".join(parts)
 
 
+def check_syntax(js: str) -> None:
+    """Prüft das gebündelte JS mit `node --check`, falls Node verfügbar ist.
+
+    Motivation (echter, hier aufgetretener Fehler): die beiden Worklet-
+    Dateien (machines/acidbass-worklet.js, core/eq8-onepole-worklet.js)
+    liefern ihren DSP-Code als Template-Literal-STRING aus, weil RackWerk
+    als eine einzelne HTML-Datei ausgeliefert wird (s. dortige Dateiköpfe).
+    Ein einzelnes Backtick irgendwo in diesem String -- z. B. in einem
+    Kommentar, der eine Code-Stelle zitieren will -- beendet das Literal
+    vorzeitig und macht das GESAMTE Bundle unparsbar. Im unmodularisierten
+    Dev-Server fällt das nicht auf, weil dort andere Dateigrenzen gelten;
+    sichtbar wird es erst als weisse Seite mit einem SyntaxError, der
+    irgendwo weit hinter der eigentlichen Ursache zeigt.
+
+    Ohne Node im PATH wird still übersprungen -- der Check ist ein
+    Sicherheitsnetz, keine harte Build-Abhängigkeit.
+    """
+    node = shutil.which("node")
+    if not node:
+        print("Hinweis: node nicht gefunden -- Syntaxprüfung übersprungen.")
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as fh:
+        fh.write(js)
+        tmp = fh.name
+    try:
+        res = subprocess.run([node, "--check", tmp], capture_output=True, text=True)
+        if res.returncode != 0:
+            # Zeilennummern beziehen sich auf das Bundle -- der Kommentarkopf
+            # jedes Moduls (/* ===== pfad ===== */) zeigt, aus welcher Datei
+            # die betroffene Stelle stammt.
+            raise SystemExit(
+                "FEHLER: das gebündelte JS ist nicht parsbar.\n"
+                "Häufigste Ursache: ein Backtick im Quelltext-String eines\n"
+                "Worklets (s. check_syntax() in dieser Datei).\n\n"
+                + res.stderr.strip()
+            )
+    finally:
+        pathlib.Path(tmp).unlink(missing_ok=True)
+
+
 def main():
     css = "\n".join((ROOT / f).read_text() for f in CSS_FILES)
     js = bundle_js()
+    check_syntax(js)
 
     html = (ROOT / "index.html").read_text()
     html = re.sub(r'\s*<link rel="stylesheet"[^>]*>\n', "", html)

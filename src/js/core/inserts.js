@@ -16,7 +16,7 @@
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { noise } from './dsp.js';
-import { EQ8_ONEPOLE_WORKLET_SRC } from './eq8-onepole-worklet.js';
+import { ONEPOLE_WORKLET_SRC } from './onepole-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -143,50 +143,120 @@ function makeDryCompensationDelay(ctx, seconds) {
   return d;
 }
 
-/** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
- *  fürs Reverb-FDN -- bewusst NICHT der naheliegende ctx.createBiquadFilter():
- *  ein 2-poliger Biquad-Tiefpass hat (unabhängig von Q, auch bei sehr
- *  kleinem Q) einen kleinen, aber unvermeidbaren Überschwinger >1.0 nahe
- *  der Grenzfrequenz (gemessen ~1.15-1.22x). In einer Feedback-Schleife
- *  reicht das, um bei dichter/rhythmischer Retriggerung (echter Musik-
- *  betrieb, nicht nur ein einzelner Impuls) tatsächlich unbegrenzt
- *  aufzuschaukeln, siehe git-history dieser Datei.
- *  Ein einpoliger Tiefpass hat dagegen |H(w)| <= 1 für JEDE Frequenz,
- *  beweisbar (Gleichheit nur bei w=0) -- kein Überschwinger möglich, egal
- *  welche Grenzfrequenz. Damit gilt decay*|H(w)| <= decay < 1 garantiert,
- *  für jede Parameter-Kombination, nicht nur für einzeln getestete.
- *  Implementiert über eine Ein-Sample-DelayNode als Verzögerungsglied
- *  (Web Audio erlaubt Delay-Zeiten bis auf Sample-Auflösung). */
-function makeOnePoleLowpass(ctx, cutoffHz) {
-  const sum = ctx.createGain();
-  const inGain = ctx.createGain();
-  const fbGain = ctx.createGain();
-  const delay = ctx.createDelay(1);
-  delay.delayTime.value = 1 / ctx.sampleRate;
-
-  function coeffs(hz) {
-    const a = Math.exp((-2 * Math.PI * hz) / ctx.sampleRate);
-    return { a, oneMinusA: 1 - a };
+/** Lädt das gemeinsame 1-Pol-Worklet-Modul GENAU EINMAL fürs App-weite
+ *  AudioContext-Singleton (gleiches Muster wie machines/acidbass.js#
+ *  ensureAcidBassWorklet). `onePoleReady` erlaubt den Aufrufern eine
+ *  SYNCHRONE Entscheidung -- die build()-Funktionen der Inserts müssen ein
+ *  fertig verkabeltes Objekt zurückgeben, ein await ist dort nicht
+ *  möglich. Wer gebaut wird, BEVOR das Modul steht (praktisch nur der
+ *  allererste betroffene Insert einer Session, danach ist das Promise
+ *  gecacht), bekommt übergangsweise einen transparenten Platzhalter und
+ *  rüstet selbst nach, sobald das Modul geladen ist. */
+let onePoleWorkletPromise = null;
+let onePoleReady = false;
+function ensureOnePoleWorklet(ctx) {
+  if (!onePoleWorkletPromise) {
+    if (!ctx.audioWorklet) {
+      onePoleWorkletPromise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([ONEPOLE_WORKLET_SRC], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      onePoleWorkletPromise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); onePoleReady = true; return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error('1-Pol-Worklet-Modul konnte nicht geladen werden -- betroffene Filterstufen bleiben transparent.', err);
+          return false;
+        });
+    }
   }
-  const { a, oneMinusA } = coeffs(cutoffHz);
-  inGain.gain.value = oneMinusA;
-  fbGain.gain.value = a;
+  return onePoleWorkletPromise;
+}
 
-  inGain.connect(sum);
-  sum.connect(delay);
-  delay.connect(fbGain);
-  fbGain.connect(sum);
+/** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
+ *  für den Reverb-Tank und die Resonator-Delaylines -- bewusst NICHT der
+ *  naheliegende ctx.createBiquadFilter(): ein 2-poliger Biquad-Tiefpass
+ *  hat (unabhängig von Q, auch bei sehr kleinem Q) einen kleinen, aber
+ *  unvermeidbaren Überschwinger >1.0 nahe der Grenzfrequenz (gemessen
+ *  ~1.15-1.22x). In einer Feedback-Schleife reicht das, um bei dichter/
+ *  rhythmischer Retriggerung (echter Musikbetrieb, nicht nur ein einzelner
+ *  Impuls) tatsächlich unbegrenzt aufzuschaukeln, siehe git-history dieser
+ *  Datei. Ein einpoliger Tiefpass hat dagegen |H(w)| <= 1 für JEDE
+ *  Frequenz, beweisbar (Gleichheit nur bei w=0) -- kein Überschwinger
+ *  möglich, egal welche Grenzfrequenz. Damit gilt decay*|H(w)| <= decay < 1
+ *  garantiert, für jede Parameter-Kombination, nicht nur für einzeln
+ *  getestete.
+ *
+ *  Diese Begründung galt schon immer -- die frühere UMSETZUNG als nativer
+ *  Graph-Zyklus (GainNode + DelayNode mit einem Sample Verzögerung) war
+ *  aber GEMESSEN um Grössenordnungen daneben: die Web-Audio-Spec verlangt
+ *  für jeden Zyklus im Graphen mindestens einen vollen Render-Quantum (128
+ *  Samples) Latenz, die "Ein-Sample"-Verzögerung wurde also faktisch zu
+ *  ~128 Samples. Gerechnet wurde damit nicht y[n] = (1-a)x[n] + a*y[n-1],
+ *  sondern y[n] = (1-a)x[n] + a*y[n-128] -- kein 1-Pol-Tiefpass mehr,
+ *  sondern ein kammfilterartiges Gebilde mit Polstellen im Abstand von
+ *  rund fs/128 (~375Hz), dessen wirksame Grenzfrequenz über den gesamten
+ *  Reglerbereich 500-15000Hz irgendwo bei ~4-120Hz lag. Der Damping-Regler
+ *  zeigte also durchgehend etwa das 128-fache dessen an, was tatsächlich
+ *  passierte -- Hallfahnen und Resonator-Ausklänge waren entsprechend
+ *  deutlich dumpfer als angezeigt.
+ *
+ *  Deshalb jetzt dieselbe AudioWorklet-Stufe wie bei eq8 (s. core/
+ *  onepole-worklet.js): sample-für-sample im Worklet gerechnet, kein
+ *  Zyklus im nativen Graphen, keine Quantum-Latenz. Die umgebende
+ *  Feedback-Schleife bleibt davon unberührt -- ihre eigene Delayline
+ *  liefert weiterhin das für einen Zyklus vorgeschriebene Verzögerungs-
+ *  glied, die Schleifenlaufzeit ändert sich also nicht.
+ *
+ *  input/output sind bewusst eigene, STABILE GainNodes: solange das
+ *  Worklet-Modul noch lädt, verbindet der Platzhalter input direkt auf
+ *  output (transparent, also |H|=1 -- die Stabilitätsschranke oben gilt
+ *  weiterhin, nur eben ohne Höhendämpfung); sobald das Modul steht, wird
+ *  die echte Stufe dazwischengehängt, ohne dass der umgebende Graph seine
+ *  Verkabelung anfassen muss. */
+function makeOnePoleLowpass(ctx, cutoffHz) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let filter = null;
+  let disposed = false;
+  let freq = cutoffHz;
+
+  const attach = () => {
+    // outputChannelCount bewusst NICHT gesetzt -- so übernimmt der Knoten
+    // die Kanalzahl seines Eingangs (mono bleibt mono), statt eine
+    // Mono-Delayline unnötig auf Stereo aufzublasen.
+    filter = new AudioWorkletNode(ctx, 'rackwerk-onepole', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { highpass: false },
+    });
+    filter.parameters.get('cutoff').value = freq;
+    input.connect(filter).connect(output);
+  };
+
+  if (onePoleReady) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureOnePoleWorklet(ctx).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
 
   return {
-    input: inGain,
-    output: sum,
+    input,
+    output,
     setFreq(hz, t, timeConstant) {
-      const c = coeffs(hz);
-      inGain.gain.setTargetAtTime(c.oneMinusA, t, timeConstant);
-      fbGain.gain.setTargetAtTime(c.a, t, timeConstant);
+      freq = hz;
+      filter?.parameters.get('cutoff').setTargetAtTime(hz, t, timeConstant);
     },
     dispose() {
-      sum.disconnect(); inGain.disconnect(); fbGain.disconnect(); delay.disconnect();
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      filter?.disconnect();
     },
   };
 }
@@ -487,44 +557,17 @@ function eq8MakeBiquad(ctx, type, freq, q) {
   return node;
 }
 
-/** Lädt das 1-Pol-Worklet-Modul GENAU EINMAL fürs App-weite AudioContext-
- *  Singleton (gleiches Muster wie machines/acidbass.js#ensureAcidBassWorklet).
- *  `eq8OnePoleReady` erlaubt eq8BuildBandNodes() eine SYNCHRONE Entscheidung
- *  (build() selbst ist synchron, ein await ist dort nicht möglich) -- vor
- *  dem ersten Laden (nur beim allerersten eq8 der Session, danach gecacht)
- *  bekommt eine 6/18dB/Okt-Stufe übergangsweise einen transparenten
- *  Platzhalter (s. eq8MakeOnePoleStage), der Aufrufer stösst den echten
- *  Ersatz per rebuildOnceReady an, sobald das Modul geladen ist. */
-let eq8WorkletPromise = null;
-let eq8OnePoleReady = false;
-function eq8EnsureOnePoleWorklet(ctx) {
-  if (!eq8WorkletPromise) {
-    if (!ctx.audioWorklet) {
-      eq8WorkletPromise = Promise.resolve(false);
-    } else {
-      const blob = new Blob([EQ8_ONEPOLE_WORKLET_SRC], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      eq8WorkletPromise = ctx.audioWorklet.addModule(url)
-        .then(() => { URL.revokeObjectURL(url); eq8OnePoleReady = true; return true; })
-        .catch((err) => {
-          URL.revokeObjectURL(url);
-          console.error('eq8: 1-Pol-Worklet-Modul konnte nicht geladen werden -- 6/18dB/Okt-Flanken bleiben transparent.', err);
-          return false;
-        });
-    }
-  }
-  return eq8WorkletPromise;
-}
-
-/** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil). Solange das Worklet-
- *  Modul noch lädt (praktisch nur für den allerersten eq8 einer Session
- *  möglich), bleibt die Stufe ein transparenter Platzhalter -- sobald das
- *  Modul bereitsteht, ruft `rebuildOnceReady` (übergeben von build()/
- *  rebuildBand) genau diese Band-Position neu auf, was dann den echten
- *  Worklet-Node einsetzt. */
+/** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil) -- nutzt dieselbe
+ *  gemeinsame Worklet-Stufe wie der Damping-Filter von Reverb/Resonator
+ *  (s. ensureOnePoleWorklet/makeOnePoleLowpass oben). Solange das Modul
+ *  noch lädt (praktisch nur für den allerersten betroffenen Insert einer
+ *  Session möglich), bleibt die Stufe ein transparenter Platzhalter --
+ *  sobald das Modul bereitsteht, ruft `rebuildOnceReady` (übergeben von
+ *  build()/rebuildBand) genau diese Band-Position neu auf, was dann den
+ *  echten Worklet-Node einsetzt. */
 function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
-  if (eq8OnePoleReady) {
-    const node = new AudioWorkletNode(ctx, 'rackwerk-eq8-onepole', {
+  if (onePoleReady) {
+    const node = new AudioWorkletNode(ctx, 'rackwerk-onepole', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
@@ -533,7 +576,7 @@ function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
     node.parameters.get('cutoff').value = freq;
     return { kind: 'onepoleWorklet', node, input: node, output: node };
   }
-  eq8EnsureOnePoleWorklet(ctx).then((ok) => { if (ok) rebuildOnceReady(); });
+  ensureOnePoleWorklet(ctx).then((ok) => { if (ok) rebuildOnceReady(); });
   const node = ctx.createGain();
   return { kind: 'passthrough', node, input: node, output: node };
 }
@@ -752,6 +795,13 @@ const DEFS = {
       // Wrapper irgendwann an einer bereits entsorgten toten Node.
       const headIn = ctx.createGain();
       const tailOut = ctx.createGain();
+      // Das 1-Pol-Worklet lädt ASYNCHRON (s. eq8MakeOnePoleStage): wird
+      // dieser Insert entfernt, BEVOR das Modul fertig geladen ist, feuert
+      // der rebuildOnceReady-Callback trotzdem noch. Ohne dieses Flag
+      // würde er dann auf bereits entsorgten Nodes herumverkabeln und neue
+      // AudioWorkletNodes in einen toten Teilgraphen hängen, die nie wieder
+      // jemand abräumt.
+      let disposed = false;
       const bandNodes = p.bands.map((b, i) => eq8BuildBandNodes(ctx, b, () => rebuildBand(i)));
       let prevOut = headIn;
       for (const subs of bandNodes) {
@@ -770,6 +820,7 @@ const DEFS = {
        *  Stelle. Reine Parameteränderungen (freq/gain/q/active) laufen
        *  NICHT hier durch, s. eq8ApplyBandParams(). */
       function rebuildBand(i) {
+        if (disposed) return;
         const oldSubs = bandNodes[i];
         const prevN = i === 0 ? headIn : bandNodes[i - 1][bandNodes[i - 1].length - 1].output;
         const nextN = i === bandNodes.length - 1 ? tailOut : bandNodes[i + 1][0].input;
@@ -841,6 +892,7 @@ const DEFS = {
           return totalDb;
         },
         dispose() {
+          disposed = true;
           headIn.disconnect();
           tailOut.disconnect();
           bandNodes.forEach((subs) => subs.forEach(eq8DisposeSub));

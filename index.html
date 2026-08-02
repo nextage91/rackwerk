@@ -16626,14 +16626,19 @@ function applyFilterEnv(filter, t, params) {
 return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
 })();
 
-/* ===== js/core/eq8-onepole-worklet.js ===== */
-const { EQ8_ONEPOLE_WORKLET_SRC } = (() => {
+/* ===== js/core/onepole-worklet.js ===== */
+const { ONEPOLE_WORKLET_SRC } = (() => {
 /**
- * 1-poliger (6dB/Okt) Highpass/Lowpass als AudioWorkletProcessor -- für
- * eq8s Flankensteilheiten 6 und 18dB/Okt (s. core/inserts.js#eq8BuildBandNodes).
+ * 1-poliger (6dB/Okt) Highpass/Lowpass als AudioWorkletProcessor.
  *
- * Der erste Anlauf (makeOnePoleLowpass()-artige Rückkopplungsschleife aus
- * GainNode+1-Sample-DelayNode) war GEMESSEN ungenau: die Web-Audio-Spec
+ * Gemeinsame 1-Pol-Stufe für ALLE Stellen im Projekt, die eine brauchen:
+ *   - eq8s Flankensteilheiten 6 und 18dB/Okt (s. inserts.js#eq8BuildBandNodes)
+ *   - der Damping-Filter im Reverb-Tank und in den Resonator-Delaylines
+ *     (s. inserts.js#makeOnePoleLowpass)
+ *
+ * Der erste Anlauf (Rückkopplungsschleife aus GainNode+1-Sample-DelayNode,
+ * ursprünglich für das Reverb-Damping gebaut) war GEMESSEN ungenau: die
+ * Web-Audio-Spec
  * verlangt für jeden ZYKLUS im Audiographen mindestens EINEN vollen
  * Render-Quantum (128 Samples) Verzögerung, bevor er aufgelöst wird --
  * eine "1-Sample"-DelayNode in einer Rückkopplungsschleife bekommt also in
@@ -16655,10 +16660,22 @@ const { EQ8_ONEPOLE_WORKLET_SRC } = (() => {
  * Wie bei acidbass-worklet.js: exportiert nur den Quelltext als String --
  * RackWerk wird als EINE gebündelte index.html ausgeliefert (s. README),
  * der String wird zur Laufzeit per Blob-URL an audioWorklet.addModule()
- * übergeben (s. core/inserts.js#eq8EnsureOnePoleWorklet). Eigener globaler
+ * übergeben (s. core/inserts.js#ensureOnePoleWorklet). Eigener globaler
  * Scope ohne Zugriff auf unsere ES-Module, deshalb komplett eigenständig.
  */
-const EQ8_ONEPOLE_WORKLET_SRC = `
+const ONEPOLE_WORKLET_SRC = `
+/** Unterhalb dieser Schwelle wird der Filterzustand hart auf 0 gesetzt.
+ *  1e-30 entspricht ~-600dBFS, liegt also unhörbar weit unter jedem
+ *  Nutzsignal -- aber viele Grössenordnungen ÜBER der Denormal-Grenze von
+ *  float64 (~2.2e-308). Ohne das klingt ein Filterzustand nach dem
+ *  Verstummen des Eingangs exponentiell weiter gegen (nie exakt) null und
+ *  landet irgendwann dauerhaft im Denormal-Bereich, wo Gleitkomma-
+ *  Arithmetik auf vielen CPUs deutlich langsamer wird -- und zwar
+ *  PERMANENT, weil der Zustand von dort nie wieder herausfindet. Kostet
+ *  einen Vergleich pro Block, verhindert eine dauerhaft mitlaufende
+ *  Grundlast pro stillgelegtem EQ-Band. */
+const DENORMAL_FLOOR = 1e-30;
+
 class RackwerkOnePoleProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [{ name: 'cutoff', defaultValue: 1000, minValue: 1, maxValue: 22000, automationRate: 'a-rate' }];
@@ -16668,44 +16685,100 @@ class RackwerkOnePoleProcessor extends AudioWorkletProcessor {
     this.highpass = options.processorOptions?.highpass === true;
     // Ein Zustand (x1/y1) PRO Kanal -- ein Stereo-Signal darf sich nicht
     // einen einzigen Zustand teilen, sonst bluten die Kanäle ineinander.
-    this.x1 = [];
-    this.y1 = [];
+    // Feste Float64Array-Puffer statt wachsender JS-Arrays: die Kanalzahl
+    // steht beim Anlegen fest (s. outputChannelCount in inserts.js), ein
+    // dynamisch wachsendes Array würde beim ersten Schreiben pro Kanal
+    // reallozieren -- auf dem Audio-Thread grundsätzlich zu vermeiden.
+    this.x1 = new Float64Array(32);
+    this.y1 = new Float64Array(32);
+
+    // Koeffizienten-Cache. Math.exp() ist die teuerste Einzeloperation in
+    // dieser Schleife, der Cutoff ist aber im Normalfall (Regler steht
+    // still) über den ganzen Block KONSTANT -- Web Audio signalisiert das
+    // dadurch, dass das a-rate-Parameter-Array dann nur EIN Element hat.
+    // Vorher wurde Math.exp() bedingungslos pro Sample gerechnet: 128
+    // identische Aufrufe pro Block und Kanal, bei mehreren Bändern in
+    // Stereo schnell vierstellig pro Render-Quantum -- komplett umsonst.
+    this.lastCutoff = -1;
+    this.b0 = 1; this.b1 = 0; this.a1 = 0;
   }
+
+  updateCoeffs(cutoff) {
+    if (cutoff === this.lastCutoff) return;
+    this.lastCutoff = cutoff;
+    const x = Math.exp((-2 * Math.PI * cutoff) / sampleRate);
+    if (this.highpass) {
+      this.b0 = 0.5 * (1 + x);
+      this.b1 = -0.5 * (1 + x);
+      this.a1 = x;
+    } else {
+      this.b0 = 1 - x;
+      this.b1 = 0;
+      this.a1 = x;
+    }
+  }
+
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     const output = outputs[0];
     const cutoffParam = parameters.cutoff;
-    const sr = sampleRate;
+    // Länge 1 = über den ganzen Block konstant (Regler steht still, der
+    // Normalfall); Länge 128 = wird gerade automatisiert/gezogen.
+    const modulated = cutoffParam.length > 1;
+    if (!modulated) this.updateCoeffs(cutoffParam[0]);
+
     for (let ch = 0; ch < output.length; ch++) {
       const inCh = input[ch];
       const outCh = output[ch];
-      let x1 = this.x1[ch] || 0;
-      let y1 = this.y1[ch] || 0;
-      for (let i = 0; i < outCh.length; i++) {
-        const cutoff = cutoffParam.length > 1 ? cutoffParam[i] : cutoffParam[0];
-        const x = Math.exp((-2 * Math.PI * cutoff) / sr);
-        let b0, b1, a1;
-        if (this.highpass) {
-          b0 = 0.5 * (1 + x); b1 = -0.5 * (1 + x); a1 = x;
-        } else {
-          b0 = 1 - x; b1 = 0; a1 = x;
+      let x1 = this.x1[ch];
+      let y1 = this.y1[ch];
+
+      if (modulated) {
+        for (let i = 0; i < outCh.length; i++) {
+          this.updateCoeffs(cutoffParam[i]);
+          const inSample = inCh ? inCh[i] : 0;
+          const y = this.b0 * inSample + this.b1 * x1 + this.a1 * y1;
+          x1 = inSample;
+          y1 = y;
+          outCh[i] = y;
         }
-        const inSample = inCh ? inCh[i] : 0;
-        const y = b0 * inSample + b1 * x1 + a1 * y1;
-        x1 = inSample;
-        y1 = y;
-        outCh[i] = y;
+      } else {
+        // Koeffizienten in lokale Konstanten ziehen -- spart pro Sample
+        // drei Property-Zugriffe und erlaubt der Engine, sie durchgehend
+        // in Registern zu halten.
+        const b0 = this.b0, b1 = this.b1, a1 = this.a1;
+        for (let i = 0; i < outCh.length; i++) {
+          const inSample = inCh ? inCh[i] : 0;
+          const y = b0 * inSample + b1 * x1 + a1 * y1;
+          x1 = inSample;
+          y1 = y;
+          outCh[i] = y;
+        }
       }
+
+      // Denormal-Schutz (s. DENORMAL_FLOOR oben) -- einmal pro Block statt
+      // pro Sample: der Zustand braucht nach dem Verstummen ohnehin viele
+      // Blöcke, um überhaupt so klein zu werden, ein Block Verzögerung
+      // beim Nullsetzen ist also folgenlos.
+      if (y1 > -DENORMAL_FLOOR && y1 < DENORMAL_FLOOR) y1 = 0;
+      if (x1 > -DENORMAL_FLOOR && x1 < DENORMAL_FLOOR) x1 = 0;
+      // NaN/Infinity-Notbremse: ohne das würde EIN einziger kaputter Wert
+      // (etwa ein NaN aus einem vorgeschalteten Insert) sich über den
+      // Rekursionszustand y1 DAUERHAFT festsetzen -- das Band bliebe für
+      // den Rest der Session stumm bzw. gäbe NaN weiter, ohne dass
+      // irgendetwas es je zurücksetzt.
+      if (!Number.isFinite(y1) || !Number.isFinite(x1)) { x1 = 0; y1 = 0; }
+
       this.x1[ch] = x1;
       this.y1[ch] = y1;
     }
     return true;
   }
 }
-registerProcessor('rackwerk-eq8-onepole', RackwerkOnePoleProcessor);
+registerProcessor('rackwerk-onepole', RackwerkOnePoleProcessor);
 `;
 
-return { EQ8_ONEPOLE_WORKLET_SRC };
+return { ONEPOLE_WORKLET_SRC };
 })();
 
 /* ===== js/core/inserts.js ===== */
@@ -16851,50 +16924,120 @@ function makeDryCompensationDelay(ctx, seconds) {
   return d;
 }
 
-/** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
- *  fürs Reverb-FDN -- bewusst NICHT der naheliegende ctx.createBiquadFilter():
- *  ein 2-poliger Biquad-Tiefpass hat (unabhängig von Q, auch bei sehr
- *  kleinem Q) einen kleinen, aber unvermeidbaren Überschwinger >1.0 nahe
- *  der Grenzfrequenz (gemessen ~1.15-1.22x). In einer Feedback-Schleife
- *  reicht das, um bei dichter/rhythmischer Retriggerung (echter Musik-
- *  betrieb, nicht nur ein einzelner Impuls) tatsächlich unbegrenzt
- *  aufzuschaukeln, siehe git-history dieser Datei.
- *  Ein einpoliger Tiefpass hat dagegen |H(w)| <= 1 für JEDE Frequenz,
- *  beweisbar (Gleichheit nur bei w=0) -- kein Überschwinger möglich, egal
- *  welche Grenzfrequenz. Damit gilt decay*|H(w)| <= decay < 1 garantiert,
- *  für jede Parameter-Kombination, nicht nur für einzeln getestete.
- *  Implementiert über eine Ein-Sample-DelayNode als Verzögerungsglied
- *  (Web Audio erlaubt Delay-Zeiten bis auf Sample-Auflösung). */
-function makeOnePoleLowpass(ctx, cutoffHz) {
-  const sum = ctx.createGain();
-  const inGain = ctx.createGain();
-  const fbGain = ctx.createGain();
-  const delay = ctx.createDelay(1);
-  delay.delayTime.value = 1 / ctx.sampleRate;
-
-  function coeffs(hz) {
-    const a = Math.exp((-2 * Math.PI * hz) / ctx.sampleRate);
-    return { a, oneMinusA: 1 - a };
+/** Lädt das gemeinsame 1-Pol-Worklet-Modul GENAU EINMAL fürs App-weite
+ *  AudioContext-Singleton (gleiches Muster wie machines/acidbass.js#
+ *  ensureAcidBassWorklet). `onePoleReady` erlaubt den Aufrufern eine
+ *  SYNCHRONE Entscheidung -- die build()-Funktionen der Inserts müssen ein
+ *  fertig verkabeltes Objekt zurückgeben, ein await ist dort nicht
+ *  möglich. Wer gebaut wird, BEVOR das Modul steht (praktisch nur der
+ *  allererste betroffene Insert einer Session, danach ist das Promise
+ *  gecacht), bekommt übergangsweise einen transparenten Platzhalter und
+ *  rüstet selbst nach, sobald das Modul geladen ist. */
+let onePoleWorkletPromise = null;
+let onePoleReady = false;
+function ensureOnePoleWorklet(ctx) {
+  if (!onePoleWorkletPromise) {
+    if (!ctx.audioWorklet) {
+      onePoleWorkletPromise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([ONEPOLE_WORKLET_SRC], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      onePoleWorkletPromise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); onePoleReady = true; return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error('1-Pol-Worklet-Modul konnte nicht geladen werden -- betroffene Filterstufen bleiben transparent.', err);
+          return false;
+        });
+    }
   }
-  const { a, oneMinusA } = coeffs(cutoffHz);
-  inGain.gain.value = oneMinusA;
-  fbGain.gain.value = a;
+  return onePoleWorkletPromise;
+}
 
-  inGain.connect(sum);
-  sum.connect(delay);
-  delay.connect(fbGain);
-  fbGain.connect(sum);
+/** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
+ *  für den Reverb-Tank und die Resonator-Delaylines -- bewusst NICHT der
+ *  naheliegende ctx.createBiquadFilter(): ein 2-poliger Biquad-Tiefpass
+ *  hat (unabhängig von Q, auch bei sehr kleinem Q) einen kleinen, aber
+ *  unvermeidbaren Überschwinger >1.0 nahe der Grenzfrequenz (gemessen
+ *  ~1.15-1.22x). In einer Feedback-Schleife reicht das, um bei dichter/
+ *  rhythmischer Retriggerung (echter Musikbetrieb, nicht nur ein einzelner
+ *  Impuls) tatsächlich unbegrenzt aufzuschaukeln, siehe git-history dieser
+ *  Datei. Ein einpoliger Tiefpass hat dagegen |H(w)| <= 1 für JEDE
+ *  Frequenz, beweisbar (Gleichheit nur bei w=0) -- kein Überschwinger
+ *  möglich, egal welche Grenzfrequenz. Damit gilt decay*|H(w)| <= decay < 1
+ *  garantiert, für jede Parameter-Kombination, nicht nur für einzeln
+ *  getestete.
+ *
+ *  Diese Begründung galt schon immer -- die frühere UMSETZUNG als nativer
+ *  Graph-Zyklus (GainNode + DelayNode mit einem Sample Verzögerung) war
+ *  aber GEMESSEN um Grössenordnungen daneben: die Web-Audio-Spec verlangt
+ *  für jeden Zyklus im Graphen mindestens einen vollen Render-Quantum (128
+ *  Samples) Latenz, die "Ein-Sample"-Verzögerung wurde also faktisch zu
+ *  ~128 Samples. Gerechnet wurde damit nicht y[n] = (1-a)x[n] + a*y[n-1],
+ *  sondern y[n] = (1-a)x[n] + a*y[n-128] -- kein 1-Pol-Tiefpass mehr,
+ *  sondern ein kammfilterartiges Gebilde mit Polstellen im Abstand von
+ *  rund fs/128 (~375Hz), dessen wirksame Grenzfrequenz über den gesamten
+ *  Reglerbereich 500-15000Hz irgendwo bei ~4-120Hz lag. Der Damping-Regler
+ *  zeigte also durchgehend etwa das 128-fache dessen an, was tatsächlich
+ *  passierte -- Hallfahnen und Resonator-Ausklänge waren entsprechend
+ *  deutlich dumpfer als angezeigt.
+ *
+ *  Deshalb jetzt dieselbe AudioWorklet-Stufe wie bei eq8 (s. core/
+ *  onepole-worklet.js): sample-für-sample im Worklet gerechnet, kein
+ *  Zyklus im nativen Graphen, keine Quantum-Latenz. Die umgebende
+ *  Feedback-Schleife bleibt davon unberührt -- ihre eigene Delayline
+ *  liefert weiterhin das für einen Zyklus vorgeschriebene Verzögerungs-
+ *  glied, die Schleifenlaufzeit ändert sich also nicht.
+ *
+ *  input/output sind bewusst eigene, STABILE GainNodes: solange das
+ *  Worklet-Modul noch lädt, verbindet der Platzhalter input direkt auf
+ *  output (transparent, also |H|=1 -- die Stabilitätsschranke oben gilt
+ *  weiterhin, nur eben ohne Höhendämpfung); sobald das Modul steht, wird
+ *  die echte Stufe dazwischengehängt, ohne dass der umgebende Graph seine
+ *  Verkabelung anfassen muss. */
+function makeOnePoleLowpass(ctx, cutoffHz) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let filter = null;
+  let disposed = false;
+  let freq = cutoffHz;
+
+  const attach = () => {
+    // outputChannelCount bewusst NICHT gesetzt -- so übernimmt der Knoten
+    // die Kanalzahl seines Eingangs (mono bleibt mono), statt eine
+    // Mono-Delayline unnötig auf Stereo aufzublasen.
+    filter = new AudioWorkletNode(ctx, 'rackwerk-onepole', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { highpass: false },
+    });
+    filter.parameters.get('cutoff').value = freq;
+    input.connect(filter).connect(output);
+  };
+
+  if (onePoleReady) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureOnePoleWorklet(ctx).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
 
   return {
-    input: inGain,
-    output: sum,
+    input,
+    output,
     setFreq(hz, t, timeConstant) {
-      const c = coeffs(hz);
-      inGain.gain.setTargetAtTime(c.oneMinusA, t, timeConstant);
-      fbGain.gain.setTargetAtTime(c.a, t, timeConstant);
+      freq = hz;
+      filter?.parameters.get('cutoff').setTargetAtTime(hz, t, timeConstant);
     },
     dispose() {
-      sum.disconnect(); inGain.disconnect(); fbGain.disconnect(); delay.disconnect();
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      filter?.disconnect();
     },
   };
 }
@@ -17195,44 +17338,17 @@ function eq8MakeBiquad(ctx, type, freq, q) {
   return node;
 }
 
-/** Lädt das 1-Pol-Worklet-Modul GENAU EINMAL fürs App-weite AudioContext-
- *  Singleton (gleiches Muster wie machines/acidbass.js#ensureAcidBassWorklet).
- *  `eq8OnePoleReady` erlaubt eq8BuildBandNodes() eine SYNCHRONE Entscheidung
- *  (build() selbst ist synchron, ein await ist dort nicht möglich) -- vor
- *  dem ersten Laden (nur beim allerersten eq8 der Session, danach gecacht)
- *  bekommt eine 6/18dB/Okt-Stufe übergangsweise einen transparenten
- *  Platzhalter (s. eq8MakeOnePoleStage), der Aufrufer stösst den echten
- *  Ersatz per rebuildOnceReady an, sobald das Modul geladen ist. */
-let eq8WorkletPromise = null;
-let eq8OnePoleReady = false;
-function eq8EnsureOnePoleWorklet(ctx) {
-  if (!eq8WorkletPromise) {
-    if (!ctx.audioWorklet) {
-      eq8WorkletPromise = Promise.resolve(false);
-    } else {
-      const blob = new Blob([EQ8_ONEPOLE_WORKLET_SRC], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      eq8WorkletPromise = ctx.audioWorklet.addModule(url)
-        .then(() => { URL.revokeObjectURL(url); eq8OnePoleReady = true; return true; })
-        .catch((err) => {
-          URL.revokeObjectURL(url);
-          console.error('eq8: 1-Pol-Worklet-Modul konnte nicht geladen werden -- 6/18dB/Okt-Flanken bleiben transparent.', err);
-          return false;
-        });
-    }
-  }
-  return eq8WorkletPromise;
-}
-
-/** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil). Solange das Worklet-
- *  Modul noch lädt (praktisch nur für den allerersten eq8 einer Session
- *  möglich), bleibt die Stufe ein transparenter Platzhalter -- sobald das
- *  Modul bereitsteht, ruft `rebuildOnceReady` (übergeben von build()/
- *  rebuildBand) genau diese Band-Position neu auf, was dann den echten
- *  Worklet-Node einsetzt. */
+/** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil) -- nutzt dieselbe
+ *  gemeinsame Worklet-Stufe wie der Damping-Filter von Reverb/Resonator
+ *  (s. ensureOnePoleWorklet/makeOnePoleLowpass oben). Solange das Modul
+ *  noch lädt (praktisch nur für den allerersten betroffenen Insert einer
+ *  Session möglich), bleibt die Stufe ein transparenter Platzhalter --
+ *  sobald das Modul bereitsteht, ruft `rebuildOnceReady` (übergeben von
+ *  build()/rebuildBand) genau diese Band-Position neu auf, was dann den
+ *  echten Worklet-Node einsetzt. */
 function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
-  if (eq8OnePoleReady) {
-    const node = new AudioWorkletNode(ctx, 'rackwerk-eq8-onepole', {
+  if (onePoleReady) {
+    const node = new AudioWorkletNode(ctx, 'rackwerk-onepole', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
@@ -17241,7 +17357,7 @@ function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
     node.parameters.get('cutoff').value = freq;
     return { kind: 'onepoleWorklet', node, input: node, output: node };
   }
-  eq8EnsureOnePoleWorklet(ctx).then((ok) => { if (ok) rebuildOnceReady(); });
+  ensureOnePoleWorklet(ctx).then((ok) => { if (ok) rebuildOnceReady(); });
   const node = ctx.createGain();
   return { kind: 'passthrough', node, input: node, output: node };
 }
@@ -17460,6 +17576,13 @@ const DEFS = {
       // Wrapper irgendwann an einer bereits entsorgten toten Node.
       const headIn = ctx.createGain();
       const tailOut = ctx.createGain();
+      // Das 1-Pol-Worklet lädt ASYNCHRON (s. eq8MakeOnePoleStage): wird
+      // dieser Insert entfernt, BEVOR das Modul fertig geladen ist, feuert
+      // der rebuildOnceReady-Callback trotzdem noch. Ohne dieses Flag
+      // würde er dann auf bereits entsorgten Nodes herumverkabeln und neue
+      // AudioWorkletNodes in einen toten Teilgraphen hängen, die nie wieder
+      // jemand abräumt.
+      let disposed = false;
       const bandNodes = p.bands.map((b, i) => eq8BuildBandNodes(ctx, b, () => rebuildBand(i)));
       let prevOut = headIn;
       for (const subs of bandNodes) {
@@ -17478,6 +17601,7 @@ const DEFS = {
        *  Stelle. Reine Parameteränderungen (freq/gain/q/active) laufen
        *  NICHT hier durch, s. eq8ApplyBandParams(). */
       function rebuildBand(i) {
+        if (disposed) return;
         const oldSubs = bandNodes[i];
         const prevN = i === 0 ? headIn : bandNodes[i - 1][bandNodes[i - 1].length - 1].output;
         const nextN = i === bandNodes.length - 1 ? tailOut : bandNodes[i + 1][0].input;
@@ -17549,6 +17673,7 @@ const DEFS = {
           return totalDb;
         },
         dispose() {
+          disposed = true;
           headIn.disconnect();
           tailOut.disconnect();
           bandNodes.forEach((subs) => subs.forEach(eq8DisposeSub));
@@ -29543,6 +29668,20 @@ const { ACIDBASS_WORKLET_SRC } = (() => {
  * auf unsere ES-Module -- deshalb komplett eigenständig, keine Imports.
  */
 const ACIDBASS_WORKLET_SRC = `
+/** Unterhalb dieser Schwelle werden rekursive Zustände hart auf 0 gesetzt.
+ *  1e-30 entspricht ~-600dBFS, liegt also unhörbar weit unter jedem
+ *  Nutzsignal -- aber viele Grössenordnungen ÜBER der Denormal-Grenze von
+ *  float64 (~2.2e-308). Betrifft hier ALLE abklingenden Zustände (Filter-
+ *  zustände, Hüllkurven, Integratoren): sie klingen nach dem Verstummen
+ *  exponentiell gegen (nie exakt) null und landen sonst irgendwann
+ *  DAUERHAFT im Denormal-Bereich, wo Gleitkomma-Arithmetik auf vielen CPUs
+ *  deutlich langsamer wird -- und von dort nie wieder herausfinden. Da
+ *  process() unabhängig davon läuft, ob gerade eine Note klingt, wäre das
+ *  eine permanente Grundlast pro AcidBass-Instanz, nicht nur ein kurzer
+ *  Ausreisser. */
+const DENORMAL_FLOOR = 1e-30;
+const flushDenormal = (v) => (v > -DENORMAL_FLOOR && v < DENORMAL_FLOOR ? 0 : v);
+
 class OnePole {
   constructor(mode) {
     this.mode = mode; // 'hp' oder 'lp'
@@ -29564,7 +29703,7 @@ class OnePole {
   process(input) {
     const y = this.b0 * input + this.b1 * this.x1 + this.a1 * this.y1;
     this.x1 = input;
-    this.y1 = y;
+    this.y1 = flushDenormal(y);
     return y;
   }
   reset() { this.x1 = 0; this.y1 = 0; }
@@ -29575,7 +29714,7 @@ class LeakyIntegrator {
   setTimeConstantMs(tauMs, sr) {
     this.coeff = tauMs > 0 ? Math.exp(-1 / (sr * 0.001 * tauMs)) : 0;
   }
-  process(input) { return (this.y1 = input + this.coeff * (this.y1 - input)); }
+  process(input) { return (this.y1 = flushDenormal(input + this.coeff * (this.y1 - input))); }
   setState(v) { this.y1 = v; }
   reset() { this.y1 = 0; }
 }
@@ -29584,7 +29723,7 @@ class DecayEnv {
   constructor() { this.c = 1; this.y = 0; }
   setDecayMs(tauMs, sr) { this.c = Math.exp(-1 / (0.001 * tauMs * sr)); }
   trigger() { this.y = 1 / this.c; }
-  process() { this.y *= this.c; return this.y; }
+  process() { this.y = flushDenormal(this.y * this.c); return this.y; }
 }
 
 // PolyBLEP-Korrektur einer naiven Sägezahn-Flanke gegen Aliasing (Standard-
@@ -29670,7 +29809,21 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       fDecay: 0.3, accentDecay: 0.15, accent: 0.6, overdrive: 0, filterFM: 0,
       slideTime: 0.06, hiRes: false, ampDecay: 1.23,
     };
+    // Zipper-Schutz: die Regler kommen als DISKRETE Sprünge per
+    // postMessage herein (ein Snapshot pro UI-Event, also ~60x/s beim
+    // Ziehen). Cutoff und Resonanz direkt in die Ladder-Koeffizienten zu
+    // schreiben hiesse, die Filtergleichung mitten im Block sprunghaft zu
+    // ändern, während y1..y4 weiterlaufen -- hörbar als Treppchen/Zirpen
+    // beim Reglerziehen, am deutlichsten bei hoher Resonanz. Die echten
+    // Audio-Nodes im Rest der App lösen dasselbe Problem per
+    // setTargetAtTime(); hier gibt es kein AudioParam, also dieselbe
+    // Exponentialglättung von Hand, pro Sample.
+    // 5ms: kurz genug, dass sich der Regler weiterhin unmittelbar anfühlt,
+    // lang genug, um die 60Hz-Treppe vollständig zu verschleifen.
+    this.smoothCoeff = 1 - Math.exp(-1 / (0.005 * sr));
+    this.cutoffSmoothed = this.p.cutoff;
     this.resonanceSkewed = 0;
+    this.resonanceSkewedTarget = 0;
 
     this.eventQueue = [];
     this.port.onmessage = (e) => {
@@ -29715,7 +29868,9 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     // Ladder-Rekursion sonst unbegrenzt aufschwingen würde.
     const r = Math.max(0, Math.min(1, p.resonance));
     this.resonanceRaw = r;
-    this.resonanceSkewed = r * (p.hiRes ? 7.0 : 4.5);
+    // Nur das ZIEL setzen -- der tatsächlich verwendete Wert zieht in
+    // process() geglättet nach (s. smoothCoeff im Konstruktor).
+    this.resonanceSkewedTarget = r * (p.hiRes ? 7.0 : 4.5);
 
     // Gemessene envMod->Cutoff-Skalierung/Offset (s. Dateikopf,
     // rosic_Open303::calculateEnvModScalerAndOffset -- Konstanten aus
@@ -29800,10 +29955,27 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       const tmp1 = this.envScaler * (this.rc1.process(mainEnvOut) - this.envOffset);
       const tmp2raw = this.accentGain > 0 ? mainEnvOut : 0;
       const tmp2 = this.accentGain * this.rc2.process(tmp2raw);
-      let instCutoff = p.cutoff * Math.pow(2, tmp1 + tmp2);
+      // Oszillator EINMAL pro Sample abtasten -- das Ergebnis wird sowohl
+      // für die Filter-FM als auch fürs eigentliche Signal gebraucht.
+      // Vorher zwei getrennte #oscSample()-Aufrufe mit garantiert
+      // identischem Ergebnis (dieselbe, dazwischen unveränderte Phase):
+      // bei aktiver Filter-FM lief die komplette PolyBLEP-Korrektur und --
+      // bei Rechteck -- ein zweites Math.tanh() pro Sample umsonst.
+      const oscRaw = this.#oscSample(dt);
+
+      // Geglättete Regler-Werte nachziehen (s. smoothCoeff im Konstruktor).
+      this.cutoffSmoothed += (p.cutoff - this.cutoffSmoothed) * this.smoothCoeff;
+      this.resonanceSkewed += (this.resonanceSkewedTarget - this.resonanceSkewed) * this.smoothCoeff;
+
+      let instCutoff = this.cutoffSmoothed * Math.pow(2, tmp1 + tmp2);
       // Devil-Fish Filter-FM: Oszillator moduliert die Cutoff-Frequenz direkt.
-      if (p.filterFM > 0) instCutoff += this.#oscSample(dt) * p.filterFM * 2500;
+      if (p.filterFM > 0) instCutoff += oscRaw * p.filterFM * 2500;
       instCutoff = Math.max(30, Math.min(18000, instCutoff));
+      // NaN kommt durch Math.max/min UNVERÄNDERT durch (Math.max(30, NaN)
+      // ist NaN, nicht 30) -- ein einziger kaputter Parameterwert würde
+      // sonst über die Koeffizienten in die Rekursion wandern und dort
+      // dauerhaft hängenbleiben. Die Form !(x > 0) fängt NaN mit ab.
+      if (!(instCutoff > 0)) instCutoff = 30;
 
       // TB_303-Ladder-Koeffizienten (exakte Formel aus rosic_TeeBeeFilter::
       // calculateCoefficientsApprox4, TB_303-Zweig -- s. Dateikopf):
@@ -29824,7 +29996,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       // Devil-Fish Overdrive: treibt das Oszillatorsignal VOR dem Filter
       // härter (s. Handbuch -- "mehr Pegel unter Stress in die Kaskade"),
       // weich begrenzt statt hart geklippt.
-      let osc = -this.#oscSample(dt); // Vorzeichen wie im Original (s. Dateikopf)
+      let osc = -oscRaw; // Vorzeichen wie im Original (s. Dateikopf)
       if (p.overdrive > 0) {
         const drive = 1 + p.overdrive * 3;
         osc = Math.tanh(osc * drive) / Math.tanh(drive);
@@ -29879,9 +30051,33 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       // Accent+Resonanz+EnvMod-Kombination (echte, physikalisch stetige
       // Selbstschwingung, kein Bug -- per Sample-für-Sample-Analyse verifiziert,
       // s. Chat) kurzzeitig über ±1 hinausschiessen.
-      out[i] = Math.max(-1, Math.min(1, sig * ampEnvOut * OUTPUT_HEADROOM));
+      let sample = sig * ampEnvOut * OUTPUT_HEADROOM;
+      // NaN/Infinity-Notbremse. Die tanh()-Begrenzungen oben fangen echtes
+      // Aufschaukeln ab, aber NICHT einen bereits kaputten Wert: tanh(NaN)
+      // ist NaN, und Math.max/min reichen NaN unverändert durch. Einmal in
+      // y1..y4 angekommen bliebe es dort für den Rest der Session --
+      // die Stimme wäre dauerhaft tot, ohne dass irgendetwas sie
+      // zurücksetzt. Deshalb hier nicht nur klemmen, sondern den
+      // Rekursionszustand tatsächlich neu aufsetzen.
+      if (!Number.isFinite(sample)) {
+        this.#resetState();
+        sample = 0;
+      }
+      out[i] = sample < -1 ? -1 : sample > 1 ? 1 : sample;
     }
     return true;
+  }
+
+  /** Setzt alle rekursiven Zustände zurück -- Notausgang, wenn irgendwo
+   *  ein NaN/Infinity in die Ladder-Rekursion gelangt ist (s. process()). */
+  #resetState() {
+    this.y1 = 0; this.y2 = 0; this.y3 = 0; this.y4 = 0;
+    this.feedbackHp.reset();
+    this.preHp.reset();
+    this.postHp.reset();
+    this.rc1.reset();
+    this.rc2.reset();
+    this.ampDeClicker.reset();
   }
 }
 
