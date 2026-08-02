@@ -801,6 +801,8 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 .jam-scene-chip {
+  position: relative;
+  overflow: hidden;      /* klemmt den Taktfortschritt-Wisch auf die Chip-Form */
   flex: 0 0 auto;
   min-height: 34px;
   padding: 0 12px;
@@ -821,6 +823,32 @@ button {
   box-shadow: none;
   border: 1px dashed var(--edge-dark);
 }
+/* Markiert die Scene, die GENAU dem aktuellen Live-Zustand aller Spuren
+   entspricht (s. jam-view.js#matchesScene) -- gleicher grüner Ring wie ein
+   spielender Clip (.clip[data-state="playing"]), damit "das läuft gerade"
+   überall im Jam dieselbe Sprache spricht. */
+.jam-scene-chip.is-active {
+  box-shadow: 0 0 0 2px var(--led-play) inset, 0 2px 4px rgba(0,0,0,.4);
+  color: var(--led-play);
+}
+.jam-scene-chip__label {
+  position: relative;    /* über dem Fortschritt-Wisch (der ist position:absolute) */
+  z-index: 1;
+}
+/* Taktfortschritt-Wisch -- scaleX() wird per rAF live nachgezogen (s.
+   jam-view.js#ensureSceneProgressLoop), nur auf der aktiven Scene sichtbar.
+   transform-origin:left macht aus scaleX() ein Von-links-Auffüllen statt
+   eines Skalierens um die Mitte. */
+.jam-scene-chip__progress {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: rgba(127, 217, 122, .25);
+  pointer-events: none;
+}
+.jam-scene-chip:not(.is-active) .jam-scene-chip__progress { display: none; }
 
 .mixer-console {
   flex: 1 1 auto;
