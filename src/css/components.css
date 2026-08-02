@@ -1293,11 +1293,12 @@ x-knob.lane-lfo-muted.has-auto .knob__dial::after {
   color: var(--ink-dim);
   text-align: center;
 }
-/* Live Freq/Gain-Anzeige übers Ziehen eines Bands (s. insert-chain.js#
-   setupEq8Graph) -- fixed statt Teil des Graphen, damit es über dem Finger
-   schwebt statt vom Graph-Ausschnitt begrenzt zu werden; pointer-events:none,
-   sonst würde es selbst Zeiger-Events vom Graphen darunter abfangen. */
-.eq8__readout {
+/* Live Freq/Gain-Anzeige übers Ziehen eines EQ8-Bands ODER eines Graphic-
+   EQ-Faders (s. insert-chain.js#showDragReadout) -- fixed statt Teil des
+   jeweiligen Controls, damit es über dem Finger schwebt statt vom
+   sichtbaren Ausschnitt begrenzt zu werden; pointer-events:none, sonst
+   würde es selbst Zeiger-Events vom Control darunter abfangen. */
+.drag-readout {
   position: fixed;
   z-index: 70;
   padding: 4px 10px;
