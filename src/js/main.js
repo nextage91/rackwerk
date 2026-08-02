@@ -29,6 +29,26 @@ const SAMPLER_CLASS = REGISTRY.find((M) => M.meta.type === 'sampler');
  *  ohne die jeweilige Sheet-Logik zu duplizieren. */
 const modeOpen = {};
 
+/** Schliesst JEDE app-weite Overlay-Ebene -- die eigentliche Ein-Fenster-
+ *  Regel (Nutzer-Anfrage: die Overlays "lappen" beim Tab-Wechsel
+ *  übereinander, weil bisher jede Stelle nur GEGEN sich selbst schloss,
+ *  nicht gegen alle anderen). Deckt die drei Bottom-Bar-Konsolen + das
+ *  Projekte-Sheet hier ab, sowie (über rack.closeOverlays()) Rack selbst:
+ *  jedes Maschinen-Fokus-Overlay + das Add-Machine-Sheet. Jede Stelle, die
+ *  eine neue Ebene öffnet, ruft das VORHER auf -- Bottom-Bar-Tabs
+ *  (wireBottomBar), Projekte-Sheet (wireProjectUI), und Rack selbst über
+ *  den rack.onBeforeOpenOverlay-Hook (s. rack.js) für Maschinen-Fokus/
+ *  Add-Machine-Sheet, damit z. B. ein offen gelassenes Add-Machine-Sheet
+ *  nicht mehr jeden weiteren Tap abfängt (per Reproduktion bestätigt: ein
+ *  Tap auf einen Bottom-Bar-Tab registrierte dann gar nicht mehr). */
+function closeAllOverlays(rack) {
+  $('#project-sheet').hidden = true;
+  $('#mixer-sheet').hidden = true;
+  $('#song-sheet').hidden = true;
+  $('#jam-sheet').hidden = true;
+  rack.closeOverlays();
+}
+
 /** Während des interaktiven Tutorials (s. wireOnboardingUI) läuft eine
  *  eigene Wegwerf-Session im selben `rack` -- Autosave (boot()) UND das
  *  Projekte-Sheet (wireProjectUI) müssen das wissen, um NICHT versehentlich
@@ -107,6 +127,7 @@ syncBottomBarHeight();
 /* ---------- 2) App-Start, sobald Audio bereit ist ---------- */
 function boot() {
   const rack = new Rack($('#rack'), $('#machine-sheet'));
+  rack.onBeforeOpenOverlay = () => closeAllOverlays(rack);
   song.bind(rack); // Song-Wiedergabe/-Aufnahme braucht Zugriff aufs Rack
 
   // Master-Effekte: Ketten an die Send-Busse hängen, Panel ans Rack-Ende
@@ -135,7 +156,7 @@ function boot() {
   wireMixerUI(rack);
   initJamView(rack);
   wireJamViewUI();
-  wireBottomBar(); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
+  wireBottomBar(rack); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
   wireUndoUI();
   wireOnboardingUI(rack);
 
@@ -234,6 +255,7 @@ function wireProjectUI(rack) {
   };
 
   $('#btn-projects').addEventListener('click', () => {
+    closeAllOverlays(rack); // schliesst auch ein evtl. offenes Maschinen-Fokus/Add-Machine-Sheet/anderen Tab
     refreshList();
     sheet.hidden = false;
   });
@@ -1015,7 +1037,7 @@ function wireJamViewUI() {
  * (nur eine Konsole gleichzeitig offen) und Active-Tab-Sync per
  * MutationObserver, weil jede Konsole auch über ihren eigenen ✕-Button
  * schließen kann, nicht nur über die Bottom-Bar selbst. */
-function wireBottomBar() {
+function wireBottomBar(rack) {
   const sheets = { mix: $('#mixer-sheet'), song: $('#song-sheet'), jam: $('#jam-sheet') };
   const modeBtns = document.querySelectorAll('.bb-mode');
 
@@ -1027,8 +1049,7 @@ function wireBottomBar() {
   modeBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
-      $('#project-sheet').hidden = true;
-      for (const [m, s] of Object.entries(sheets)) if (m !== mode) s.hidden = true;
+      closeAllOverlays(rack); // schliesst auch ein evtl. offenes Maschinen-Fokus/Add-Machine-Sheet
       if (mode !== 'rack') modeOpen[mode]();
       syncActive();
     });
@@ -1374,14 +1395,10 @@ function wireOnboardingUI(rack) {
     }
   };
 
-  const closeAllSheets = () => {
-    $('#project-sheet').hidden = true;
-    $('#mixer-sheet').hidden = true;
-    $('#song-sheet').hidden = true;
-    $('#jam-sheet').hidden = true;
-    $('#machine-sheet').hidden = true;
-    for (const view of rack.views.values()) view.overlay.hidden = true;
-  };
+  // Delegiert an die app-weite Funktion (s. dort) -- eigener lokaler Name
+  // bleibt erhalten, weil `ctx.closeAllSheets` an mehreren Tour-Schritten
+  // hängt und diese hier nicht alle umbenannt werden müssen.
+  const closeAllSheets = () => closeAllOverlays(rack);
 
   const openMachine = (idx) => {
     const m = rack.machines[idx];

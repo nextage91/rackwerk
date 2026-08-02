@@ -39,6 +39,17 @@ export class Rack {
   constructor(rackEl, sheetEl) {
     this.rackEl = rackEl;
     this.sheetEl = sheetEl;
+    /** Von main.js gesetzter Hook: läuft VOR jedem Öffnen eines eigenen
+     *  Overlays (Maschinen-Fokus oder Add-Machine-Sheet) -- schliesst dort
+     *  die Rack-FREMDEN Ebenen (Mixer/Song/Jam/Projekt-Sheet), die Rack
+     *  selbst nicht kennt. Teil des app-weiten "immer nur eine Ebene
+     *  gleichzeitig offen"-Vertrags (s. main.js#closeAllOverlays) -- ohne
+     *  diesen Hook blieb z. B. ein offen gelassenes Add-Machine-Sheet beim
+     *  Wechsel zu Mixer/Jam über der Bottom-Bar liegen und fing sogar
+     *  jeden weiteren Tap ab (Nutzer-Anfrage: Fenster "lappen" übereinander).
+     *  Optional/no-op per Default, damit Rack auch ohne main.js (z. B. in
+     *  reinen DSP-Tests) unverändert funktioniert. */
+    this.onBeforeOpenOverlay = null;
     /** @type {import('../machines/machine.js').Machine[]} */
     this.machines = [];
     /** @type {Map<import('../machines/machine.js').Machine, {row:HTMLElement, overlay:HTMLElement, panel:HTMLElement, muteBtn:HTMLElement, soloBtn:HTMLElement, moveUpBtn:HTMLElement, moveDownBtn:HTMLElement}>} */
@@ -298,9 +309,22 @@ export class Rack {
     this.#refreshMoveButtons();
   }
 
+  /** Schliesst ALLE von Rack selbst verwalteten Overlays (jedes Maschinen-
+   *  Fokus-Overlay + Add-Machine-Sheet) -- der Rack-eigene Teil des app-
+   *  weiten "nur eine Ebene gleichzeitig offen"-Vertrags, von main.js#
+   *  closeAllOverlays aufgerufen. Auch selbst genutzt (s. #openFocus/
+   *  #openSheet unten), damit z. B. ein Undo-Wiederherstellen mit
+   *  focus:true nie zwei Maschinen-Fokusse gleichzeitig offen lässt. */
+  closeOverlays() {
+    for (const view of this.views.values()) view.overlay.hidden = true;
+    this.sheetEl.hidden = true;
+  }
+
   #openFocus(machine) {
     const view = this.views.get(machine);
     if (!view) return;
+    this.onBeforeOpenOverlay?.();
+    this.closeOverlays();
     view.overlay.hidden = false;
     view.panel.scrollTop = 0;
   }
@@ -351,6 +375,10 @@ export class Rack {
       .addEventListener('click', () => this.#closeSheet());
   }
 
-  #openSheet()  { this.sheetEl.hidden = false; }
+  #openSheet() {
+    this.onBeforeOpenOverlay?.();
+    this.closeOverlays();
+    this.sheetEl.hidden = false;
+  }
   #closeSheet() { this.sheetEl.hidden = true; }
 }
