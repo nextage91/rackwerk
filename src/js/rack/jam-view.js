@@ -710,23 +710,30 @@ function toggleClip(machine, clipId) {
 
 /** Spiegelt den aktuellen Zustand (Clip-Farben, Stop-Button, Spalten-
  *  Dimmung) einer Maschine in ihre schon gerenderte Spalte -- läuft nach
- *  JEDER Zustandsänderung (Clip getippt, gestoppt, Scene gelauncht, …). */
+ *  JEDER Zustandsänderung (Clip getippt, gestoppt, Scene gelauncht, …).
+ *  Stösst danach IMMER auch refreshActiveScene() an (nicht nur, wenn
+ *  diese eine Spalte gerade gerendert ist) -- ob eine Scene aktiv
+ *  aussieht, hängt vom Zustand ALLER Maschinen ab, nicht nur der hier
+ *  geänderten. */
 function refreshClipStates(machine) {
-  const cols = columnEls.get(machine);
-  if (!cols) return; // Sheet gerade nicht offen -- nichts zu tun
   const st = stateFor(machine);
-  // Zeigt den EFFEKTIVEN (ggf. schon gequeuten) Zustand -- derselbe Gedanke
-  // wie ein frisch angetippter Clip, der auch sofort als "queued" pulsiert,
-  // statt erst nach dem nächsten Taktanfang sichtbar zu reagieren.
-  const effectiveStopped = pendingStopped(st);
-  for (const el of cols.clipsEl.querySelectorAll('.clip')) {
-    const id = Number(el.dataset.clipId);
-    el.dataset.state = id !== st.activeClipId ? (id === st.queuedClipId ? 'queued' : 'filled')
-      : effectiveStopped ? 'stopped' : 'playing';
+  const cols = columnEls.get(machine);
+  if (cols) {
+    // Zeigt den EFFEKTIVEN (ggf. schon gequeuten) Zustand -- derselbe
+    // Gedanke wie ein frisch angetippter Clip, der auch sofort als
+    // "queued" pulsiert, statt erst nach dem nächsten Taktanfang sichtbar
+    // zu reagieren.
+    const effectiveStopped = pendingStopped(st);
+    for (const el of cols.clipsEl.querySelectorAll('.clip')) {
+      const id = Number(el.dataset.clipId);
+      el.dataset.state = id !== st.activeClipId ? (id === st.queuedClipId ? 'queued' : 'filled')
+        : effectiveStopped ? 'stopped' : 'playing';
+    }
+    cols.stopBtn.classList.toggle('is-active', st.stopped);
+    cols.stopBtn.classList.toggle('is-pending', st.queuedStopped != null);
+    cols.col.classList.toggle('is-stopped', st.stopped);
   }
-  cols.stopBtn.classList.toggle('is-active', st.stopped);
-  cols.stopBtn.classList.toggle('is-pending', st.queuedStopped != null);
-  cols.col.classList.toggle('is-stopped', st.stopped);
+  refreshActiveScene();
 }
 
 /** Zurück zum normalen A/B/C/D-Pattern der Maschine (der gelöschte Clip
@@ -1476,7 +1483,12 @@ function renderScenes() {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'jam-scene-chip';
-    chip.textContent = scene.name;
+    chip.dataset.sceneId = scene.id;
+    // .jam-scene-chip__progress ist der Taktfortschritt-Wisch (s.
+    // refreshActiveScene/ensureSceneProgressLoop) -- nur auf der gerade
+    // AKTIVEN Scene sichtbar (CSS: .is-active .jam-scene-chip__progress),
+    // deshalb hier bei JEDER Scene mit angelegt statt erst bei Bedarf.
+    chip.innerHTML = `<span class="jam-scene-chip__progress"></span><span class="jam-scene-chip__label">${scene.name}</span>`;
     wireSceneChip(chip, scene);
     scenesEl.appendChild(chip);
   }
@@ -1486,6 +1498,70 @@ function renderScenes() {
   addBtn.textContent = '+ Save Scene';
   addBtn.addEventListener('click', saveScene);
   scenesEl.appendChild(addBtn);
+  refreshActiveScene();
+}
+
+/** Ermittelt, ob `scene` GENAU dem aktuellen Live-Zustand aller Maschinen
+ *  entspricht -- derselbe Massstab wie saveScene() (aktiver, nicht
+ *  gestoppter Clip), nur hier zum VERGLEICHEN statt zum Aufzeichnen.
+ *  Nutzt bewusst den EFFEKTIVEN (ggf. schon gequeuten) Zustand, nicht nur
+ *  activeClipId -- ein gerade erst getippter Scene-Launch soll sofort als
+ *  aktiv aufleuchten, genau wie ein einzelner Clip sofort "queued" pulsiert
+ *  (s. refreshClipStates), statt erst am nächsten Taktanfang. Muss über
+ *  ALLE Maschinen exakt übereinstimmen (auch die OHNE Eintrag müssen
+ *  gerade wirklich still sein) -- ein Scene-Recall, das nur teilweise
+ *  nachgestellt wird, ist nicht "diese Scene". */
+function matchesScene(scene) {
+  for (const m of boundRack?.machines ?? []) {
+    const st = stateFor(m);
+    const effective = pendingStopped(st) ? null : (st.queuedClipId ?? st.activeClipId);
+    if (effective !== (scene.entries[m.id] ?? null)) return false;
+  }
+  return true;
+}
+
+/** Markiert die (höchstens eine) gerade aktive Scene per .is-active und
+ *  stösst den Taktfortschritt-Loop für sie an. Läuft nach JEDER Zustands-
+ *  änderung irgendeiner Maschine (s. refreshClipStates) UND einmalig beim
+ *  (Neu-)Rendern der Scene-Leiste -- eine Scene, die schon beim Öffnen von
+ *  Jam exakt zutrifft (weil sie unverändert seit dem letzten Launch ist),
+ *  soll sofort markiert erscheinen, nicht erst nach der nächsten Änderung.
+ *  Ändert man danach EINEN Clip von Hand ab, verschwindet die Markierung
+ *  automatisch (matchesScene() trifft dann auf keine Scene mehr zu) --
+ *  genau wie bei Ableton Live: "diese Scene, unverändert" vs. "war mal
+ *  diese Scene, jetzt was anderes". */
+function refreshActiveScene() {
+  if (!scenesEl) return;
+  const active = scenes.find(matchesScene) ?? null;
+  for (const chip of scenesEl.querySelectorAll('.jam-scene-chip[data-scene-id]')) {
+    chip.classList.toggle('is-active', active != null && Number(chip.dataset.sceneId) === active.id);
+  }
+  if (active) ensureSceneProgressLoop();
+}
+
+/** Selbstbeendende rAF-Schleife (gleiches Muster wie startCompMeter/
+ *  startLevelMeter in ui/insert-chain.js), die den Taktfortschritt-Wisch
+ *  der aktiven Scene live nachzieht. Bricht ab, sobald entweder keine
+ *  Scene mehr aktiv ist ODER die Jam-Ansicht gerade nicht sichtbar ist
+ *  (offsetParent -- billiger Sichtbarkeits-Check ohne eigene Referenz auf
+ *  das umschliessende Sheet, s. main.js) -- wird von refreshActiveScene()
+ *  bei Bedarf neu gestartet, läuft also nie sinnlos im Hintergrund weiter,
+ *  während man z. B. im Rack ist. `transport.currentStep` liefert dabei
+ *  bereits eine auf den echten Audio-Takt genaue, gebrochene Position
+ *  (s. core/transport.js), kein eigenes Timing nötig. */
+let progressRafId = null;
+function ensureSceneProgressLoop() {
+  if (progressRafId != null) return;
+  if (!scenesEl || scenesEl.offsetParent === null) return;
+  const tick = () => {
+    if (!scenesEl || scenesEl.offsetParent === null) { progressRafId = null; return; }
+    const fill = scenesEl.querySelector('.jam-scene-chip.is-active .jam-scene-chip__progress');
+    if (!fill) { progressRafId = null; return; }
+    const frac = (transport.currentStep % STEPS_PER_BAR) / STEPS_PER_BAR;
+    fill.style.transform = `scaleX(${frac})`;
+    progressRafId = requestAnimationFrame(tick);
+  };
+  progressRafId = requestAnimationFrame(tick);
 }
 
 /** Baut die komplette Jam-Ansicht neu — beim Öffnen des Sheets aufgerufen
