@@ -29,6 +29,18 @@
  * Scope ohne Zugriff auf unsere ES-Module, deshalb komplett eigenständig.
  */
 export const EQ8_ONEPOLE_WORKLET_SRC = `
+/** Unterhalb dieser Schwelle wird der Filterzustand hart auf 0 gesetzt.
+ *  1e-30 entspricht ~-600dBFS, liegt also unhörbar weit unter jedem
+ *  Nutzsignal -- aber viele Grössenordnungen ÜBER der Denormal-Grenze von
+ *  float64 (~2.2e-308). Ohne das klingt ein Filterzustand nach dem
+ *  Verstummen des Eingangs exponentiell weiter gegen (nie exakt) null und
+ *  landet irgendwann dauerhaft im Denormal-Bereich, wo Gleitkomma-
+ *  Arithmetik auf vielen CPUs deutlich langsamer wird -- und zwar
+ *  PERMANENT, weil der Zustand von dort nie wieder herausfindet. Kostet
+ *  einen Vergleich pro Block, verhindert eine dauerhaft mitlaufende
+ *  Grundlast pro stillgelegtem EQ-Band. */
+const DENORMAL_FLOOR = 1e-30;
+
 class RackwerkOnePoleProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [{ name: 'cutoff', defaultValue: 1000, minValue: 1, maxValue: 22000, automationRate: 'a-rate' }];
@@ -38,34 +50,90 @@ class RackwerkOnePoleProcessor extends AudioWorkletProcessor {
     this.highpass = options.processorOptions?.highpass === true;
     // Ein Zustand (x1/y1) PRO Kanal -- ein Stereo-Signal darf sich nicht
     // einen einzigen Zustand teilen, sonst bluten die Kanäle ineinander.
-    this.x1 = [];
-    this.y1 = [];
+    // Feste Float64Array-Puffer statt wachsender JS-Arrays: die Kanalzahl
+    // steht beim Anlegen fest (s. outputChannelCount in inserts.js), ein
+    // dynamisch wachsendes Array würde beim ersten Schreiben pro Kanal
+    // reallozieren -- auf dem Audio-Thread grundsätzlich zu vermeiden.
+    this.x1 = new Float64Array(32);
+    this.y1 = new Float64Array(32);
+
+    // Koeffizienten-Cache. Math.exp() ist die teuerste Einzeloperation in
+    // dieser Schleife, der Cutoff ist aber im Normalfall (Regler steht
+    // still) über den ganzen Block KONSTANT -- Web Audio signalisiert das
+    // dadurch, dass das a-rate-Parameter-Array dann nur EIN Element hat.
+    // Vorher wurde Math.exp() bedingungslos pro Sample gerechnet: 128
+    // identische Aufrufe pro Block und Kanal, bei mehreren Bändern in
+    // Stereo schnell vierstellig pro Render-Quantum -- komplett umsonst.
+    this.lastCutoff = -1;
+    this.b0 = 1; this.b1 = 0; this.a1 = 0;
   }
+
+  updateCoeffs(cutoff) {
+    if (cutoff === this.lastCutoff) return;
+    this.lastCutoff = cutoff;
+    const x = Math.exp((-2 * Math.PI * cutoff) / sampleRate);
+    if (this.highpass) {
+      this.b0 = 0.5 * (1 + x);
+      this.b1 = -0.5 * (1 + x);
+      this.a1 = x;
+    } else {
+      this.b0 = 1 - x;
+      this.b1 = 0;
+      this.a1 = x;
+    }
+  }
+
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     const output = outputs[0];
     const cutoffParam = parameters.cutoff;
-    const sr = sampleRate;
+    // Länge 1 = über den ganzen Block konstant (Regler steht still, der
+    // Normalfall); Länge 128 = wird gerade automatisiert/gezogen.
+    const modulated = cutoffParam.length > 1;
+    if (!modulated) this.updateCoeffs(cutoffParam[0]);
+
     for (let ch = 0; ch < output.length; ch++) {
       const inCh = input[ch];
       const outCh = output[ch];
-      let x1 = this.x1[ch] || 0;
-      let y1 = this.y1[ch] || 0;
-      for (let i = 0; i < outCh.length; i++) {
-        const cutoff = cutoffParam.length > 1 ? cutoffParam[i] : cutoffParam[0];
-        const x = Math.exp((-2 * Math.PI * cutoff) / sr);
-        let b0, b1, a1;
-        if (this.highpass) {
-          b0 = 0.5 * (1 + x); b1 = -0.5 * (1 + x); a1 = x;
-        } else {
-          b0 = 1 - x; b1 = 0; a1 = x;
+      let x1 = this.x1[ch];
+      let y1 = this.y1[ch];
+
+      if (modulated) {
+        for (let i = 0; i < outCh.length; i++) {
+          this.updateCoeffs(cutoffParam[i]);
+          const inSample = inCh ? inCh[i] : 0;
+          const y = this.b0 * inSample + this.b1 * x1 + this.a1 * y1;
+          x1 = inSample;
+          y1 = y;
+          outCh[i] = y;
         }
-        const inSample = inCh ? inCh[i] : 0;
-        const y = b0 * inSample + b1 * x1 + a1 * y1;
-        x1 = inSample;
-        y1 = y;
-        outCh[i] = y;
+      } else {
+        // Koeffizienten in lokale Konstanten ziehen -- spart pro Sample
+        // drei Property-Zugriffe und erlaubt der Engine, sie durchgehend
+        // in Registern zu halten.
+        const b0 = this.b0, b1 = this.b1, a1 = this.a1;
+        for (let i = 0; i < outCh.length; i++) {
+          const inSample = inCh ? inCh[i] : 0;
+          const y = b0 * inSample + b1 * x1 + a1 * y1;
+          x1 = inSample;
+          y1 = y;
+          outCh[i] = y;
+        }
       }
+
+      // Denormal-Schutz (s. DENORMAL_FLOOR oben) -- einmal pro Block statt
+      // pro Sample: der Zustand braucht nach dem Verstummen ohnehin viele
+      // Blöcke, um überhaupt so klein zu werden, ein Block Verzögerung
+      // beim Nullsetzen ist also folgenlos.
+      if (y1 > -DENORMAL_FLOOR && y1 < DENORMAL_FLOOR) y1 = 0;
+      if (x1 > -DENORMAL_FLOOR && x1 < DENORMAL_FLOOR) x1 = 0;
+      // NaN/Infinity-Notbremse: ohne das würde EIN einziger kaputter Wert
+      // (etwa ein NaN aus einem vorgeschalteten Insert) sich über den
+      // Rekursionszustand y1 DAUERHAFT festsetzen -- das Band bliebe für
+      // den Rest der Session stumm bzw. gäbe NaN weiter, ohne dass
+      // irgendetwas es je zurücksetzt.
+      if (!Number.isFinite(y1) || !Number.isFinite(x1)) { x1 = 0; y1 = 0; }
+
       this.x1[ch] = x1;
       this.y1[ch] = y1;
     }

@@ -32,6 +32,20 @@
  * auf unsere ES-Module -- deshalb komplett eigenständig, keine Imports.
  */
 export const ACIDBASS_WORKLET_SRC = `
+/** Unterhalb dieser Schwelle werden rekursive Zustände hart auf 0 gesetzt.
+ *  1e-30 entspricht ~-600dBFS, liegt also unhörbar weit unter jedem
+ *  Nutzsignal -- aber viele Grössenordnungen ÜBER der Denormal-Grenze von
+ *  float64 (~2.2e-308). Betrifft hier ALLE abklingenden Zustände (Filter-
+ *  zustände, Hüllkurven, Integratoren): sie klingen nach dem Verstummen
+ *  exponentiell gegen (nie exakt) null und landen sonst irgendwann
+ *  DAUERHAFT im Denormal-Bereich, wo Gleitkomma-Arithmetik auf vielen CPUs
+ *  deutlich langsamer wird -- und von dort nie wieder herausfinden. Da
+ *  process() unabhängig davon läuft, ob gerade eine Note klingt, wäre das
+ *  eine permanente Grundlast pro AcidBass-Instanz, nicht nur ein kurzer
+ *  Ausreisser. */
+const DENORMAL_FLOOR = 1e-30;
+const flushDenormal = (v) => (v > -DENORMAL_FLOOR && v < DENORMAL_FLOOR ? 0 : v);
+
 class OnePole {
   constructor(mode) {
     this.mode = mode; // 'hp' oder 'lp'
@@ -53,7 +67,7 @@ class OnePole {
   process(input) {
     const y = this.b0 * input + this.b1 * this.x1 + this.a1 * this.y1;
     this.x1 = input;
-    this.y1 = y;
+    this.y1 = flushDenormal(y);
     return y;
   }
   reset() { this.x1 = 0; this.y1 = 0; }
@@ -64,7 +78,7 @@ class LeakyIntegrator {
   setTimeConstantMs(tauMs, sr) {
     this.coeff = tauMs > 0 ? Math.exp(-1 / (sr * 0.001 * tauMs)) : 0;
   }
-  process(input) { return (this.y1 = input + this.coeff * (this.y1 - input)); }
+  process(input) { return (this.y1 = flushDenormal(input + this.coeff * (this.y1 - input))); }
   setState(v) { this.y1 = v; }
   reset() { this.y1 = 0; }
 }
@@ -73,7 +87,7 @@ class DecayEnv {
   constructor() { this.c = 1; this.y = 0; }
   setDecayMs(tauMs, sr) { this.c = Math.exp(-1 / (0.001 * tauMs * sr)); }
   trigger() { this.y = 1 / this.c; }
-  process() { this.y *= this.c; return this.y; }
+  process() { this.y = flushDenormal(this.y * this.c); return this.y; }
 }
 
 // PolyBLEP-Korrektur einer naiven Sägezahn-Flanke gegen Aliasing (Standard-
@@ -159,7 +173,21 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       fDecay: 0.3, accentDecay: 0.15, accent: 0.6, overdrive: 0, filterFM: 0,
       slideTime: 0.06, hiRes: false, ampDecay: 1.23,
     };
+    // Zipper-Schutz: die Regler kommen als DISKRETE Sprünge per
+    // postMessage herein (ein Snapshot pro UI-Event, also ~60x/s beim
+    // Ziehen). Cutoff und Resonanz direkt in die Ladder-Koeffizienten zu
+    // schreiben hiesse, die Filtergleichung mitten im Block sprunghaft zu
+    // ändern, während y1..y4 weiterlaufen -- hörbar als Treppchen/Zirpen
+    // beim Reglerziehen, am deutlichsten bei hoher Resonanz. Die echten
+    // Audio-Nodes im Rest der App lösen dasselbe Problem per
+    // setTargetAtTime(); hier gibt es kein AudioParam, also dieselbe
+    // Exponentialglättung von Hand, pro Sample.
+    // 5ms: kurz genug, dass sich der Regler weiterhin unmittelbar anfühlt,
+    // lang genug, um die 60Hz-Treppe vollständig zu verschleifen.
+    this.smoothCoeff = 1 - Math.exp(-1 / (0.005 * sr));
+    this.cutoffSmoothed = this.p.cutoff;
     this.resonanceSkewed = 0;
+    this.resonanceSkewedTarget = 0;
 
     this.eventQueue = [];
     this.port.onmessage = (e) => {
@@ -204,7 +232,9 @@ class AcidBassProcessor extends AudioWorkletProcessor {
     // Ladder-Rekursion sonst unbegrenzt aufschwingen würde.
     const r = Math.max(0, Math.min(1, p.resonance));
     this.resonanceRaw = r;
-    this.resonanceSkewed = r * (p.hiRes ? 7.0 : 4.5);
+    // Nur das ZIEL setzen -- der tatsächlich verwendete Wert zieht in
+    // process() geglättet nach (s. smoothCoeff im Konstruktor).
+    this.resonanceSkewedTarget = r * (p.hiRes ? 7.0 : 4.5);
 
     // Gemessene envMod->Cutoff-Skalierung/Offset (s. Dateikopf,
     // rosic_Open303::calculateEnvModScalerAndOffset -- Konstanten aus
@@ -289,10 +319,27 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       const tmp1 = this.envScaler * (this.rc1.process(mainEnvOut) - this.envOffset);
       const tmp2raw = this.accentGain > 0 ? mainEnvOut : 0;
       const tmp2 = this.accentGain * this.rc2.process(tmp2raw);
-      let instCutoff = p.cutoff * Math.pow(2, tmp1 + tmp2);
+      // Oszillator EINMAL pro Sample abtasten -- das Ergebnis wird sowohl
+      // für die Filter-FM als auch fürs eigentliche Signal gebraucht.
+      // Vorher zwei getrennte #oscSample()-Aufrufe mit garantiert
+      // identischem Ergebnis (dieselbe, dazwischen unveränderte Phase):
+      // bei aktiver Filter-FM lief die komplette PolyBLEP-Korrektur und --
+      // bei Rechteck -- ein zweites Math.tanh() pro Sample umsonst.
+      const oscRaw = this.#oscSample(dt);
+
+      // Geglättete Regler-Werte nachziehen (s. smoothCoeff im Konstruktor).
+      this.cutoffSmoothed += (p.cutoff - this.cutoffSmoothed) * this.smoothCoeff;
+      this.resonanceSkewed += (this.resonanceSkewedTarget - this.resonanceSkewed) * this.smoothCoeff;
+
+      let instCutoff = this.cutoffSmoothed * Math.pow(2, tmp1 + tmp2);
       // Devil-Fish Filter-FM: Oszillator moduliert die Cutoff-Frequenz direkt.
-      if (p.filterFM > 0) instCutoff += this.#oscSample(dt) * p.filterFM * 2500;
+      if (p.filterFM > 0) instCutoff += oscRaw * p.filterFM * 2500;
       instCutoff = Math.max(30, Math.min(18000, instCutoff));
+      // NaN kommt durch Math.max/min UNVERÄNDERT durch (Math.max(30, NaN)
+      // ist NaN, nicht 30) -- ein einziger kaputter Parameterwert würde
+      // sonst über die Koeffizienten in die Rekursion wandern und dort
+      // dauerhaft hängenbleiben. Die Form !(x > 0) fängt NaN mit ab.
+      if (!(instCutoff > 0)) instCutoff = 30;
 
       // TB_303-Ladder-Koeffizienten (exakte Formel aus rosic_TeeBeeFilter::
       // calculateCoefficientsApprox4, TB_303-Zweig -- s. Dateikopf):
@@ -313,7 +360,7 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       // Devil-Fish Overdrive: treibt das Oszillatorsignal VOR dem Filter
       // härter (s. Handbuch -- "mehr Pegel unter Stress in die Kaskade"),
       // weich begrenzt statt hart geklippt.
-      let osc = -this.#oscSample(dt); // Vorzeichen wie im Original (s. Dateikopf)
+      let osc = -oscRaw; // Vorzeichen wie im Original (s. Dateikopf)
       if (p.overdrive > 0) {
         const drive = 1 + p.overdrive * 3;
         osc = Math.tanh(osc * drive) / Math.tanh(drive);
@@ -368,9 +415,33 @@ class AcidBassProcessor extends AudioWorkletProcessor {
       // Accent+Resonanz+EnvMod-Kombination (echte, physikalisch stetige
       // Selbstschwingung, kein Bug -- per Sample-für-Sample-Analyse verifiziert,
       // s. Chat) kurzzeitig über ±1 hinausschiessen.
-      out[i] = Math.max(-1, Math.min(1, sig * ampEnvOut * OUTPUT_HEADROOM));
+      let sample = sig * ampEnvOut * OUTPUT_HEADROOM;
+      // NaN/Infinity-Notbremse. Die tanh()-Begrenzungen oben fangen echtes
+      // Aufschaukeln ab, aber NICHT einen bereits kaputten Wert: tanh(NaN)
+      // ist NaN, und Math.max/min reichen NaN unverändert durch. Einmal in
+      // y1..y4 angekommen bliebe es dort für den Rest der Session --
+      // die Stimme wäre dauerhaft tot, ohne dass irgendetwas sie
+      // zurücksetzt. Deshalb hier nicht nur klemmen, sondern den
+      // Rekursionszustand tatsächlich neu aufsetzen.
+      if (!Number.isFinite(sample)) {
+        this.#resetState();
+        sample = 0;
+      }
+      out[i] = sample < -1 ? -1 : sample > 1 ? 1 : sample;
     }
     return true;
+  }
+
+  /** Setzt alle rekursiven Zustände zurück -- Notausgang, wenn irgendwo
+   *  ein NaN/Infinity in die Ladder-Rekursion gelangt ist (s. process()). */
+  #resetState() {
+    this.y1 = 0; this.y2 = 0; this.y3 = 0; this.y4 = 0;
+    this.feedbackHp.reset();
+    this.preHp.reset();
+    this.postHp.reset();
+    this.rc1.reset();
+    this.rc2.reset();
+    this.ampDeClicker.reset();
   }
 }
 

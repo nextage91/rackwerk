@@ -752,6 +752,13 @@ const DEFS = {
       // Wrapper irgendwann an einer bereits entsorgten toten Node.
       const headIn = ctx.createGain();
       const tailOut = ctx.createGain();
+      // Das 1-Pol-Worklet lädt ASYNCHRON (s. eq8MakeOnePoleStage): wird
+      // dieser Insert entfernt, BEVOR das Modul fertig geladen ist, feuert
+      // der rebuildOnceReady-Callback trotzdem noch. Ohne dieses Flag
+      // würde er dann auf bereits entsorgten Nodes herumverkabeln und neue
+      // AudioWorkletNodes in einen toten Teilgraphen hängen, die nie wieder
+      // jemand abräumt.
+      let disposed = false;
       const bandNodes = p.bands.map((b, i) => eq8BuildBandNodes(ctx, b, () => rebuildBand(i)));
       let prevOut = headIn;
       for (const subs of bandNodes) {
@@ -770,6 +777,7 @@ const DEFS = {
        *  Stelle. Reine Parameteränderungen (freq/gain/q/active) laufen
        *  NICHT hier durch, s. eq8ApplyBandParams(). */
       function rebuildBand(i) {
+        if (disposed) return;
         const oldSubs = bandNodes[i];
         const prevN = i === 0 ? headIn : bandNodes[i - 1][bandNodes[i - 1].length - 1].output;
         const nextN = i === bandNodes.length - 1 ? tailOut : bandNodes[i + 1][0].input;
@@ -841,6 +849,7 @@ const DEFS = {
           return totalDb;
         },
         dispose() {
+          disposed = true;
           headIn.disconnect();
           tailOut.disconnect();
           bandNodes.forEach((subs) => subs.forEach(eq8DisposeSub));
