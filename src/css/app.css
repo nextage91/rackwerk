@@ -823,14 +823,22 @@ button {
   box-shadow: none;
   border: 1px dashed var(--edge-dark);
 }
-/* Markiert die Scene, die GENAU dem aktuellen Live-Zustand aller Spuren
-   entspricht (s. jam-view.js#matchesScene) -- gleicher grüner Ring wie ein
-   spielender Clip (.clip[data-state="playing"]), damit "das läuft gerade"
-   überall im Jam dieselbe Sprache spricht. */
+/* Markiert die Scene, die GENAU dem gerade tatsächlich HÖRBAREN Zustand
+   aller Spuren entspricht (s. jam-view.js#matchesActiveScene) -- gleicher
+   grüner Ring wie ein spielender Clip (.clip[data-state="playing"]), damit
+   "das läuft gerade" überall im Jam dieselbe Sprache spricht. Bleibt
+   konstant an, bis der Wechsel zu einer anderen Scene tatsächlich am
+   nächsten Taktanfang passiert (s. is-queued direkt darunter). */
 .jam-scene-chip.is-active {
   box-shadow: 0 0 0 2px var(--led-play) inset, 0 2px 4px rgba(0,0,0,.4);
   color: var(--led-play);
 }
+/* Eine bereits angetippte, aber noch nicht promotete Scene (s. jam-view.js#
+   matchesQueuedScene) -- "wird geladen", blinkt bis zum nächsten Taktanfang,
+   dann tauscht refreshActiveScene() is-queued gegen is-active. Gleiche
+   Puls-Optik wie ein einzelner gequeuter Clip (.clip[data-state="queued"]),
+   damit "wartet auf den Takt" überall im Jam dieselbe Sprache spricht. */
+.jam-scene-chip.is-queued { animation: clip-queue-pulse .6s ease-in-out infinite; }
 .jam-scene-chip__label {
   position: relative;    /* über dem Fortschritt-Wisch (der ist position:absolute) */
   z-index: 1;
