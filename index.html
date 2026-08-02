@@ -31753,6 +31753,44 @@ const TAP_THRESHOLD = 8;
  *  öffnet den Löschen-Chip -- dieselbe Zeitschwelle wie dort. */
 const CLIP_HOLD_MS = 500;
 
+/** Tippen per pointerdown/pointerup statt 'click' -- Browser erzeugen ein
+ *  synthetisches 'click' NUR für den PRIMÄREN aktiven Touch-Punkt; ein
+ *  zweiter, GLEICHZEITIG gehaltener Finger (z. B. während man mit der
+ *  anderen Hand das X/Y-Pad zieht) bekommt pointerdown/pointerup ganz
+ *  normal, aber nie ein 'click' -- per echtem Multitouch-Test (zwei
+ *  simultane Touch-Punkte über CDP) bestätigt: der Stop-Button feuerte
+ *  pointerdown/pointerup zuverlässig als zweiter Finger, aber niemals
+ *  click. Jedes Jam-Bedienelement, das auch WÄHREND einer laufenden
+ *  Pad-Geste antippbar sein soll, bindet deshalb hierüber (Nutzer-Anfrage:
+ *  "während ich das X/Y-Pad bediene, kann ich keine andere Touch-Aktion
+ *  ausführen"). Bricht ab, wenn der Finger sich weiter als TAP_THRESHOLD
+ *  bewegt hat, bevor losgelassen wird -- sonst würde ein Wisch/Scroll-
+ *  Versuch, der zufällig auf demselben Element endet, als Tap zählen.
+ *  Elemente mit einer EIGENEN, komplexeren Tap-vs-Halten/Ziehen-Logik
+ *  (Clips: Umsortieren + Löschen-Menü, s. makeReorderable; Scene-Chips:
+ *  Löschen-Menü, s. wireSceneChip) lösen ihren Tap direkt aus ihrer
+ *  eigenen pointerup-Auswertung aus statt bindTap() zu nutzen -- dieselbe
+ *  Idee, nur bereits mit der zusätzlichen Gesten-Unterscheidung verwoben. */
+function bindTap(el, handler) {
+  let startX = 0, startY = 0, pointerId = null, moved = false;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button > 0) return; // nur Primärtaste/Touch, keine rechte Maustaste etc.
+    pointerId = e.pointerId;
+    startX = e.clientX; startY = e.clientY;
+    moved = false;
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pointerId) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > TAP_THRESHOLD) moved = true;
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (e.pointerId !== pointerId) return;
+    pointerId = null;
+    if (!moved) handler(e);
+  });
+  el.addEventListener('pointercancel', (e) => { if (e.pointerId === pointerId) pointerId = null; });
+}
+
 /** Ändert einen Parameter über den ECHTEN Knob im Maschinen-Panel — löst
  *  denselben `input`-Pfad aus, den auch Handbewegung/Automation nutzen
  *  (kein `knob-grab` davor, also greift auch kein Trim/keine Aufnahme).
@@ -32566,16 +32604,14 @@ function renderClips(machine, clipsEl) {
   }).join('');
   clipsEl.innerHTML = clipsHtml + renderProtoClipsHtml(machine, usedSlots);
 
-  clipsEl.querySelectorAll('.clip').forEach((el) => {
-    el.addEventListener('click', () => {
-      if (el.dataset.suppressClick) return;
-      toggleClip(machine, Number(el.dataset.clipId));
-    });
-  });
+  // Tippen zum Starten/Stoppen läuft für Clips NICHT über 'click' -- s.
+  // makeReorderable() unten, die den Tap direkt aus ihrer eigenen
+  // pointerup-Auswertung heraus auslöst (Browser erzeugen 'click' NUR für
+  // den PRIMÄREN Touch, s. Dateikopf-Kommentar bei bindTap()).
   if (machine.clips.length) makeReorderable(clipsEl, machine);
 
   clipsEl.querySelectorAll('.proto-clip').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    bindTap(btn, () => {
       const clip = machine.addClipFromPattern(Number(btn.dataset.slot));
       renderClips(machine, clipsEl);
       toggleClip(machine, clip.id);
@@ -32583,19 +32619,40 @@ function renderClips(machine, clipsEl) {
   });
 }
 
+/** Verhindert, dass makeReorderable() auf demselben `clipsEl` mehrfach
+ *  volle Listener-Sätze aufbaut -- renderClips() (und damit dieser Aufruf)
+ *  läuft bei JEDEM Hinzufügen/Löschen eines Clips erneut, `clipsEl` selbst
+ *  bleibt dabei aber das GLEICHE, dauerhafte Element (nur sein innerHTML
+ *  wird ersetzt). Ohne diese Sperre stapelten sich mit jedem weiteren Clip
+ *  weitere, komplett unabhängige pointerdown/move/up-Listener übereinander
+ *  -- bei zwei oder mehr Clips verarbeitete dann JEDER Satz dieselbe Geste
+ *  parallel, und ein SPÄTERER Satz sah beim eigenen pointerup bereits die
+ *  vom ERSTEN Satz (der zuerst fertig lief) entfernte 'is-dragging'-Klasse
+ *  -- fälschlich als "war kein Ziehen" gewertet, löste zusätzlich zum
+ *  Umsortieren noch ein ungewolltes toggleClip() aus (per Reproduktion
+ *  bestätigt: Ziehen zum Umsortieren startete/stoppte dabei nebenbei den
+ *  gezogenen Clip). Bestand schon vor dem Umbau auf direktes toggleClip()
+ *  unten, wurde vorher nur durch das separate 'click'+suppressClick-Timing
+ *  zufällig seltener sichtbar. */
+const reorderableWired = new WeakSet();
+
 /** Clips innerhalb ihrer Spalte per Ziehen umsortieren (Pointer-Events,
  *  kein HTML5-Drag&Drop -- das funktioniert auf iPhone/Touch nicht
  *  zuverlässig). Tauscht bei Überschreiten der halben Nachbarhöhe mit
- *  dem direkten Nachbarn, reicht für die kurzen Listen hier völlig. */
+ *  dem direkten Nachbarn, reicht für die kurzen Listen hier völlig.
+ *  Löst ausserdem den Start/Stop-Tap selbst aus (s. release() unten) --
+ *  weder über ein separates 'click' noch über ein suppressClick-Flag:
+ *  ein einfacher Tap (weder gezogen noch fürs Löschen-Menü gehalten) ruft
+ *  toggleClip() direkt an genau der Stelle auf, die ohnehin schon weiss,
+ *  ob eine der beiden Gesten stattfand -- funktioniert dadurch auch als
+ *  ZWEITER, gleichzeitig gehaltener Finger (Browser erzeugen 'click' nur
+ *  für den PRIMÄREN Touch, s. bindTap()-Kommentar; Nutzer-Anfrage: "während
+ *  ich das X/Y-Pad bediene, kann ich keine andere Touch-Aktion ausführen"). */
 function makeReorderable(clipsEl, machine) {
+  if (reorderableWired.has(clipsEl)) return;
+  reorderableWired.add(clipsEl);
   let dragEl = null, pointerId = null, startY = 0;
   let holdTimer = null;
-  // Bleibt über die ganze Geste bestehen (nicht per Timeout selbst wieder
-  // gelöscht!) -- der Löschen-Chip kann beliebig lange offen stehen, bevor
-  // der Finger tatsächlich losgelassen wird; suppressClick muss erst in
-  // release() gesetzt werden, genau dann, wenn der Click-Handler ihn auch
-  // wirklich prüft (sonst wäre ein zu früh selbst-löschendes Flag längst
-  // wieder weg und der Loslasser würde den Clip zusätzlich starten/stoppen).
   let heldForDelete = false;
 
   const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
@@ -32657,6 +32714,7 @@ function makeReorderable(clipsEl, machine) {
     if (!dragEl || e.pointerId !== pointerId) return;
     cancelHold();
     const wasDragging = dragEl.classList.contains('is-dragging');
+    const tappedEl = dragEl;
     dragEl.classList.remove('is-dragging');
     dragEl.style.transform = '';
     if (wasDragging) {
@@ -32669,22 +32727,10 @@ function makeReorderable(clipsEl, machine) {
       const order = [...clipsEl.querySelectorAll(':scope > .clip')].map((el) => Number(el.dataset.clipId));
       machine.clips = order.map((id) => machine.clips.find((c) => c.id === id));
     }
-    if (wasDragging || heldForDelete) {
-      // Eigene lokale Referenz auf DIESES Element -- `dragEl` selbst wird
-      // gleich unten auf null gesetzt (Ende jeder Geste), und zum Zeitpunkt,
-      // an dem dieser Timeout 80ms später feuert, ist diese Zuweisung
-      // (synchron, noch in diesem Aufruf) immer schon passiert. Der Check
-      // `if (dragEl)` im Callback prüfte bisher fälschlich die ÄUSSERE,
-      // längst genullte Variable statt des konkreten Chips -- das Flag
-      // wurde dadurch NIE wieder entfernt, und der betroffene Clip blieb
-      // dauerhaft unklickbar (bis die Liste neu gerendert wird), obwohl
-      // gar nicht mehr gezogen/gehalten wurde. Reales Symptom (Nutzer-
-      // Bugreport): "ich tippe auf einen Clip und nichts passiert" --
-      // reproduzierbar mit jedem Clip, der auch nur kurz gehalten (Löschen-
-      // Menü geöffnet, aber NICHT gelöscht) oder gezogen wurde.
-      const el = dragEl;
-      el.dataset.suppressClick = '1';
-      setTimeout(() => { delete el.dataset.suppressClick; }, 80);
+    // Nur bei einem ECHTEN Loslassen (nicht bei pointercancel) und weder
+    // gezogen noch fürs Löschen-Menü gehalten -- ein einfacher Tap.
+    if (e.type === 'pointerup' && !wasDragging && !heldForDelete) {
+      toggleClip(machine, Number(tappedEl.dataset.clipId));
     }
     dragEl = null; pointerId = null;
   };
@@ -32903,7 +32949,7 @@ function buildColumn(machine) {
   // Richtet sich nach dem EFFEKTIVEN (ggf. schon gequeuten) Zustand, sonst
   // würde ein zweiter Tap vor dem nächsten Taktanfang den alten statt den
   // gerade erst gequeuten Wechsel umkehren.
-  stopBtn.addEventListener('click', () => {
+  bindTap(stopBtn, () => {
     if (pendingStopped(stateFor(machine))) resumeMachine(machine); else haltMachine(machine);
   });
 
@@ -32955,8 +33001,8 @@ function buildColumn(machine) {
   `;
   const soloBtn = stripRow.querySelector('.is-solo');
   const muteBtn = stripRow.querySelector('.is-mute');
-  soloBtn.addEventListener('click', () => { machine.setSoloed(!machine.soloed); soloBtn.classList.toggle('is-active', machine.soloed); });
-  muteBtn.addEventListener('click', () => { machine.setMuted(!machine.muted); muteBtn.classList.toggle('is-active', machine.muted); });
+  bindTap(soloBtn, () => { machine.setSoloed(!machine.soloed); soloBtn.classList.toggle('is-active', machine.soloed); });
+  bindTap(muteBtn, () => { machine.setMuted(!machine.muted); muteBtn.classList.toggle('is-active', machine.muted); });
   col.appendChild(stripRow);
 
   columnEls.set(machine, { col, clipsEl, stopBtn });
@@ -33144,13 +33190,17 @@ function wireSceneChip(chip, scene) {
     }, CLIP_HOLD_MS);
   });
   const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
-  chip.addEventListener('pointerup', cancelHold);
+  // Löst den Tap direkt hier aus (nicht über 'click', s. bindTap()-
+  // Kommentar) -- funktioniert dadurch auch als zweiter, gleichzeitig
+  // gehaltener Finger (z. B. während man mit der anderen Hand das
+  // X/Y-Pad einer Spur zieht).
+  chip.addEventListener('pointerup', () => {
+    const wasHeld = held;
+    cancelHold();
+    if (!wasHeld) launchScene(scene);
+  });
   chip.addEventListener('pointercancel', cancelHold);
   chip.addEventListener('pointerleave', cancelHold);
-  chip.addEventListener('click', () => {
-    if (held) { held = false; return; }
-    launchScene(scene);
-  });
 }
 
 function renderScenes() {
@@ -33173,7 +33223,7 @@ function renderScenes() {
   addBtn.type = 'button';
   addBtn.className = 'jam-scene-chip jam-scene-chip--add';
   addBtn.textContent = '+ Save Scene';
-  addBtn.addEventListener('click', saveScene);
+  bindTap(addBtn, saveScene);
   scenesEl.appendChild(addBtn);
   refreshActiveScene();
 }
