@@ -19,7 +19,7 @@ import { song } from './core/song.js';
 import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack, REGISTRY } from './rack/rack.js';
-import { initJamView, renderJamView, stopAllClips } from './rack/jam-view.js';
+import { initJamView, renderJamView, stopAllClips, exitJamMode } from './rack/jam-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 const SAMPLER_CLASS = REGISTRY.find((M) => M.meta.type === 'sampler');
@@ -997,6 +997,15 @@ function wireJamViewUI() {
     sheet.hidden = true;
   });
   $('#btn-jam-stop-all').addEventListener('click', stopAllClips);
+  // Jam verlassen (egal ob per ✕ hier oder per Bottom-Bar-Tab-Wechsel in
+  // wireBottomBar(), die dasselbe hidden=true setzt) -> jede Spur wieder
+  // auf ihr normales Pattern/hörbar zurückspringen lassen, s. jam-view.js#
+  // exitJamMode (Nutzer-Bugreport: Rack liess sich nach einem Jam-Besuch
+  // nicht mehr normal gemeinsam abspielen). Ein MutationObserver statt ein
+  // zweiter Aufruf im Bottom-Bar-Handler, damit KEIN Schliessweg vergessen
+  // werden kann.
+  new MutationObserver(() => { if (sheet.hidden) exitJamMode(); })
+    .observe(sheet, { attributes: true, attributeFilter: ['hidden'] });
 }
 
 /* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------
