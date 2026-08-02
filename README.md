@@ -44,3 +44,28 @@ node tools/layout-check.mjs          # exit 0 = alles passt
 
 (Braucht Playwright als Dev-Abhängigkeit — `npm i playwright`; die App selbst
 bleibt abhängigkeitsfrei.)
+
+## DSP-/Regressionstests (nach jeder Änderung an Inserts/Maschinen-DSP)
+
+`tools/dsp-tests/` enthält Playwright-Skripte, die echtes Audio (nicht nur
+UI-Zustand) über AnalyserNode/AudioWorklet-Introspektion prüfen: eq8s
+Flankensteilheiten, das Reverb-/Resonator-Damping, den AcidBass-DSP-Kern
+(Endlichkeit, Headroom, Zipper-Freiheit) sowie die Touch-Interaktion der
+eq8-/Insert-Chain-UI. Jede Datei ist einzeln lauffähig
+(`node tools/dsp-tests/eq8-slopes.mjs`), der Runner baut das Bundle und
+führt alle auf einmal aus:
+
+```bash
+node tools/dsp-check.mjs             # baut das Bundle + testet, exit 0 = alles grün
+node tools/dsp-check.mjs --no-build  # nutzt das vorhandene index.html
+```
+
+Startet dafür einen eigenen, isolierten Server (Port 8987) — kein manueller
+Server-Start nötig, anders als beim Layout-Check. Braucht ebenfalls
+Playwright als Dev-Abhängigkeit.
+
+Diese Tests decken reale, in der Entwicklung gefundene Bugs ab (u. a. eine
+Web-Audio-Render-Quantum-Latenz, die eq8s 6/18dB/Okt-Flanken und das
+Reverb-/Resonator-Damping unbemerkt um Grössenordnungen verstellte) —
+gehören also bei jeder Änderung an `core/inserts.js`, den beiden
+`*-worklet.js`-DSP-Kernen oder `ui/insert-chain.js` mit dazu.
