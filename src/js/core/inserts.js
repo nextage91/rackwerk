@@ -25,7 +25,7 @@ import { ONEPOLE_WORKLET_SRC } from './onepole-worklet.js';
  *  bei amount=0) klingt schon bei niedrigem amount hörbar verzerrt, weil
  *  selbst k=1 spürbar von der Identität abweicht — das Blending macht
  *  den Regler über den ganzen Bereich nutzbar, von ganz sauber bis hart. */
-function makeDriveCurve(amount) {
+export function makeDriveCurve(amount) {
   const n = 1024;
   const curve = new Float32Array(n);
   const K = 30;
