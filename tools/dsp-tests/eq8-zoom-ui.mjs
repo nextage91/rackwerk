@@ -55,6 +55,11 @@ const graph = page.locator('.eq8__graph');
 const box = await graph.boundingBox();
 const tapX = box.x + box.width * 0.5;
 const tapY = box.y + box.height * 0.5; // dead-center -> gain 0
+// Zwei Taps am selben Punkt nötig, um ein Band zu erzeugen (s.
+// EMPTY_TAP_TOLERANCE in setupEq8Graph).
+await dispatchPointer('pointerdown', 1, tapX, tapY);
+await dispatchPointer('pointerup', 1, tapX, tapY);
+await page.waitForTimeout(50);
 await dispatchPointer('pointerdown', 1, tapX, tapY);
 await dispatchPointer('pointerup', 1, tapX, tapY);
 await page.waitForTimeout(50);

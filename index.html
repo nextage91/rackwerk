@@ -21685,6 +21685,17 @@ function setupEq8Graph(row, insert) {
   const DOUBLE_TAP_MS = 350;
   let lastTapNode = -1, lastTapTime = 0;
 
+  // Ein neues Band entsteht jetzt erst beim ZWEITEN Tipp auf dieselbe leere
+  // Stelle (statt sofort beim ersten) -- Chat-Feedback: beim Versuch, per
+  // Zwei-Finger-Geste die Q eines Bandes einzustellen, kam es öfter vor,
+  // dass (Touch-Timing-Ungenauigkeit, oder schlicht ein kurzer Erst-Tap vor
+  // dem eigentlichen Pinch) ausversehen ein neues Band entstand. Grosszügigere
+  // Toleranz als TAP_TOLERANCE oben (die gilt fürs Erkennen "Ziehen statt
+  // Tippen" INNERHALB einer Geste) -- zwei separate Finger-Taps treffen
+  // selten exakt dasselbe Pixel.
+  const EMPTY_TAP_TOLERANCE = 20;
+  let lastEmptyTapPos = null, lastEmptyTapTime = 0;
+
   // Live-Frequenz/Gain-Anzeige über dem Finger während des Ziehens -- ohne
   // die feinen Gitterlinien allein war kaum ablesbar, bei welchem Wert man
   // gerade steht (s. Chat-Feedback). Nutzt die modulweit geteilte Anzeige
@@ -21762,7 +21773,13 @@ function setupEq8Graph(row, insert) {
     } else if (activePointers.size === 2 && qNode >= 0) {
       const pts = [...activePointers.values()];
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const q = Math.max(EQ8_Q_MIN, Math.min(EQ8_Q_MAX, qStartQ * (dist / qStartDist)));
+      // Invertiert (Chat-Feedback): Finger AUSEINANDER soll den Bump breiter
+      // machen (= niedrigerer Q-Wert, physikalisch ist Q ja die Güte/Schärfe,
+      // nicht die Breite selbst), Finger ZUSAMMEN entsprechend schmaler/höherer
+      // Q -- die übliche Pinch-Logik ("auseinander = mehr/grösser") passt hier
+      // nur, wenn man sie auf die sichtbare Bandbreite bezieht statt auf den
+      // rohen Q-Zahlenwert.
+      const q = Math.max(EQ8_Q_MIN, Math.min(EQ8_Q_MAX, qStartQ * (qStartDist / dist)));
       insert.params.bands[qNode].q = q;
       insert.setBand(qNode, 'q');
       redrawSettled();
@@ -21795,21 +21812,35 @@ function setupEq8Graph(row, insert) {
             lastTapTime = now;
           }
         } else if (qNode < 0 && downPos) {
-          // Tap auf leere Fläche -- erstes noch inaktives Band an dieser
-          // Stelle aktivieren (alle 8 Bänder existieren fest, s. inserts.js)
-          // und gleich selektieren (direkt per Zwei-Finger-Geste die Q
-          // einstellen können, ohne erst extra antippen zu müssen).
-          const emptyIdx = insert.params.bands.findIndex((b) => !b.active);
-          if (emptyIdx >= 0) {
-            const b = insert.params.bands[emptyIdx];
-            b.freq = eq8XToFreq(downPos.x);
-            b.gain = yToGain(downPos.y);
-            b.active = true;
-            insert.setBand(emptyIdx, 'active');
-            insert.setBand(emptyIdx, 'freq');
-            insert.setBand(emptyIdx, 'gain');
-            selectedBand = emptyIdx;
-            redrawSettled();
+          // Tap auf leere Fläche -- braucht jetzt einen ZWEITEN Tipp an
+          // (ungefähr) derselben Stelle, bevor tatsächlich ein Band entsteht
+          // (s. EMPTY_TAP_TOLERANCE oben). Der erste Tap merkt sich nur
+          // Position/Zeit und legt noch nichts an.
+          const now = performance.now();
+          const isSecondTap = lastEmptyTapPos
+            && now - lastEmptyTapTime < DOUBLE_TAP_MS
+            && Math.hypot(downPos.x - lastEmptyTapPos.x, downPos.y - lastEmptyTapPos.y) < EMPTY_TAP_TOLERANCE;
+          if (isSecondTap) {
+            // Erstes noch inaktives Band an dieser Stelle aktivieren (alle 8
+            // Bänder existieren fest, s. inserts.js) und gleich selektieren
+            // (direkt per Zwei-Finger-Geste die Q einstellen können, ohne
+            // erst extra antippen zu müssen).
+            const emptyIdx = insert.params.bands.findIndex((b) => !b.active);
+            if (emptyIdx >= 0) {
+              const b = insert.params.bands[emptyIdx];
+              b.freq = eq8XToFreq(downPos.x);
+              b.gain = yToGain(downPos.y);
+              b.active = true;
+              insert.setBand(emptyIdx, 'active');
+              insert.setBand(emptyIdx, 'freq');
+              insert.setBand(emptyIdx, 'gain');
+              selectedBand = emptyIdx;
+              redrawSettled();
+            }
+            lastEmptyTapPos = null;
+          } else {
+            lastEmptyTapPos = downPos;
+            lastEmptyTapTime = now;
           }
         }
       }

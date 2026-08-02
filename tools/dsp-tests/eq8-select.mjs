@@ -42,9 +42,18 @@ const dispatchPointer = async (type, id, x, y) => {
     (el || document.body).dispatchEvent(ev);
   }, { type, id, x, y });
 };
+// Zwei Taps am selben Punkt nötig, um ein NEUES Band auf leerer Fläche zu
+// erzeugen (s. EMPTY_TAP_TOLERANCE in setupEq8Graph) -- Schutz gegen
+// versehentliches Anlegen beim Versuch, per Pinch die Q eines Bandes
+// einzustellen. Diese Hilfsfunktion wird hier ausschliesslich zum
+// Anlegen neuer Bänder verwendet, daher immer als Doppel-Tap.
 const tap = async (id, fx, fy) => {
-  await dispatchPointer('pointerdown', id, box.x + box.width * fx, box.y + box.height * fy);
-  await dispatchPointer('pointerup', id, box.x + box.width * fx, box.y + box.height * fy);
+  const x = box.x + box.width * fx, y = box.y + box.height * fy;
+  await dispatchPointer('pointerdown', id, x, y);
+  await dispatchPointer('pointerup', id, x, y);
+  await page.waitForTimeout(50);
+  await dispatchPointer('pointerdown', id, x, y);
+  await dispatchPointer('pointerup', id, x, y);
   await page.waitForTimeout(150);
 };
 

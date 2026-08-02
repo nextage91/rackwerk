@@ -107,8 +107,15 @@ await graph.scrollIntoViewIfNeeded();
 const gbox = await graph.boundingBox();
 const tapX = gbox.x + gbox.width / 2;
 const tapY = gbox.y + gbox.height / 2;
-// Erst ein Band per Tap anlegen (alle 8 starten inaktiv), dann DASSELBE
-// Band tatsächlich ziehen -- s. Kommentar oben.
+// Erst ein Band per DOPPEL-Tap anlegen (alle 8 starten inaktiv, und seit
+// dem "versehentlich erzeugtes Band beim Q-Pinch"-Fix braucht das Anlegen
+// selbst schon zwei Taps am selben Punkt, s. EMPTY_TAP_TOLERANCE in
+// setupEq8Graph), dann DASSELBE Band in einer separaten dritten Geste
+// tatsächlich ziehen -- s. Kommentar oben.
+await page.mouse.move(tapX, tapY);
+await page.mouse.down();
+await page.mouse.up();
+await page.waitForTimeout(80);
 await page.mouse.move(tapX, tapY);
 await page.mouse.down();
 await page.mouse.up();
