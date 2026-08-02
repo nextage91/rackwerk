@@ -4413,7 +4413,27 @@ class XFader extends HTMLElement {
   }
 
   /* ---------- Pointer handling ---------- */
+  // `.fader__cap` und `.fader__hitzone` sind DOM-Kinder von `.fader__track`
+  // (s. innerHTML oben), aber alle drei tragen denselben pointerdown-
+  // Listener (#onDown) -- ein Tap direkt auf Kappe oder Hitzone (der
+  // NORMALFALL, da die Kappe genau dort liegt, wo man zum Zurücksetzen
+  // hintippt) löst #onDown also ZWEIMAL für dasselbe physische Tippen aus:
+  // einmal in der Zielphase (Kappe/Hitzone), dann erneut, wenn dasselbe
+  // Event zum Track (Elternteil) hochblubbert. Für einen normalen Tap/Drag
+  // ist die doppelte Ausführung harmlos (beide Aufrufe setzen denselben
+  // Wert). Für den Doppel-Tap-Reset ist sie fatal: der ERSTE Aufruf
+  // erkennt den Doppel-Tap korrekt und setzt zurück, der ZWEITE (gebubbelte)
+  // Aufruf sieht #lastTap dann schon auf 0 zurückgesetzt, hält das für
+  // einen frischen Einzel-Tap und zieht den Wert sofort wieder von 0 weg,
+  // an die aktuelle Tipp-Position (s. Chat-Feedback: "Doppel-Tap setzt
+  // das Band nicht zurück"). e.stopPropagation() würde das zwar auch
+  // lösen, aber auch externe Listener auf dem Host-Element blockieren
+  // (z. B. die Graphic-EQ-Drag-Anzeige, s. insert-chain.js) -- stattdessen
+  // wird direkt am Event-Objekt markiert, dass es schon einmal verarbeitet
+  // wurde (dasselbe Objekt durchläuft Ziel- und Bubble-Phase).
   #onDown = (e) => {
+    if (e.__xfaderHandled) return;
+    e.__xfaderHandled = true;
     e.preventDefault();
     this.#track.setPointerCapture?.(e.pointerId);
 
