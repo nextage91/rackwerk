@@ -1501,17 +1501,35 @@ function renderScenes() {
   refreshActiveScene();
 }
 
-/** Ermittelt, ob `scene` GENAU dem aktuellen Live-Zustand aller Maschinen
- *  entspricht -- derselbe Massstab wie saveScene() (aktiver, nicht
- *  gestoppter Clip), nur hier zum VERGLEICHEN statt zum Aufzeichnen.
- *  Nutzt bewusst den EFFEKTIVEN (ggf. schon gequeuten) Zustand, nicht nur
- *  activeClipId -- ein gerade erst getippter Scene-Launch soll sofort als
- *  aktiv aufleuchten, genau wie ein einzelner Clip sofort "queued" pulsiert
- *  (s. refreshClipStates), statt erst am nächsten Taktanfang. Muss über
+/** Ermittelt, ob `scene` GENAU dem gerade tatsächlich HÖRBAREN Zustand
+ *  aller Maschinen entspricht -- derselbe Massstab wie saveScene() (aktiver,
+ *  nicht gestoppter Clip), nur hier zum VERGLEICHEN statt zum Aufzeichnen.
+ *  Nutzt bewusst NUR den ANGEWANDTEN Zustand (st.activeClipId/st.stopped),
+ *  NIE einen schon gequeuten, noch nicht promoteten Wechsel (queuedClipId/
+ *  queuedStopped) -- Gegenstück zu matchesQueuedScene() unten. Muss über
  *  ALLE Maschinen exakt übereinstimmen (auch die OHNE Eintrag müssen
  *  gerade wirklich still sein) -- ein Scene-Recall, das nur teilweise
  *  nachgestellt wird, ist nicht "diese Scene". */
-function matchesScene(scene) {
+function matchesActiveScene(scene) {
+  for (const m of boundRack?.machines ?? []) {
+    const st = stateFor(m);
+    const effective = st.stopped ? null : st.activeClipId;
+    if (effective !== (scene.entries[m.id] ?? null)) return false;
+  }
+  return true;
+}
+
+/** Ermittelt, ob `scene` dem Zustand entspricht, der beim NÄCHSTEN
+ *  Taktanfang gelten wird -- also inklusive schon gequeuter, aber noch
+ *  nicht promoteter Wechsel (queuedClipId/queuedStopped, s. pendingStopped()
+ *  oben). Solange noch nichts gequeut ist, deckt sich das exakt mit
+ *  matchesActiveScene() (queuedClipId ?? activeClipId ist dann einfach
+ *  activeClipId). Nutzer-Wunsch: die Scene, auf die man gerade getippt hat
+ *  aber die erst am nächsten Taktanfang wirklich einsetzt, soll als
+ *  "wird geladen" (blinkend) erkennbar sein -- getrennt von der Scene, die
+ *  GERADE TATSÄCHLICH läuft (matchesActiveScene, bleibt bis zum Wechsel
+ *  konstant markiert, s. refreshActiveScene()). */
+function matchesQueuedScene(scene) {
   for (const m of boundRack?.machines ?? []) {
     const st = stateFor(m);
     const effective = pendingStopped(st) ? null : (st.queuedClipId ?? st.activeClipId);
@@ -1520,21 +1538,32 @@ function matchesScene(scene) {
   return true;
 }
 
-/** Markiert die (höchstens eine) gerade aktive Scene per .is-active und
- *  stösst den Taktfortschritt-Loop für sie an. Läuft nach JEDER Zustands-
- *  änderung irgendeiner Maschine (s. refreshClipStates) UND einmalig beim
- *  (Neu-)Rendern der Scene-Leiste -- eine Scene, die schon beim Öffnen von
- *  Jam exakt zutrifft (weil sie unverändert seit dem letzten Launch ist),
- *  soll sofort markiert erscheinen, nicht erst nach der nächsten Änderung.
- *  Ändert man danach EINEN Clip von Hand ab, verschwindet die Markierung
- *  automatisch (matchesScene() trifft dann auf keine Scene mehr zu) --
- *  genau wie bei Ableton Live: "diese Scene, unverändert" vs. "war mal
- *  diese Scene, jetzt was anderes". */
+/** Markiert die (höchstens eine) gerade WIRKLICH spielende Scene konstant
+ *  per .is-active (Taktfortschritt-Loop läuft für sie, s. unten) und eine
+ *  davon abweichende, bereits angetippte aber noch nicht promotete Scene
+ *  per .is-queued (blinkt, s. CSS clip-queue-pulse -- dieselbe Optik wie ein
+ *  einzelner gequeuter Clip). Läuft nach JEDER Zustandsänderung irgendeiner
+ *  Maschine (s. refreshClipStates) UND einmalig beim (Neu-)Rendern der
+ *  Scene-Leiste -- eine Scene, die schon beim Öffnen von Jam exakt zutrifft
+ *  (weil sie unverändert seit dem letzten Launch ist), soll sofort markiert
+ *  erscheinen, nicht erst nach der nächsten Änderung.
+ *  Nutzer-Anfrage: "wenn ich von der einen Scene in die andere wechsle,
+ *  läuft die eine noch, die nächste wird geladen -- das Laden soll blinken,
+ *  die alte bleibt bis zum tatsächlichen Wechsel konstant an, danach
+ *  springt die Markierung um" -- genau das leisten die zwei getrennten
+ *  Vergleiche oben: is-active hängt NUR am angewandten Zustand (ändert sich
+ *  erst, wenn initJamView()s Takt-Listener den Wechsel am nächsten
+ *  Taktanfang tatsächlich promotet), is-queued zeigt einen davon
+ *  ABWEICHENDEN, schon gequeuten Zielzustand separat an. */
 function refreshActiveScene() {
   if (!scenesEl) return;
-  const active = scenes.find(matchesScene) ?? null;
+  const active = scenes.find(matchesActiveScene) ?? null;
+  const queued = scenes.find(matchesQueuedScene) ?? null;
+  const queuedDiffers = queued != null && queued !== active;
   for (const chip of scenesEl.querySelectorAll('.jam-scene-chip[data-scene-id]')) {
-    chip.classList.toggle('is-active', active != null && Number(chip.dataset.sceneId) === active.id);
+    const id = Number(chip.dataset.sceneId);
+    chip.classList.toggle('is-active', active != null && id === active.id);
+    chip.classList.toggle('is-queued', queuedDiffers && id === queued.id);
   }
   if (active) ensureSceneProgressLoop();
 }
