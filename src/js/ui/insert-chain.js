@@ -304,6 +304,29 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
  * dem Knoten bleibt der direkte Weg für Freq/Gain und setzt die Auswahl
  * gleich mit.
  */
+/** Live-Wert-Anzeige über dem Finger während des Ziehens -- fixed statt
+ *  Teil des jeweiligen Controls (EQ8-Graph-Knoten ODER Graphic-EQ-Fader),
+ *  damit sie unabhängig vom sichtbaren Ausschnitt über dem Finger schwebt.
+ *  Ein einziges, modulweites Element (wie eq8Menu/insertPickerEl oben) --
+ *  nie mehr als eine Drag-Geste gleichzeitig aktiv, für beide Insert-Typen
+ *  gemeinsam genutzt (Nutzer-Anfrage: "beim Graphic EQ auch so ein Popup
+ *  wie beim EQ8"). 60px statt ursprünglich 40px über dem Finger -- Nutzer-
+ *  Feedback: der Finger verdeckte die Anzeige noch leicht. */
+let dragReadoutEl = null;
+const fmtGain = (db) => `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+function showDragReadout(clientX, clientY, text) {
+  if (!dragReadoutEl) {
+    dragReadoutEl = document.createElement('div');
+    dragReadoutEl.className = 'drag-readout';
+    document.body.appendChild(dragReadoutEl);
+  }
+  dragReadoutEl.textContent = text;
+  const left = Math.max(8, Math.min(window.innerWidth - dragReadoutEl.offsetWidth - 8, clientX - dragReadoutEl.offsetWidth / 2));
+  dragReadoutEl.style.left = `${left}px`;
+  dragReadoutEl.style.top = `${Math.max(8, clientY - 60)}px`;
+}
+function hideDragReadout() { dragReadoutEl?.remove(); dragReadoutEl = null; }
+
 function setupEq8Graph(row, insert) {
   const graph = row.querySelector('[data-eq8-graph]');
   if (!graph) return;
@@ -433,24 +456,12 @@ function setupEq8Graph(row, insert) {
 
   // Live-Frequenz/Gain-Anzeige über dem Finger während des Ziehens -- ohne
   // die feinen Gitterlinien allein war kaum ablesbar, bei welchem Wert man
-  // gerade steht (s. Chat-Feedback). Eigenes, fixed-positioniertes Element
-  // (wie eq8Menu), nicht Teil des SVG -- muss über dem Finger schweben,
-  // unabhängig vom Graph-Ausschnitt.
-  let readoutEl = null;
+  // gerade steht (s. Chat-Feedback). Nutzt die modulweit geteilte Anzeige
+  // (showDragReadout/hideDragReadout oben), dieselbe, die jetzt auch der
+  // Graphic EQ für seine Fader verwendet.
   const fmtFreq = (hz) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 1 : 2)} kHz` : `${Math.round(hz)} Hz`);
-  const fmtGain = (db) => `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
-  const showReadout = (clientX, clientY, freq, gain) => {
-    if (!readoutEl) {
-      readoutEl = document.createElement('div');
-      readoutEl.className = 'eq8__readout';
-      document.body.appendChild(readoutEl);
-    }
-    readoutEl.textContent = `${fmtFreq(freq)} · ${fmtGain(gain)}`;
-    const left = Math.max(8, Math.min(window.innerWidth - readoutEl.offsetWidth - 8, clientX - readoutEl.offsetWidth / 2));
-    readoutEl.style.left = `${left}px`;
-    readoutEl.style.top = `${Math.max(8, clientY - 40)}px`;
-  };
-  const hideReadout = () => { readoutEl?.remove(); readoutEl = null; };
+  const showReadout = (clientX, clientY, freq, gain) => showDragReadout(clientX, clientY, `${fmtFreq(freq)} · ${fmtGain(gain)}`);
+  const hideReadout = () => hideDragReadout();
 
   graph.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -972,11 +983,24 @@ export function renderInsertChain(listEl, owner) {
     // von 10 Bändern", s. inserts.js#setBandGain). Bewusst NICHT
     // automatisierbar, gleiche Begründung wie resonators Tune-Regler oben.
     for (const knob of row.querySelectorAll('[data-geq-band]')) {
+      const i = parseInt(knob.dataset.geqBand, 10);
       knob.addEventListener('input', (e) => {
-        const i = parseInt(knob.dataset.geqBand, 10);
         insert.params.bands[i] = e.detail.value;
         insert.setBandGain?.(i, e.detail.value);
       });
+      // Live-Anzeige übers Ziehen -- die schmalen Fader (5 pro Reihe, s.
+      // CSS .geq-bands) haben kaum Platz für eine gut lesbare eigene
+      // Pegelanzeige, und der Finger deckt sie beim Ziehen zusätzlich ab
+      // (Nutzer-Feedback). Rein extern über die nativen Pointer-Events des
+      // <x-fader>-Host-Elements verdrahtet (bubbelt aus dessen Track-Kind
+      // hoch) -- kein Eingriff in fader.js nötig, `knob.value` liest dabei
+      // immer den schon von x-fader selbst aktualisierten aktuellen Wert.
+      const freqLabel = GEQ_FREQS[i] >= 1000 ? `${GEQ_FREQS[i] / 1000}k` : `${GEQ_FREQS[i]} Hz`;
+      const updateReadout = (e) => showDragReadout(e.clientX, e.clientY, `${freqLabel} · ${fmtGain(knob.value)}`);
+      knob.addEventListener('pointerdown', updateReadout);
+      knob.addEventListener('pointermove', updateReadout);
+      knob.addEventListener('pointerup', hideDragReadout);
+      knob.addEventListener('pointercancel', hideDragReadout);
     }
     if (insert.type === 'comp' || insert.type === 'opto' || insert.type === 'limiter') startCompMeter(row, insert);
     startLevelMeter(row, insert);
