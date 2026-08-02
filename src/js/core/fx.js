@@ -253,18 +253,32 @@ class MasterFX {
 
   /* ---------- Insert-FX (Master-Bus) ---------- */
 
+  /** s. Machine#rewireInsertChain()s #chainTarget-Kommentar für die
+   *  ausführliche Begründung -- exakt derselbe Bug (ein zielloser
+   *  disconnect() riss bei jedem Verschieben/Hinzufügen/Entfernen eines
+   *  Master-Inserts auch den parallelen Pegel-Meter-Tap ab, dauerhaft,
+   *  für die GESAMTE Kette) traf hier identisch zu. */
+  #chainTarget = new WeakMap();
+
   /** Verbindet masterChainIn -> insert[0] -> ... -> insert[n] -> masterChainOut
    *  neu -- exaktes Gegenstück zu Machine#rewireInsertChain(), nur mit den
    *  festen Anker-Gains aus audio-engine.js statt output/panner. */
   #rewireMasterInsertChain() {
-    engine.masterChainIn.disconnect();
-    for (const insert of this.inserts) insert.output.disconnect();
+    const disconnectChainEdge = (node) => {
+      const target = this.#chainTarget.get(node);
+      if (target) node.disconnect(target);
+    };
+    disconnectChainEdge(engine.masterChainIn);
+    for (const insert of this.inserts) disconnectChainEdge(insert.output);
+
     let prev = engine.masterChainIn;
     for (const insert of this.inserts) {
       prev.connect(insert.input);
+      this.#chainTarget.set(prev, insert.input);
       prev = insert.output;
     }
     prev.connect(engine.masterChainOut);
+    this.#chainTarget.set(prev, engine.masterChainOut);
   }
 
   addInsert(type) {
