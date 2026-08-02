@@ -32,7 +32,7 @@ MODULES = [
     ("js/ui/keybed.js",         ["createKeybed"]),
     ("js/core/audio-engine.js", ["engine"]),
     ("js/core/dsp.js",          ["noise", "lfsrNoise", "env", "autoStop", "midiToHz", "applyFilterEnv"]),
-    ("js/core/eq8-onepole-worklet.js", ["EQ8_ONEPOLE_WORKLET_SRC"]),
+    ("js/core/onepole-worklet.js", ["ONEPOLE_WORKLET_SRC"]),
     ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "insertChainLatencySec", "UI_PARAMS", "EQ_TYPES", "EQ_SLOPES", "EQ8_GAIN_RANGES", "FILTER_DELAY_TYPES", "DELAY_SYNC_BUTTONS", "RESONATOR_INTERVALS", "INSERT_COLORS", "RATIO_MODE_BUTTONS", "OPTO_MODE_BUTTONS", "GEQ_FREQS", "makeFeedbackClipCurve"]),
     ("js/core/modular.js",      ["MODULE_TYPES", "moduleMeta", "ModularPatch", "MODULE_PORTS", "MODULE_UI_PARAMS", "OSCILLATOR_WAVES", "FILTER_TYPES"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR", "shuffleTime"]),

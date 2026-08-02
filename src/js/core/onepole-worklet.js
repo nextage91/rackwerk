@@ -1,9 +1,14 @@
 /**
- * 1-poliger (6dB/Okt) Highpass/Lowpass als AudioWorkletProcessor -- für
- * eq8s Flankensteilheiten 6 und 18dB/Okt (s. core/inserts.js#eq8BuildBandNodes).
+ * 1-poliger (6dB/Okt) Highpass/Lowpass als AudioWorkletProcessor.
  *
- * Der erste Anlauf (makeOnePoleLowpass()-artige Rückkopplungsschleife aus
- * GainNode+1-Sample-DelayNode) war GEMESSEN ungenau: die Web-Audio-Spec
+ * Gemeinsame 1-Pol-Stufe für ALLE Stellen im Projekt, die eine brauchen:
+ *   - eq8s Flankensteilheiten 6 und 18dB/Okt (s. inserts.js#eq8BuildBandNodes)
+ *   - der Damping-Filter im Reverb-Tank und in den Resonator-Delaylines
+ *     (s. inserts.js#makeOnePoleLowpass)
+ *
+ * Der erste Anlauf (Rückkopplungsschleife aus GainNode+1-Sample-DelayNode,
+ * ursprünglich für das Reverb-Damping gebaut) war GEMESSEN ungenau: die
+ * Web-Audio-Spec
  * verlangt für jeden ZYKLUS im Audiographen mindestens EINEN vollen
  * Render-Quantum (128 Samples) Verzögerung, bevor er aufgelöst wird --
  * eine "1-Sample"-DelayNode in einer Rückkopplungsschleife bekommt also in
@@ -25,10 +30,10 @@
  * Wie bei acidbass-worklet.js: exportiert nur den Quelltext als String --
  * RackWerk wird als EINE gebündelte index.html ausgeliefert (s. README),
  * der String wird zur Laufzeit per Blob-URL an audioWorklet.addModule()
- * übergeben (s. core/inserts.js#eq8EnsureOnePoleWorklet). Eigener globaler
+ * übergeben (s. core/inserts.js#ensureOnePoleWorklet). Eigener globaler
  * Scope ohne Zugriff auf unsere ES-Module, deshalb komplett eigenständig.
  */
-export const EQ8_ONEPOLE_WORKLET_SRC = `
+export const ONEPOLE_WORKLET_SRC = `
 /** Unterhalb dieser Schwelle wird der Filterzustand hart auf 0 gesetzt.
  *  1e-30 entspricht ~-600dBFS, liegt also unhörbar weit unter jedem
  *  Nutzsignal -- aber viele Grössenordnungen ÜBER der Denormal-Grenze von
@@ -140,5 +145,5 @@ class RackwerkOnePoleProcessor extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('rackwerk-eq8-onepole', RackwerkOnePoleProcessor);
+registerProcessor('rackwerk-onepole', RackwerkOnePoleProcessor);
 `;
