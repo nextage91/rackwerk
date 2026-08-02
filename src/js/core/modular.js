@@ -32,7 +32,7 @@
  */
 import { engine } from './audio-engine.js';
 import { noise, midiToHz } from './dsp.js';
-import { makeFeedbackClipCurve } from './inserts.js';
+import { makeFeedbackClipCurve, makeDriveCurve } from './inserts.js';
 
 let sharedClipCurve = null;
 function clipCurve() {
@@ -112,7 +112,15 @@ function disposeOutput(output) {
   output.disconnect();
 }
 
+/* Reihenfolge der Objekt-Einträge bestimmt die "+ Add Module"-Liste (s.
+ * MODULE_TYPES = Object.keys(MODULE_DEFS) unten) -- bewusst nach
+ * Sounddesign-Rolle gruppiert statt in wilder Entstehungsreihenfolge
+ * (Nutzer-Feedback: "die Modulauswahl ist nicht passend"), orientiert an
+ * Caustics Modular-Palette und daran, was für Techno/House-Sounddesign
+ * tatsächlich gebraucht wird: Klangquellen -> Klangformung -> Modulation
+ * -> Utility -> Output. */
 const MODULE_DEFS = {
+  /* ---------- Klangquellen ---------- */
   oscillator: {
     name: 'Oscillator',
     defaults: { wave: 'sawtooth', coarse: 0, fine: 0 },
@@ -181,52 +189,7 @@ const MODULE_DEFS = {
     },
   },
 
-  /** Mono-Summierer für mehrere Audioquellen (z. B. mehrere Oszillatoren),
-   *  je ein eigener Pegel pro Eingang -- wie ein kleiner Modular-Mixer
-   *  (Doepfer A-138, Intellijel Mixup), nicht wie ein grosser Performance-
-   *  Mixer mit Stereo-Bus: KEIN Pan, das passiert schon eine Ebene höher
-   *  am Maschinen-Ausgang (jede Maschine hat ihren eigenen StereoPanner,
-   *  s. machines/machine.js). Nötig geworden erst durch die exklusiven
-   *  Eingänge (s. ModularPatch#connect): zwei Oszillatoren liessen sich
-   *  vorher direkt in denselben Filter-/VCA-Eingang stecken (Web Audio
-   *  summiert automatisch alle Verbindungen an einem Ziel) -- seit jeder
-   *  Eingang nur noch EIN Kabel annimmt, geht das nicht mehr, ein
-   *  dediziertes Mix-Modul mit VIER eigenen Eingängen schon (Chat: "ich
-   *  brauche im modular einen mixer für die oszilatoren"). */
-  mixer: {
-    name: 'Mixer',
-    defaults: { level1: 1, level2: 1, level3: 1, level4: 1 },
-    build(ctx, p) {
-      const sum = ctx.createGain();
-      const makeInput = (level) => {
-        const g = ctx.createGain();
-        g.gain.value = level;
-        g.connect(sum);
-        return g;
-      };
-      const in1 = makeInput(p.level1);
-      const in2 = makeInput(p.level2);
-      const in3 = makeInput(p.level3);
-      const in4 = makeInput(p.level4);
-      const output = safeOutput(ctx, sum);
-      return {
-        inputs: { in1, in2, in3, in4 },
-        outputs: { audio: output },
-        setParam(key, v) {
-          if (key === 'level1') { p.level1 = v; in1.gain.value = v; }
-          else if (key === 'level2') { p.level2 = v; in2.gain.value = v; }
-          else if (key === 'level3') { p.level3 = v; in3.gain.value = v; }
-          else if (key === 'level4') { p.level4 = v; in4.gain.value = v; }
-        },
-        dispose() {
-          in1.disconnect(); in2.disconnect(); in3.disconnect(); in4.disconnect();
-          sum.disconnect();
-          disposeOutput(output);
-        },
-      };
-    },
-  },
-
+  /* ---------- Klangformung ---------- */
   filter: {
     name: 'Filter',
     defaults: { type: 'lowpass', cutoff: 2000, resonance: 0.707 },
@@ -268,115 +231,44 @@ const MODULE_DEFS = {
     },
   },
 
-  /**
-   * Hüllkurve als PERSISTENTE Steuerspannungsquelle (ConstantSourceNode),
-   * nicht wie dsp.js#env() ein pro Anschlag frisch erzeugter/wegwerfbarer
-   * Gain-Node -- ein Patch-Kabel verbindet feste Modul-Instanzen, keine
-   * Einwegknoten. Attack-Sustain-Release wie SubSynths Amp-Hüllkurve
-   * (subsynth.js#playNote): auf den vollen Pegel rampen, dort für die
-   * GESAMTE Notenlänge HALTEN, erst bei Notenende (t+dur) linear auf 0
-   * loslassen -- NICHT wie eine frühere Fassung, die schon während der
-   * Note exponentiell fast bis auf Null abfiel (an `dur` gekoppelt, nicht
-   * einstellbar) und Release dadurch an einem längst unhörbaren Pegel
-   * ansetzen liess (Chat: "Release-Regler funktioniert nicht", zu Recht --
-   * er wirkte technisch, aber nur unterhalb der Hörschwelle).
-   *
-   * Ursprünglich cancelAndHoldAtTime() statt cancelScheduledValues()+
-   * setValueAtTime(0.0001, t): weil dieselbe Instanz für JEDE Note
-   * wiederverwendet wird (s. oben), kann eine neue Note feuern, WÄHREND
-   * die vorige noch mitten im (evtl. langen) Release ist --
-   * cancelScheduledValues() allein bricht die laufende Rampe an ihrem
-   * AKTUELLEN Wert ab (z. B. 0.6 bei halb durchlaufenem Release), das
-   * direkt folgende setValueAtTime(0.0001, t) sprang von dort aber HART
-   * auf nahe Null, bevor die neue Attack-Rampe wieder hochlief -- ein
-   * hörbares Klicken (Chat: "klicken bei langen Release-Zeiten bevor die
-   * nächste Note spielt", per Reproduktion bestätigt: ein Sprung von ~0.6
-   * auf ~0 und zurück auf 1 innerhalb von unter 10ms).
-   *
-   * cancelAndHoldAtTime() ist in Firefox jedoch nicht implementiert --
-   * ruft dort bei JEDEM Trigger eine TypeError hervor, die die gesamte
-   * Scheduler-Schleife des Transports aus der Bahn wirft (Nutzer-
-   * Bugreport: "in Firefox bleibt der Sequencer hängen und es kommt kein
-   * Ton" -- erklärt zugleich, warum ausschliesslich Modular betroffen ist:
-   * cancelAndHoldAtTime() wird sonst nirgends im Code verwendet). Ersetzt
-   * durch denselben Effekt von Hand, nur mit den beiden ältesten,
-   * universell unterstützten AudioParam-Methoden gebaut: den aktuellen
-   * (spec-konform gerade klingenden) Wert lesen und per
-   * cancelScheduledValues()+setValueAtTime() exakt dort neu verankern --
-   * dieselbe Rampen-Fortsetzung ohne Sprung wie zuvor, jetzt auch in
-   * Firefox.
-   *
-   * Attack wird NICHT MEHR auf die halbe Notenlänge gekappt (frühere
-   * Fassung, von subsynth.js übernommen): bei der dort üblichen kurzen
-   * Schrittlänge (s. step-sequenced-synth.js: dur = stepDuration * 0.8,
-   * bei 120 BPM/16teln nur 0.1s) lag die Kappe fast immer weit UNTER dem,
-   * was der Regler überhaupt einstellen kann (0.002-1s) -- der Regler
-   * wirkte dadurch effektiv immer gleich (Chat: "ich habe das Gefühl der
-   * Attack Regler macht nichts", per Reproduktion bestätigt: 0.1s- und
-   * 1.0s-Attack ergaben für dieselbe kurze Note exakt denselben Endwert).
-   * Damit ein noch nicht fertiger Attack beim Notenende (t+dur) nicht
-   * hart auf 1 springt (das WAR der eigentliche Zweck der alten Kappe),
-   * wird stattdessen genau der Wert angepinnt, den die noch laufende
-   * Attack-Rampe zu diesem Zeitpunkt rechnerisch hätte (linear
-   * interpoliert) -- der Release setzt dann nahtlos von DORT aus fort,
-   * statt erst auf 1 hochzuspringen. Ist der Attack dagegen schon fertig
-   * (der Normalfall bei kurzem Attack/langer Note), bleibt das Verhalten
-   * exakt wie zuvor: auf vollem Pegel halten bis zum Notenende. */
-  envelope: {
-    name: 'Envelope',
-    defaults: { attack: 0.002, release: 0.05 },
+  /** Distortion -- Waveshaper-Sättigung, DER zentrale Baustein für Acid-
+   *  Filter-Sweeps und aggressive, kaputte Bässe/Percussion (Nutzer-
+   *  Feedback: fehlte komplett, obwohl Caustics Modular sowas hat und es
+   *  für Techno/House-Sounddesign eine der meistgenutzten Techniken ist --
+   *  z. B. Filter -> Distortion -> VCA für einen 303-artigen Squelch).
+   *  Bewusst NUR ein Drive-Regler, kein Tone/Mix/Base wie beim vollen
+   *  Drive-Insert (inserts.js) -- Tonformung VOR/NACH der Sättigung erledigt
+   *  im Patch ohnehin schon das Filter-Modul, ein zweites eingebautes Filter
+   *  hier wäre nur Redundanz. Nutzt dieselbe Kurve wie der Drive-Insert
+   *  (makeDriveCurve, s. inserts.js) -- dasselbe kuratierte Sättigungs-
+   *  Verhalten, keine zweite, potenziell abweichende DSP-Implementierung
+   *  für denselben Klangeffekt. */
+  distortion: {
+    name: 'Distortion',
+    defaults: { drive: 0.4 },
     build(ctx, p) {
-      const src = ctx.createConstantSource();
-      src.offset.value = 0;
-      src.start();
-      const output = safeOutput(ctx, src);
+      const input = ctx.createGain();
+      const shaper = ctx.createWaveShaper();
+      shaper.oversample = '4x';
+      shaper.curve = makeDriveCurve(p.drive);
+      input.connect(shaper);
+      const output = safeOutput(ctx, shaper);
+      // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
+      // Audio-Thread, das zudem bei aktivem Signal hörbar knackst) -- der
+      // Regler feuert aber auf jeden pointermove, beim Ziehen bis zu 60x/s.
+      // Gleiches Entprellen wie beim Drive-Insert (s. dort).
+      let driveTimer = null;
       return {
-        inputs: {},
-        outputs: { cv: output },
-        trigger(t, dur) {
-          const attack = Math.max(0.0001, p.attack);
-          const release = Math.max(0.005, p.release);
-          const holdValue = src.offset.value;
-          src.offset.cancelScheduledValues(t);
-          src.offset.setValueAtTime(holdValue, t);
-          src.offset.linearRampToValueAtTime(1, t + attack);
-          if (attack <= dur) {
-            src.offset.setValueAtTime(1, t + dur); // Attack längst fertig -- auf vollem Pegel halten bis zum Notenende
-          } else {
-            // Attack ist beim Notenende noch nicht fertig -- den Wert
-            // anpinnen, den die Rampe dort rechnerisch hätte, statt hart
-            // auf 1 zu springen (s. Kommentar oben).
-            src.offset.setValueAtTime(dur / attack, t + dur);
-          }
-          src.offset.linearRampToValueAtTime(0, t + dur + release);
-        },
-        setParam(key, v) { p[key] = v; },
-        dispose() { src.stop(); src.disconnect(); disposeOutput(output); },
-      };
-    },
-  },
-
-  lfo: {
-    name: 'LFO',
-    defaults: { wave: 'sine', rateHz: 4, depth: 1 },
-    build(ctx, p) {
-      const osc = ctx.createOscillator();
-      osc.type = p.wave;
-      osc.frequency.value = p.rateHz;
-      const depth = ctx.createGain();
-      depth.gain.value = p.depth;
-      osc.connect(depth);
-      osc.start();
-      const output = safeOutput(ctx, depth);
-      return {
-        inputs: {},
-        outputs: { cv: output },
+        inputs: { audio: input },
+        outputs: { audio: output },
         setParam(key, v) {
-          if (key === 'wave') osc.type = v;
-          else if (key === 'rateHz') osc.frequency.value = v;
-          else if (key === 'depth') depth.gain.value = v;
+          if (key === 'drive') {
+            p.drive = v;
+            clearTimeout(driveTimer);
+            driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(v); }, 60);
+          }
         },
-        dispose() { osc.stop(); osc.disconnect(); depth.disconnect(); disposeOutput(output); },
+        dispose() { clearTimeout(driveTimer); input.disconnect(); shaper.disconnect(); disposeOutput(output); },
       };
     },
   },
@@ -424,27 +316,107 @@ const MODULE_DEFS = {
     },
   },
 
-  /** Ringmodulator -- multipliziert zwei Audiosignale (A * B), klassische
-   *  metallische/glockenartige Klänge. Der übliche Web-Audio-Trick dafür
-   *  (kein natives "Multiply"-Node nötig): B hängt direkt an der
-   *  gain-AudioParam eines GainNode statt an dessen Signal-Eingang, dessen
-   *  eigener Grundpegel bleibt bei 0 -- der Knoten liefert dann rein
-   *  A(t) * (0 + B(t)) = A(t) * B(t), keine additive Grundlautstärke wie
-   *  bei normaler Amplitudenmodulation. */
-  ringmod: {
-    name: 'Ring Mod',
-    defaults: {},
-    build(ctx) {
-      const ring = ctx.createGain();
-      ring.gain.value = 0; // rein multiplikativ, s. Kommentar oben
-      const inA = ctx.createGain(); // eigener Knoten für A, damit B exklusiv die gain-AudioParam bekommt
-      inA.connect(ring);
-      const output = safeOutput(ctx, ring);
+  /* ---------- Modulation ---------- */
+  /**
+   * Hüllkurve als PERSISTENTE Steuerspannungsquelle (ConstantSourceNode),
+   * nicht wie dsp.js#env() ein pro Anschlag frisch erzeugter/wegwerfbarer
+   * Gain-Node -- ein Patch-Kabel verbindet feste Modul-Instanzen, keine
+   * Einwegknoten. Volles ADSR statt nur Attack/Release (Nutzer-Feedback:
+   * für Basslines/Plucks/gehaltene Pads fehlt strukturell eine eigene
+   * Sustain-Stufe -- ohne sie klingt jede gehaltene Note entweder komplett
+   * offen oder komplett zu, nie irgendwo dazwischen). Ablauf: Attack rampt
+   * auf 1, Decay rampt von dort auf `sustain`, dort HALTEN bis Notenende
+   * (t+dur), dann Release linear auf 0.
+   *
+   * Ursprünglich cancelAndHoldAtTime() statt cancelScheduledValues()+
+   * setValueAtTime(0.0001, t): weil dieselbe Instanz für JEDE Note
+   * wiederverwendet wird (s. oben), kann eine neue Note feuern, WÄHREND
+   * die vorige noch mitten im (evtl. langen) Release ist --
+   * cancelScheduledValues() allein bricht die laufende Rampe an ihrem
+   * AKTUELLEN Wert ab (z. B. 0.6 bei halb durchlaufenem Release), das
+   * direkt folgende setValueAtTime(0.0001, t) sprang von dort aber HART
+   * auf nahe Null, bevor die neue Attack-Rampe wieder hochlief -- ein
+   * hörbares Klicken (Chat: "klicken bei langen Release-Zeiten bevor die
+   * nächste Note spielt", per Reproduktion bestätigt: ein Sprung von ~0.6
+   * auf ~0 und zurück auf 1 innerhalb von unter 10ms).
+   *
+   * cancelAndHoldAtTime() ist in Firefox jedoch nicht implementiert --
+   * ruft dort bei JEDEM Trigger eine TypeError hervor, die die gesamte
+   * Scheduler-Schleife des Transports aus der Bahn wirft (Nutzer-
+   * Bugreport: "in Firefox bleibt der Sequencer hängen und es kommt kein
+   * Ton" -- erklärt zugleich, warum ausschliesslich Modular betroffen ist:
+   * cancelAndHoldAtTime() wird sonst nirgends im Code verwendet). Ersetzt
+   * durch denselben Effekt von Hand, nur mit den beiden ältesten,
+   * universell unterstützten AudioParam-Methoden gebaut: den aktuellen
+   * (spec-konform gerade klingenden) Wert lesen und per
+   * cancelScheduledValues()+setValueAtTime() exakt dort neu verankern --
+   * dieselbe Rampen-Fortsetzung ohne Sprung wie zuvor, jetzt auch in
+   * Firefox.
+   *
+   * `valueAtNoteEnd` verallgemeinert die alte Attack-Kappungs-Logik auf
+   * Attack+Decay: statt beim Notenende hart auf 1 (bzw. jetzt `sustain`)
+   * zu springen, falls die Rampe(n) dort noch nicht fertig sind, wird
+   * exakt der Wert berechnet, den Attack/Decay zu diesem Zeitpunkt
+   * rechnerisch hätten (linear interpoliert) -- der Release setzt
+   * nahtlos von DORT aus fort. Ist Attack+Decay dagegen schon fertig
+   * (der Normalfall bei kurzer Attack/Decay-Zeit und längerer Note),
+   * bleibt das Verhalten exakt wie erwartet: auf `sustain` halten bis
+   * zum Notenende. */
+  envelope: {
+    name: 'Envelope',
+    defaults: { attack: 0.002, decay: 0.1, sustain: 0.7, release: 0.05 },
+    build(ctx, p) {
+      const src = ctx.createConstantSource();
+      src.offset.value = 0;
+      src.start();
+      const output = safeOutput(ctx, src);
       return {
-        inputs: { a: inA, b: ring.gain },
-        outputs: { audio: output },
-        setParam() {},
-        dispose() { inA.disconnect(); ring.disconnect(); disposeOutput(output); },
+        inputs: {},
+        outputs: { cv: output },
+        trigger(t, dur) {
+          const attack = Math.max(0.0001, p.attack);
+          const decay = Math.max(0.0001, p.decay);
+          const sustain = Math.min(1, Math.max(0, p.sustain));
+          const release = Math.max(0.005, p.release);
+          const holdValue = src.offset.value;
+          src.offset.cancelScheduledValues(t);
+          src.offset.setValueAtTime(holdValue, t);
+          src.offset.linearRampToValueAtTime(1, t + attack);
+          src.offset.linearRampToValueAtTime(sustain, t + attack + decay);
+          let valueAtNoteEnd;
+          if (dur >= attack + decay) valueAtNoteEnd = sustain;
+          else if (dur <= attack) valueAtNoteEnd = dur / attack;
+          else valueAtNoteEnd = 1 - (1 - sustain) * (dur - attack) / decay;
+          src.offset.setValueAtTime(valueAtNoteEnd, t + dur);
+          src.offset.linearRampToValueAtTime(0, t + dur + release);
+        },
+        setParam(key, v) { p[key] = v; },
+        dispose() { src.stop(); src.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  lfo: {
+    name: 'LFO',
+    defaults: { wave: 'sine', rateHz: 4, depth: 1 },
+    build(ctx, p) {
+      const osc = ctx.createOscillator();
+      osc.type = p.wave;
+      osc.frequency.value = p.rateHz;
+      const depth = ctx.createGain();
+      depth.gain.value = p.depth;
+      osc.connect(depth);
+      osc.start();
+      const output = safeOutput(ctx, depth);
+      return {
+        inputs: {},
+        outputs: { cv: output },
+        setParam(key, v) {
+          if (key === 'wave') osc.type = v;
+          else if (key === 'rateHz') osc.frequency.value = v;
+          else if (key === 'depth') depth.gain.value = v;
+        },
+        dispose() { osc.stop(); osc.disconnect(); depth.disconnect(); disposeOutput(output); },
       };
     },
   },
@@ -513,6 +485,78 @@ const MODULE_DEFS = {
           if (key === 'time') { p.time = v; filter.frequency.value = timeToHz(v); }
         },
         dispose() { filter.disconnect(); disposeOutput(output); },
+      };
+    },
+  },
+
+  /* ---------- Utility ---------- */
+  /** Mono-Summierer für mehrere Audioquellen (z. B. mehrere Oszillatoren),
+   *  je ein eigener Pegel pro Eingang -- wie ein kleiner Modular-Mixer
+   *  (Doepfer A-138, Intellijel Mixup), nicht wie ein grosser Performance-
+   *  Mixer mit Stereo-Bus: KEIN Pan, das passiert schon eine Ebene höher
+   *  am Maschinen-Ausgang (jede Maschine hat ihren eigenen StereoPanner,
+   *  s. machines/machine.js). Nötig geworden erst durch die exklusiven
+   *  Eingänge (s. ModularPatch#connect): zwei Oszillatoren liessen sich
+   *  vorher direkt in denselben Filter-/VCA-Eingang stecken (Web Audio
+   *  summiert automatisch alle Verbindungen an einem Ziel) -- seit jeder
+   *  Eingang nur noch EIN Kabel annimmt, geht das nicht mehr, ein
+   *  dediziertes Mix-Modul mit VIER eigenen Eingängen schon (Chat: "ich
+   *  brauche im modular einen mixer für die oszilatoren"). */
+  mixer: {
+    name: 'Mixer',
+    defaults: { level1: 1, level2: 1, level3: 1, level4: 1 },
+    build(ctx, p) {
+      const sum = ctx.createGain();
+      const makeInput = (level) => {
+        const g = ctx.createGain();
+        g.gain.value = level;
+        g.connect(sum);
+        return g;
+      };
+      const in1 = makeInput(p.level1);
+      const in2 = makeInput(p.level2);
+      const in3 = makeInput(p.level3);
+      const in4 = makeInput(p.level4);
+      const output = safeOutput(ctx, sum);
+      return {
+        inputs: { in1, in2, in3, in4 },
+        outputs: { audio: output },
+        setParam(key, v) {
+          if (key === 'level1') { p.level1 = v; in1.gain.value = v; }
+          else if (key === 'level2') { p.level2 = v; in2.gain.value = v; }
+          else if (key === 'level3') { p.level3 = v; in3.gain.value = v; }
+          else if (key === 'level4') { p.level4 = v; in4.gain.value = v; }
+        },
+        dispose() {
+          in1.disconnect(); in2.disconnect(); in3.disconnect(); in4.disconnect();
+          sum.disconnect();
+          disposeOutput(output);
+        },
+      };
+    },
+  },
+
+  /** Ringmodulator -- multipliziert zwei Audiosignale (A * B), klassische
+   *  metallische/glockenartige Klänge. Der übliche Web-Audio-Trick dafür
+   *  (kein natives "Multiply"-Node nötig): B hängt direkt an der
+   *  gain-AudioParam eines GainNode statt an dessen Signal-Eingang, dessen
+   *  eigener Grundpegel bleibt bei 0 -- der Knoten liefert dann rein
+   *  A(t) * (0 + B(t)) = A(t) * B(t), keine additive Grundlautstärke wie
+   *  bei normaler Amplitudenmodulation. */
+  ringmod: {
+    name: 'Ring Mod',
+    defaults: {},
+    build(ctx) {
+      const ring = ctx.createGain();
+      ring.gain.value = 0; // rein multiplikativ, s. Kommentar oben
+      const inA = ctx.createGain(); // eigener Knoten für A, damit B exklusiv die gain-AudioParam bekommt
+      inA.connect(ring);
+      const output = safeOutput(ctx, ring);
+      return {
+        inputs: { a: inA, b: ring.gain },
+        outputs: { audio: output },
+        setParam() {},
+        dispose() { inA.disconnect(); ring.disconnect(); disposeOutput(output); },
       };
     },
   },
@@ -650,6 +694,7 @@ export const MODULE_PORTS = {
     outputs: [{ key: 'audio', label: 'Out' }],
   },
   filter: { inputs: [{ key: 'audio', label: 'In' }, { key: 'cutoff', label: 'Cutoff' }], outputs: [{ key: 'audio', label: 'Out' }] },
+  distortion: { inputs: [{ key: 'audio', label: 'In' }], outputs: [{ key: 'audio', label: 'Out' }] },
   envelope: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
   lfo: { inputs: [], outputs: [{ key: 'cv', label: 'CV' }] },
   vca: { inputs: [{ key: 'audio', label: 'In' }, { key: 'gain', label: 'Gain' }], outputs: [{ key: 'audio', label: 'Out' }] },
@@ -681,8 +726,11 @@ export const MODULE_UI_PARAMS = {
     { key: 'cutoff', label: 'Cutoff', min: 40, max: 12000, curve: 'log', unit: 'Hz' },
     { key: 'resonance', label: 'Reso', min: 0.1, max: 15, curve: 'log', unit: '' },
   ],
+  distortion: [{ key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' }],
   envelope: [
     { key: 'attack', label: 'Attack', min: 0.002, max: 10, curve: 'log', unit: 's' },
+    { key: 'decay', label: 'Decay', min: 0.002, max: 10, curve: 'log', unit: 's' },
+    { key: 'sustain', label: 'Sustain', min: 0, max: 1, unit: '' },
     { key: 'release', label: 'Release', min: 0.01, max: 10, curve: 'log', unit: 's' },
   ],
   lfo: [
@@ -714,6 +762,7 @@ export const FILTER_TYPES = [
   { value: 'lowpass', label: 'LP' },
   { value: 'highpass', label: 'HP' },
   { value: 'bandpass', label: 'BP' },
+  { value: 'notch', label: 'Notch' },
 ];
 
 let nextModuleId = 1;
