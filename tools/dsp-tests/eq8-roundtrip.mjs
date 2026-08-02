@@ -41,6 +41,12 @@ const dispatchPointer = async (type, id, x, y) => {
   }, { type, id, x, y });
 };
 const tapX = box.x + box.width * 0.7, tapY = box.y + box.height * 0.15;
+// Zwei Taps am selben Punkt nötig, um ein Band zu erzeugen (s.
+// EMPTY_TAP_TOLERANCE in setupEq8Graph -- Schutz gegen versehentliches
+// Anlegen beim Versuch, per Pinch die Q eines Bandes einzustellen).
+await dispatchPointer('pointerdown', 1, tapX, tapY);
+await dispatchPointer('pointerup', 1, tapX, tapY);
+await page.waitForTimeout(50);
 await dispatchPointer('pointerdown', 1, tapX, tapY);
 await dispatchPointer('pointerup', 1, tapX, tapY);
 await page.waitForTimeout(150);

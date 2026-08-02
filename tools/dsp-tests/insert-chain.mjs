@@ -145,6 +145,11 @@ const graphBox = await eq8Row.evaluate((r) => {
   const rect = g.getBoundingClientRect();
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height * 0.4 };
 });
+// Zwei Taps am selben Punkt nötig, um ein Band zu erzeugen (s.
+// EMPTY_TAP_TOLERANCE in setupEq8Graph).
+await dispatchPointer('pointerdown', 1, graphBox.x, graphBox.y);
+await dispatchPointer('pointerup', 1, graphBox.x, graphBox.y);
+await page.waitForTimeout(50);
 await dispatchPointer('pointerdown', 1, graphBox.x, graphBox.y);
 await dispatchPointer('pointerup', 1, graphBox.x, graphBox.y);
 await page.waitForTimeout(150);

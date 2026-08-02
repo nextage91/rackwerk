@@ -50,13 +50,22 @@ const dispatchPointer = async (type, id, x, y, opts = {}) => {
   }, { type, id, x, y, opts });
 };
 
-// --- Tap empty area -> add a band ---
+// --- Tap empty area -> needs a SECOND tap at (roughly) the same spot to
+// actually add a band (s. EMPTY_TAP_TOLERANCE/lastEmptyTapPos in
+// setupEq8Graph) -- a single tap used to create one immediately, which
+// too easily fired by accident while trying to pinch-adjust an existing
+// band's Q (s. Chat-Feedback).
 const tapX = box.x + box.width * 0.5;
 const tapY = box.y + box.height * 0.4;
 await dispatchPointer('pointerdown', 1, tapX, tapY);
 await dispatchPointer('pointerup', 1, tapX, tapY);
 await page.waitForTimeout(50);
-check('tap on empty graph activates exactly one band', (await page.locator('.eq8__node.is-active').count()) === 1);
+check('a single tap on empty graph does NOT yet create a band', (await page.locator('.eq8__node.is-active').count()) === 0);
+
+await dispatchPointer('pointerdown', 1, tapX, tapY);
+await dispatchPointer('pointerup', 1, tapX, tapY);
+await page.waitForTimeout(50);
+check('a second tap at the same spot activates exactly one band', (await page.locator('.eq8__node.is-active').count()) === 1);
 
 const activeNode = page.locator('.eq8__node.is-active').first();
 const cx0 = parseFloat(await activeNode.getAttribute('cx'));
