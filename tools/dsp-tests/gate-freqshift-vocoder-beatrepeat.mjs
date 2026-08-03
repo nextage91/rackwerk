@@ -67,6 +67,41 @@ const out = await page.evaluate(async () => {
     return Math.sqrt(real * real + imag * imag) / N;
   }
 
+  // Unabhängige Referenz-Implementierung (nicht dieselbe Code-Kopie wie
+  // pitchtrack-worklet.js) derselben normalisierten Autokorrelation, um
+  // das WERKLET-Ergebnis von aussen (am Vocoder-AUSGANG) zu verifizieren.
+  // Erstes LOKALES MAXIMUM über der Schwelle (nicht der erste Schwellen-
+  // Durchgang selbst) -- s. ausführlichen Kommentar in pitchtrack-
+  // worklet.js: bei einem Sägezahn steigt die Korrelation allmählich an
+  // und überschreitet die Schwelle ein Stück VOR der eigentlichen Spitze,
+  // "erster Durchgang" hätte hier systematisch zu hohe Frequenzen ergeben.
+  function estimatePitch(samples, sr, minFreq, maxFreq) {
+    const minLag = Math.floor(sr / maxFreq);
+    const maxLag = Math.ceil(sr / minFreq);
+    const n = samples.length;
+    let bestLag = -1, bestCorr = -1, found = false;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      const usable = n - lag;
+      if (usable <= 0) break;
+      let num = 0, e1 = 0, e2 = 0;
+      for (let i = 0; i < usable; i++) {
+        const a = samples[i], b = samples[i + lag];
+        num += a * b; e1 += a * a; e2 += b * b;
+      }
+      const denom = Math.sqrt(e1 * e2);
+      const corr = denom > 1e-9 ? num / denom : 0;
+      if (!found) {
+        if (corr >= 0.4) { found = true; bestLag = lag; bestCorr = corr; }
+      } else if (corr > bestCorr) {
+        bestLag = lag; bestCorr = corr;
+      } else {
+        break;
+      }
+    }
+    if (found) return sr / bestLag;
+    return 0;
+  }
+
   // ---------- Gate ----------
   {
     const insert = createInsert('gate');
@@ -205,6 +240,51 @@ const out = await page.evaluate(async () => {
     results.vocoder = { avgOn, avgOff, anyNaN };
   }
 
+  // ---------- Vocoder: Carrier-Pitch-Tracking ----------
+  // Behebt "klingt wie ein Oszillator, der permanent eine Schwingung
+  // erzeugt" -- prüft, dass die Carrier-GRUNDTONHÖHE dem Modulator
+  // tatsächlich folgt (statt fest auf dem carrierPitch-Reglerwert zu
+  // bleiben), an zwei deutlich unterschiedlichen Testfrequenzen.
+  {
+    const insert = createInsert('vocoder');
+    insert.setParam('mix', 1);
+    insert.setParam('carrierPitch', 110);
+    await wait(50);
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 4096;
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    insert.output.connect(analyser).connect(mute).connect(ctx.destination);
+
+    async function measureTrackedPitch(modFreq) {
+      const modOsc = ctx.createOscillator();
+      modOsc.type = 'sawtooth';
+      modOsc.frequency.value = modFreq;
+      const g = ctx.createGain();
+      g.gain.value = 0.7;
+      modOsc.connect(g).connect(insert.input);
+      modOsc.start();
+      // Genug Zeit für mehrere Analyse-Hops (s. pitchtrack-worklet.js,
+      // HOP_SIZE=1024 -- bei 48kHz ~21ms/Hop) UND die 30ms-Ramp-Zeitkonstante.
+      await wait(600);
+      const data = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(data);
+      modOsc.stop();
+      modOsc.disconnect();
+      g.disconnect();
+      return estimatePitch(data, ctx.sampleRate, 60, 550);
+    }
+
+    const pitchAt150 = await measureTrackedPitch(150);
+    const pitchAt300 = await measureTrackedPitch(300);
+
+    insert.dispose();
+    analyser.disconnect();
+    mute.disconnect();
+    results.vocoderPitchTrack = { pitchAt150, pitchAt300 };
+  }
+
   // ---------- Beat Repeat ----------
   {
     const insert = createInsert('beatRepeat');
@@ -324,6 +404,13 @@ check('Frequency Shifter: Energie bei der Ziel-Frequenz (1200Hz) deutlich höher
 check('Vocoder: kein NaN/Infinity', !out.vocoder.anyNaN);
 check('Vocoder: Ausgabe folgt der Modulator-Hüllkurve (an-Phase deutlich lauter als aus-Phase)',
   out.vocoder.avgOn > out.vocoder.avgOff * 3);
+
+check('Vocoder: Carrier-Pitch folgt 150Hz-Modulator (gemessene Ausgabe-Grundfrequenz nahe 150Hz, nicht am 110Hz-Reglerwert hängengeblieben)',
+  Math.abs(out.vocoderPitchTrack.pitchAt150 - 150) < 15);
+check('Vocoder: Carrier-Pitch folgt 300Hz-Modulator (gemessene Ausgabe-Grundfrequenz nahe 300Hz)',
+  Math.abs(out.vocoderPitchTrack.pitchAt300 - 300) < 30);
+check('Vocoder: die beiden Messungen unterscheiden sich klar (kein statischer Carrier)',
+  Math.abs(out.vocoderPitchTrack.pitchAt300 - out.vocoderPitchTrack.pitchAt150) > 100);
 
 check('Beat Repeat: kein NaN/Infinity', !out.beatRepeat.anyNaN);
 check('Beat Repeat: kein unbegrenztes Aufschaukeln (Peak <= 3.0)', out.beatRepeat.maxPeak <= 3);
