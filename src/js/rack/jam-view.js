@@ -1394,26 +1394,60 @@ function buildSweepPanel() {
 
   // .xypad/.xypad__grid wiederverwendet -- exakt dieselbe Optik wie das
   // echte X/Y-Pad, nur mit unterdrücktem vertikalem Fadenkreuz (s.
-  // .sweep-pad::before in app.css) -- hier gibt es keine X-Achse.
+  // .sweep-pad::before in app.css) -- hier gibt es keine X-Achse. Schmaler
+  // als das echte X/Y-Pad (nur ~50% Breite, s. .sweep-pad in app.css) --
+  // Nutzer-Feedback: die volle Breite wirkte neben dem kleinen Reso-Knob
+  // "chaotisch", ein schmaleres, zentriertes Pad beruhigt das Bild.
   const pad = document.createElement('div');
   pad.className = 'xypad sweep-pad';
-  pad.innerHTML = '<div class="xypad__grid"></div><div class="xypad__dot"></div>';
-  const dot = pad.querySelector('.xypad__dot');
+  pad.innerHTML = '<div class="xypad__grid"></div><div class="sweep-trail" data-sweep-trail></div>';
   wrap.appendChild(pad);
+
+  // Kometenschweif statt statischem Punkt (Nutzer-Feedback: "kein Punkt,
+  // aber ein visuelles Feedback -- wie ein Licht um den Finger, mit einem
+  // Schweif"). Ein leuchtender Punkt an der aktuellen Zugposition, dahinter
+  // ein paar schnell verblassende Nachzieh-Punkte (letzte paar Frames der
+  // Bewegung) -- NUR während des Ziehens sichtbar, in Ruhe komplett
+  // ausgeblendet (auch die Mittellinie bleibt als einzige Dry-Referenz).
+  const trailEl = pad.querySelector('[data-sweep-trail]');
+  const ECHO_COUNT = 6;
+  const echoes = Array.from({ length: ECHO_COUNT }, () => {
+    const echo = document.createElement('div');
+    echo.className = 'sweep-trail__echo';
+    trailEl.appendChild(echo);
+    return echo;
+  });
+  const light = document.createElement('div');
+  light.className = 'sweep-trail__light';
+  trailEl.appendChild(light);
+
+  let currentTopPct = 50;
+  let history = [];
+  let rafId = null;
+
+  const renderTrail = () => {
+    history.unshift(currentTopPct);
+    if (history.length > ECHO_COUNT + 1) history.length = ECHO_COUNT + 1;
+    light.style.top = `${history[0]}%`;
+    for (let i = 0; i < ECHO_COUNT; i++) {
+      const pos = history[i + 1];
+      const echo = echoes[i];
+      if (pos === undefined) { echo.style.opacity = '0'; continue; }
+      const t = 1 - (i + 1) / (ECHO_COUNT + 1); // näher am Licht = heller/grösser
+      echo.style.top = `${pos}%`;
+      echo.style.opacity = `${t * 0.55}`;
+      echo.style.transform = `scale(${0.35 + t * 0.65})`;
+    }
+    rafId = requestAnimationFrame(renderTrail);
+  };
 
   // Oben ziehen -> Richtung Lowcut/Highpass (filterSweep -1), unten
   // ziehen -> Richtung Highcut/Lowpass (filterSweep +1) -- Nutzer-Vorgabe.
-  const setDot = (value) => {
-    dot.style.left = '50%';
-    dot.style.top = `${((value + 1) / 2) * 100}%`;
-  };
-  setDot(sweepMeta ? parseFloat(sweepMeta.value) : 0);
-
   const applyFromEvent = (e) => {
     const r = pad.getBoundingClientRect();
     const t = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    currentTopPct = t * 100;
     const value = -1 + 2 * t;
-    setDot(value);
     if (sweepMeta) {
       nudgeParam(sweepMeta.knob, value);
       reanchorIfMapped(masterFX, 'filterSweep', value);
@@ -1424,21 +1458,24 @@ function buildSweepPanel() {
     dragging = true;
     pad.setPointerCapture(e.pointerId);
     applyFromEvent(e);
+    trailEl.classList.add('is-active');
+    cancelAnimationFrame(rafId);
+    renderTrail();
   });
   pad.addEventListener('pointermove', (e) => {
     if (dragging) applyFromEvent(e);
   });
-  // Auto-Return: springt beim Loslassen zurück auf die Mittellinie
-  // (Dry) -- direkt auf value=0 gesetzt statt zurückgerechnet, exakt
-  // wie releasePad() beim echten X/Y-Pad.
+  // Auto-Return: Parameter springt beim Loslassen zurück auf Dry (0) --
+  // rein akustisch, der Schweif selbst verblasst unabhängig davon einfach
+  // aus (kein Punkt, der extra auf die Mitte zurückspringen müsste).
   const release = () => {
     dragging = false;
-    if (masterFX.filterSweepSpring) {
-      setDot(0);
-      if (sweepMeta) {
-        nudgeParam(sweepMeta.knob, 0);
-        reanchorIfMapped(masterFX, 'filterSweep', 0);
-      }
+    cancelAnimationFrame(rafId);
+    trailEl.classList.remove('is-active');
+    history = [];
+    if (masterFX.filterSweepSpring && sweepMeta) {
+      nudgeParam(sweepMeta.knob, 0);
+      reanchorIfMapped(masterFX, 'filterSweep', 0);
     }
   };
   pad.addEventListener('pointerup', release);

@@ -1628,11 +1628,40 @@ button {
    dieser Rest-Platz geht sonst ungenutzt verloren. */
 .sweep-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 .sweep-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 8px; }
-/* .xypad/.xypad__grid/.xypad__dot wiederverwendet (dieselbe Optik wie
-   das echte X/Y-Pad) -- nur das vertikale Fadenkreuz unterdrückt, da
-   dieses Pad keine X-Achse hat (horizontale Mittellinie bleibt als
-   Dry-Markierung). */
+/* Reso proportional kleiner als der Standard-Makro-Knob (34px) -- Nutzer-
+   Feedback: neben dem jetzt schmaleren Pad wirkte er zu dominant. */
+.sweep-head x-knob { --knob-size: 26px; }
+/* .xypad/.xypad__grid wiederverwendet (dieselbe Optik wie das echte
+   X/Y-Pad) -- nur das vertikale Fadenkreuz unterdrückt (horizontale
+   Mittellinie bleibt als Dry-Markierung) und auf ~50% Breite verschmälert
+   (Nutzer-Feedback: volle Breite wirkte neben dem Reso-Knob "chaotisch"). */
+.sweep-pad {
+  width: 50%;
+  align-self: center;
+}
 .sweep-pad::before { display: none; }
+/* Kometenschweif statt statischem Punkt (Nutzer-Feedback: "visuelles
+   Feedback wie ein Licht um den Finger, mit einem Schweif" statt eines
+   dauerhaft sichtbaren Punkts) -- nur während des Ziehens sichtbar (s.
+   jam-view.js#buildSweepPanel), blendet beim Loslassen weich aus. */
+.sweep-trail {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.sweep-trail.is-active { opacity: 1; transition: none; }
+.sweep-trail__light,
+.sweep-trail__echo {
+  position: absolute;
+  left: 50%;
+  width: 14px; height: 14px; margin: -7px;
+  border-radius: 50%;
+  background: var(--ch-color, var(--lcd-ink));
+}
+.sweep-trail__light { box-shadow: 0 0 14px 4px var(--ch-glow, var(--lcd-glow)); }
+.sweep-trail__echo { filter: blur(1px); opacity: 0; }
 /* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
    "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
    place-items:center zentriert dann ungleich hohe Zellen, was wie ein
