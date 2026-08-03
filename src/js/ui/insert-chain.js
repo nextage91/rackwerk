@@ -18,7 +18,7 @@
  *   owner.removeInsert(id)
  */
 import { automation } from '../core/automation.js';
-import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
+import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -38,6 +38,10 @@ export const INSERT_DISPLAY = {
   limiter: { name: 'Limiter', badge: 'BRICKWALL' },
   chorus: { name: 'Chorus', badge: 'CE-CHORUS' },
   phaser: { name: 'Phaser', badge: 'PHASE-6' },
+  gate: { name: 'Gate', badge: 'NOISE-GATE' },
+  freqShift: { name: 'Frequency Shifter', badge: 'FREQ-SHIFT' },
+  vocoder: { name: 'Vocoder', badge: 'VOCODER-8' },
+  beatRepeat: { name: 'Beat Repeat', badge: 'BEAT-RPT' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -840,6 +844,18 @@ export function renderInsertChain(listEl, owner) {
         </div>
         <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/slope/remove</p>
       `;
+    } else if (insert.type === 'beatRepeat') {
+      // Kein 'free'-Modus (anders als Filter Delay) -- "Grid" ist bei Beat
+      // Repeat konzeptionell immer ein Notenwert, deshalb keine bedingt
+      // ein-/ausgeblendeten Regler nötig wie dort.
+      bodyHtml = `
+        <div class="seg">
+          ${BEATREPEAT_DIVISIONS.map((s) => `
+            <button type="button" class="seg__btn${insert.params.division === s.value ? ' is-active' : ''}" data-beatrepeat-division="${s.value}">${s.label}</button>
+          `).join('')}
+        </div>
+        <div class="insert-row__params">${knobsHtml}</div>
+      `;
     } else {
       bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
     }
@@ -923,6 +939,12 @@ export function renderInsertChain(listEl, owner) {
       btn.addEventListener('click', () => {
         owner.setInsertParam(id, 'division', btn.dataset.filterdelaySync);
         renderInsertChain(listEl, owner); // Time-Regler muss ggf. ein-/ausgeblendet werden
+      });
+    }
+    for (const btn of row.querySelectorAll('[data-beatrepeat-division]')) {
+      btn.addEventListener('click', () => {
+        owner.setInsertParam(id, 'division', btn.dataset.beatrepeatDivision);
+        renderInsertChain(listEl, owner);
       });
     }
     const pingPongBtn = row.querySelector('[data-filterdelay-pingpong]');
