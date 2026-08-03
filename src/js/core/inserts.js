@@ -21,6 +21,7 @@ import { RESONATOR_PROCESSOR_NAME, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, R
 import { GATE_WORKLET_SRC } from './gate-worklet.js';
 import { FREQSHIFT_WORKLET_SRC } from './freqshift-worklet.js';
 import { BEATREPEAT_WORKLET_SRC } from './beatrepeat-worklet.js';
+import { BITCRUSH_WORKLET_SRC } from './bitcrush-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -2295,6 +2296,72 @@ const DEFS = {
       };
     },
   },
+  bitcrush: {
+    name: 'Bitcrusher',
+    // Sample-Rate-/Bit-Reduktion (wie Abletons "Redux") -- s.
+    // bitcrush-worklet.js für die Sample&Hold-/Quantisierungs-Herleitung
+    // und warum hier BEWUSST keine Anti-Aliasing-Filterung stattfindet
+    // (das Aliasing IST der gewünschte Lo-Fi-Effekt). Gleiches Lazy-Lade-/
+    // Platzhalter-Muster wie Gate/Frequency Shifter/Beat Repeat oben.
+    defaults: { rate: 8000, bits: 8, jitter: 0, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      let crushNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const pushParams = (node) => {
+        const t = ctx.currentTime;
+        node.parameters.get('rate').setTargetAtTime(p.rate, t, 0.001);
+        node.parameters.get('bits').setTargetAtTime(p.bits, t, 0.001);
+        node.parameters.get('jitter').setTargetAtTime(p.jitter, t, 0.001);
+      };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        crushNode = new AudioWorkletNode(ctx, 'rackwerk-bitcrush', { numberOfInputs: 1, numberOfOutputs: 1 });
+        pushParams(crushNode);
+        coreIn.connect(crushNode).connect(coreOut);
+      };
+      if (simpleWorkletReady('rackwerk-bitcrush')) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureSimpleWorklet(ctx, 'rackwerk-bitcrush', BITCRUSH_WORKLET_SRC).then((ok) => { if (ok) swapInRealNode(); });
+      }
+
+      input.connect(coreIn);
+      coreOut.connect(wet).connect(output);
+      input.connect(dry).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'rate' || key === 'bits' || key === 'jitter') {
+            if (crushNode) crushNode.parameters.get(key).setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          disposed = true;
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          coreIn.disconnect(); coreOut.disconnect();
+          crushNode?.disconnect();
+        },
+      };
+    },
+  },
   geq: {
     name: 'Graphic EQ',
     // 10 feste Bänder (Oktavabstand, s. GEQ_FREQS oben) -- anders als das
@@ -2421,6 +2488,7 @@ export const INSERT_COLORS = {
   freqShift: '#5ee0b0', // Frequency Shifter: kühles Türkis-Grün, exotisch/unharmonisch wirkend
   vocoder: '#c0e05e', // Vocoder: giftiges Gelb-Grün, wie eine klassische Roboterstimme
   beatRepeat: '#e08f5e', // Beat Repeat: warmes Orange, Performance-/Glitch-Charakter
+  bitcrush: '#9ae05e', // Bitcrusher: schrilles Lime-Grün, wie ein 8-Bit-Retro-Gerät
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -2557,6 +2625,12 @@ export const UI_PARAMS = {
   beatRepeat: [
     { key: 'chance', label: 'Chance', min: 0, max: 1, unit: '' },
     { key: 'decay', label: 'Decay', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  bitcrush: [
+    { key: 'rate', label: 'Rate', min: 200, max: 48000, curve: 'log', unit: 'Hz' },
+    { key: 'bits', label: 'Bits', min: 1, max: 16, step: 1, unit: '' },
+    { key: 'jitter', label: 'Jitter', min: 0, max: 1, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
 };
