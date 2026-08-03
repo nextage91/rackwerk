@@ -48,7 +48,7 @@ const out = await page.evaluate(async () => {
   async function spectrumAt(sweep, reso) {
     masterFX.setParam('filterSweep', sweep);
     masterFX.setParam('filterReso', reso);
-    await wait(80); // setTargetAtTime(…, 0.02) einschwingen lassen
+    await wait(120); // setTargetAtTime(…, 0.02) einschwingen lassen
 
     const len = ctx.sampleRate * 0.5;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -57,8 +57,14 @@ const out = await page.evaluate(async () => {
     const src = ctx.createBufferSource();
     src.buffer = buf;
 
+    // 16384 statt 4096 -- die "low"-Messung mittelt nur über ein schmales
+    // 60-200Hz-Band; bei 4096 (≈10.8Hz/Bin) fallen dort nur ~13 Bins hinein,
+    // deren zufällige Rauschschwankungen die 3-6dB-Toleranzen der Checks
+    // gelegentlich rein statistisch reissen (nachgemessen: einzelne Läufe
+    // bis zu 10dB Differenz OHNE jede Code-Änderung). Mehr Bins (≈2.7Hz/Bin,
+    // ~52 Bins im selben Band) mitteln die Zufallsstreuung spürbar weg.
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 4096;
+    analyser.fftSize = 16384;
     analyser.smoothingTimeConstant = 0;
     const mute = ctx.createGain();
     mute.gain.value = 0;

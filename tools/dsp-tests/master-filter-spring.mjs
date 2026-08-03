@@ -1,0 +1,81 @@
+/**
+ * master-filter-spring.mjs — Regressionstest für den Auto-Return-Taster am
+ * Sweep-Regler des Master-Filters (s. fx.js#filterSweepSpring, Nutzer-
+ * Anfrage: "ein Button wie beim X/Y-Pad, wo der Regler beim Loslassen auf
+ * die Mitte [Dry-Signal] zurückspringt").
+ *
+ * Geprüft wird an BEIDEN physischen Vorkommen des Sweep-Knobs -- dem
+ * echten Regler im Rack-Panel-Master-FX-Abschnitt UND dem eigenständigen
+ * Jam-Klon (s. jam-view.js#buildMasterFilterKnobs) -- weil beides
+ * unabhängige <x-knob>-Elemente mit je eigenem Pointer-Handling/eigenem
+ * 'knob-release' sind (s. Kommentare an beiden Verdrahtungsstellen).
+ * Ausserdem: Reso hat KEINEN Auto-Return-Taster (keine "neutrale" Mitte)
+ * -- und bei ausgeschaltetem Taster bleibt der Sweep-Wert nach dem
+ * Loslassen stehen wie jeder normale Regler.
+ *
+ * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
+ *   python3 -m http.server 8901
+ * Dann:  node tools/dsp-tests/master-filter-spring.mjs  [baseUrl]
+ */
+import { launchBrowser, makeReporter, openApp, baseUrlFromArgv } from './_helpers.mjs';
+
+const { check, finish } = makeReporter();
+const browser = await launchBrowser();
+const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+const errors = [];
+page.on('pageerror', (e) => errors.push(String(e)));
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+
+await openApp(page, baseUrlFromArgv());
+
+/** Zieht den Dial eines Sweep-Knobs per echtem Pointer-Drag von der
+ *  Mitte weg und lässt wieder los -- knob-release feuert <x-knob> nur bei
+ *  einer ECHTEN Zieh-Geste (s. ui/knob.js-Kommentar), nicht bei einem
+ *  synthetisch gesetzten .value. */
+async function dragAndRelease(dialLocator, dyPx) {
+  await dialLocator.scrollIntoViewIfNeeded();
+  const box = await dialLocator.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + dyPx, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(80);
+}
+
+check('Reso hat keinen Auto-Return-Taster',
+  await page.evaluate(() => document.querySelectorAll('#master-fx [data-sweep-spring]').length === 1));
+
+// ---- Rack-Panel: Taster AUS -> Wert bleibt nach dem Loslassen stehen ----
+const rackDial = page.locator('#master-fx x-knob[data-p="filterSweep"] .knob__dial');
+await dragAndRelease(rackDial, -60); // hoch = mehr (s. knob.js)
+const afterDragOff = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
+check('Rack-Panel, Auto-Return AUS: Sweep bleibt nach dem Loslassen auf dem gezogenen Wert', afterDragOff > 0.1);
+
+// ---- Rack-Panel: Taster AN -> Wert springt beim Loslassen auf 0 ----
+await page.click('#master-fx [data-sweep-spring]');
+check('Auto-Return-Taster reagiert auf Klick (is-active)',
+  await page.locator('#master-fx [data-sweep-spring]').evaluate((el) => el.classList.contains('is-active')));
+await dragAndRelease(rackDial, -60);
+const afterDragOn = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
+check('Rack-Panel, Auto-Return AN: Sweep springt beim Loslassen auf 0 zurück', afterDragOn === 0);
+
+// ---- Jam-Ansicht: derselbe geteilte Zustand, aber eigenständiger Knob ----
+await page.click('.bb-mode[data-mode="jam"]');
+await page.waitForSelector('#jam-sheet:not([hidden])');
+await page.waitForTimeout(300);
+check('Auto-Return-Taster im Jam-Master-Kanal zeigt den geteilten Zustand (bereits AN)',
+  await page.locator('.channel--master [data-sweep-spring]').evaluate((el) => el.classList.contains('is-active')));
+
+const jamDial = page.locator('.channel--master .macros--master x-knob').first().locator('.knob__dial');
+await dragAndRelease(jamDial, -50);
+const jamAfter = await page.locator('.channel--master .macros--master x-knob').first().evaluate((el) => parseFloat(el.value));
+check('Jam-Klon, Auto-Return AN (geteilter Zustand): Sweep springt beim Loslassen auf 0 zurück', jamAfter === 0);
+
+const rackAfterJamDrag = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
+check('Der echte Rack-Regler folgt dem Jam-Klon-Sprung (0)', rackAfterJamDrag === 0);
+
+check('Keine Seitenfehler', errors.length === 0);
+if (errors.length) console.log(errors);
+
+await browser.close();
+process.exit(finish());

@@ -573,6 +573,40 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset;
 }
 
+/* Pitch-Picker (Halten auf einem aktiven Sequenzer-Step, s. ui/step-seq.js
+   #openPitchPopup) -- .pat-chip als Basis (Position/Chip-Look), aber
+   Spalte statt umbrechender Reihe: Oktave-Zeile oben (wiederverwendet
+   .keybed__oct-btn/-label wie .stepseq__rollbar), darunter ein kompaktes
+   4-spaltiges Tonhöhen-Raster (13 Noten = 4 Zeilen), Turn-off-Knopf unten.
+   Anders als die übrigen .pat-chip-Menüs (3-5 Knöpfe, transparente Lücken
+   bewusst OK) bekommt dieses Popup wegen seiner Dichte (14 Elemente) einen
+   eigenen blickdichten Kartenhintergrund -- sonst verschmilzt es sichtbar
+   mit den Reglern/Labels dahinter (nachgemessen: SubSynth-Panel hat direkt
+   hinter dem Grid mehrere Knob-/Text-Zeilen). */
+.pitch-picker {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  max-width: min(260px, calc(100vw - 16px));
+  background: linear-gradient(#2b2822, #1a1815);
+  border: 1px solid rgba(255,236,190,.14);
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.65), 0 1px 0 var(--edge-light) inset;
+}
+.pitch-picker__oct {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.pitch-picker__notes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.pitch-picker__note { min-height: 34px; padding: 0 2px; font-size: 12px; }
+
 /* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
    gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
 .rename-pop {

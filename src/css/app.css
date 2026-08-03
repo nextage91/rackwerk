@@ -1619,8 +1619,21 @@ button {
 .macros x-knob { --knob-size: 34px; gap: 3px; }
 /* Master-Kanal in der Jam-Ansicht: nur 2 Filter-Knobs (Sweep/Reso) statt
    4 Makros -- eine Reihe statt eines halbleeren 2x2-Rasters. */
-.macros--master { grid-template-rows: 1fr; }
-.macros--master x-knob { --knob-size: 40px; }
+/* 3 schmale Spalten (Sweep-Knob | Auto-Return-Taster | Reso-Knob) statt
+   des symmetrischen 2-Spalten-Rasters von .macros -- die schmale Jam-
+   Kanalbreite (~99px) reicht sonst nicht für Knob+Taster in einer Spalte.
+   x-knob hat eine FESTE Breite (calc(var(--knob-size) + 12px), s. Regel
+   oben) -- 1fr-Spalten können darum NICHT unter diese Breite schrumpfen
+   (nachgemessen: mit dem normalen --knob-size:34px [=46px Breite] pro
+   Knob + Taster-Spalte überlief der Inhalt um über 20px). --knob-size
+   deshalb hier gezielt kleiner, der Taster ebenfalls etwas schmaler --
+   beides passt danach mit Marge in die ~99px. */
+.macros--master { grid-template-columns: 1fr auto 1fr; grid-template-rows: 1fr; }
+.macros--master x-knob { --knob-size: 24px; }
+.macros--master .xy-spring-btn { width: 16px; font-size: 10px; }
+
+.knob-spring-wrap { display: flex; align-items: center; gap: 2px; }
+.knob-spring-wrap .xy-spring-btn { align-self: center; }
 /* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
    "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
    place-items:center zentriert dann ungleich hohe Zellen, was wie ein

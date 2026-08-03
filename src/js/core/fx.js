@@ -113,6 +113,13 @@ class MasterFX {
     // Sonderbehandlung für "Master ist keine echte Machine" nötig.
     this.xySpring = false;
     this.xyMap = null;
+
+    // Auto-Return für den Sweep-Regler (Nutzer-Anfrage: beim Loslassen
+    // zurück auf 0/transparent, wie der Auto-Return-Taster am X/Y-Pad) --
+    // eigenes Sibling-Feld statt Teil von this.params, exakt wie xySpring
+    // oben. Gilt bewusst NUR für Sweep, nicht für Reso (keine "neutrale"
+    // Mitte, zu der ein Resonanz-Regler sinnvoll zurückspringen könnte).
+    this.filterSweepSpring = false;
   }
 
   /** Für insert-chain.js#renderInsertChain (Automation-Lane-Präfix) — fest
@@ -500,13 +507,21 @@ class MasterFX {
    *  deserialize()-Methode statt als Geschwisterfeld im Projekt-Schema --
    *  project.js selbst bleibt unverändert (masterFX.serialize() liefert
    *  bereits das komplette fx-Objekt). */
-  serialize() { return { ...this.params, xySpring: this.xySpring, xyMap: this.xyMap }; }
+  serialize() {
+    return {
+      ...this.params,
+      xySpring: this.xySpring,
+      xyMap: this.xyMap,
+      filterSweepSpring: this.filterSweepSpring,
+    };
+  }
 
   deserialize(state) {
     if (!state) return;
-    const { xySpring, xyMap, ...fxParams } = state;
+    const { xySpring, xyMap, filterSweepSpring, ...fxParams } = state;
     this.xySpring = !!xySpring;
     this.xyMap = xyMap ?? null;
+    this.filterSweepSpring = !!filterSweepSpring;
     Object.assign(this.params, fxParams);
     if (this.delayA) {
       this.#applyDelayTime();
@@ -572,7 +587,11 @@ class MasterFX {
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Filter</span>
-          <x-knob label="Sweep" min="-1" max="1" value="0" data-p="filterSweep"></x-knob>
+          <div class="knob-spring-wrap">
+            <x-knob label="Sweep" min="-1" max="1" value="0" data-p="filterSweep"></x-knob>
+            <button type="button" class="xy-spring-btn" data-sweep-spring
+              title="Auto-return to center" aria-label="Auto-return to center">⟲</button>
+          </div>
           <x-knob label="Reso" min="0.7" max="15" value="5" curve="log" data-p="filterReso"></x-knob>
         </div>
         <div class="machine__row machine__row--inserts">
@@ -596,6 +615,27 @@ class MasterFX {
       openInsertPicker((type) => {
         this.addInsert(type);
       });
+    });
+
+    // Auto-Return für Sweep (Nutzer-Anfrage, s. filterSweepSpring-Kommentar
+    // im Konstruktor) -- derselbe Taster/dasselbe "Loslassen springt zurück"
+    // Verhalten wie beim X/Y-Pad, hier aber an EINEM einzelnen Knob statt
+    // an einer zweiachsigen Pad-Position. knob-release feuert <x-knob>
+    // selbst nur am Ende einer ECHTEN Zieh-Geste (s. dortiger Kommentar in
+    // ui/knob.js), nie bei synthetisch gesetzten Werten (Automation/LFO/
+    // Jam-Klon) -- exakt das gewünschte "beim Loslassen", nicht "bei jeder
+    // Wertänderung".
+    const sweepKnob = el.querySelector('x-knob[data-p="filterSweep"]');
+    const sweepSpringBtn = el.querySelector('[data-sweep-spring]');
+    sweepSpringBtn.classList.toggle('is-active', this.filterSweepSpring);
+    sweepSpringBtn.addEventListener('click', () => {
+      this.filterSweepSpring = !this.filterSweepSpring;
+      sweepSpringBtn.classList.toggle('is-active', this.filterSweepSpring);
+    });
+    sweepKnob.addEventListener('knob-release', () => {
+      if (!this.filterSweepSpring) return;
+      sweepKnob.value = 0;
+      this.setParam('filterSweep', 0);
     });
 
     this.el = el;
