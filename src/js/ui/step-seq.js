@@ -8,7 +8,10 @@
  * alle 8 Spuren gleichzeitig anpassen muss.
  *
  * Bedienung (Grid-Modus):
- * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
+ * - Tippen: Step an/aus · Halten auf einem AKTIVEN Step (nur pitchMode):
+ *   öffnet den Pitch-Picker (s. #openPitchPopup) -- ersetzt das frühere
+ *   vertikale Ziehen, das Nutzer als "fummelig" gemeldet haben (schnelles
+ *   Antippen der Zieltonhöhe statt Pixel-genauem Ziehen).
  * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
  *
  * Roll-Modus (nur pitchMode, s. #buildRoll()): echtes Tonhöhe×Zeit-Raster
@@ -27,12 +30,12 @@ import { undo } from '../core/undo.js';
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const noteLabel = (midi) => NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
 
-const SEMITONE_PX = 10;
 const TAP_THRESHOLD = 8;
 const MIDI_MIN = 24;
 const MIDI_MAX = 84;
 const BAR_STEPS = 16;
 const BAR_CHOICES = [1, 2, 4, 8];
+const HOLD_MS = 500; // wie CLIP_HOLD_MS/insert-chain.js' Halten-Menüs
 
 // Roll-Modus: 13 Tonhöhen sichtbar (eine Oktave + Grundton), gleicher
 // Ausschnitt wie createKeybed() -- vertraute Bedienung, dieselben Oktave-
@@ -41,6 +44,99 @@ const BAR_CHOICES = [1, 2, 4, 8];
 // zum treffsicheren Antippen).
 const ROLL_ROWS = 13;
 const ROLL_STEPS_PER_PAGE = 8;
+
+/* ---------- Pitch-Picker-Popup (Halten auf einem aktiven Grid-Step) ----------
+ * Ein einzelnes, modulweites Popup -- gleiches Muster wie eq8Menu in
+ * insert-chain.js (nie mehr als eines gleichzeitig offen, egal welche
+ * StepSeq-Instanz/welches Panel gerade offen ist). Ersetzt das frühere
+ * vertikale Ziehen zum Tonhöhe-Ändern: Antippen der Zieltonhöhe statt
+ * Pixel-genauem Ziehen (Nutzer-Anfrage, s. Dateikopf-Kommentar).
+ */
+let pitchPopup = null;
+const dismissPitchPopup = () => {
+  pitchPopup?.remove();
+  pitchPopup = null;
+  document.removeEventListener('pointerdown', onOutsidePitchPopup, true);
+};
+const onOutsidePitchPopup = (e) => { if (pitchPopup && !pitchPopup.contains(e.target)) dismissPitchPopup(); };
+
+/**
+ * @param {number} currentMidi  Aktuelle Tonhöhe des Steps (bestimmt das
+ *   anfangs sichtbare Oktav-Fenster, ungefähr mittig wie beim Roll-Modus).
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {(midi:number)=>void} onPick  Neue Tonhöhe gewählt.
+ * @param {()=>void} onTurnOff  Step stattdessen ausschalten.
+ */
+function openPitchPopup(currentMidi, clientX, clientY, onPick, onTurnOff) {
+  dismissPitchPopup();
+  let base = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
+    Math.max(MIDI_MIN, currentMidi - Math.floor(ROLL_ROWS / 2)));
+
+  pitchPopup = document.createElement('div');
+  pitchPopup.className = 'pat-chip pitch-picker';
+  document.body.appendChild(pitchPopup);
+
+  const position = () => {
+    const left = Math.max(8, Math.min(window.innerWidth - pitchPopup.offsetWidth - 8, clientX - pitchPopup.offsetWidth / 2));
+    pitchPopup.style.left = `${left}px`;
+    // Anders als eq8Menu (immer über dem Tap-Punkt) kann dieses Popup
+    // deutlich höher werden (13 Notenknöpfe + Oktave-Zeile + Turn-off) --
+    // ein Step ganz oben im Grid liesse es sonst über den oberen Rand
+    // hinaus wachsen und in den Inhalt darüber hineinragen. Reicht der
+    // Platz oberhalb nicht, klappt es stattdessen UNTER den Tap-Punkt.
+    const spaceAbove = clientY - 30;
+    const top = spaceAbove >= pitchPopup.offsetHeight
+      ? clientY - pitchPopup.offsetHeight - 30
+      : clientY + 30;
+    pitchPopup.style.top = `${Math.max(8, Math.min(window.innerHeight - pitchPopup.offsetHeight - 8, top))}px`;
+  };
+
+  const rebuild = () => {
+    pitchPopup.innerHTML = `
+      <div class="pitch-picker__oct">
+        <button class="keybed__oct-btn" data-poct="-1" aria-label="Octave down">−</button>
+        <span class="keybed__oct-label" data-poctlabel></span>
+        <button class="keybed__oct-btn" data-poct="1" aria-label="Octave up">+</button>
+      </div>
+      <div class="pitch-picker__notes">
+        ${Array.from({ length: ROLL_ROWS }, (_, i) => {
+          const pitch = base + (ROLL_ROWS - 1 - i);
+          return `<button class="pat-chip__btn pitch-picker__note${pitch === currentMidi ? ' is-active' : ''}" data-pitch="${pitch}">${noteLabel(pitch)}</button>`;
+        }).join('')}
+      </div>
+      <button class="pat-chip__btn pat-chip__btn--danger" data-stepoff>Turn off</button>
+    `;
+    pitchPopup.querySelectorAll('[data-pitch]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        onPick(parseInt(btn.dataset.pitch, 10));
+        dismissPitchPopup();
+      });
+    });
+    pitchPopup.querySelector('[data-poct="-1"]').addEventListener('click', () => {
+      base = Math.max(MIDI_MIN, base - 12);
+      rebuild(); position();
+    });
+    pitchPopup.querySelector('[data-poct="1"]').addEventListener('click', () => {
+      base = Math.min(MIDI_MAX - (ROLL_ROWS - 1), base + 12);
+      rebuild(); position();
+    });
+    pitchPopup.querySelector('[data-poct="-1"]').disabled = base - 12 < MIDI_MIN;
+    pitchPopup.querySelector('[data-poct="1"]').disabled = base + 12 > MIDI_MAX - (ROLL_ROWS - 1);
+    pitchPopup.querySelector('[data-poctlabel]').textContent = noteLabel(base);
+    pitchPopup.querySelector('[data-stepoff]').addEventListener('click', () => {
+      onTurnOff();
+      dismissPitchPopup();
+    });
+  };
+  rebuild();
+  position();
+  // capture:true wie onOutsideEq8Menu -- muss VOR dem eigentlichen Ziel-
+  // Handler des nächsten Taps feuern, sonst würde ein Tap auf eine ANDERE
+  // Zelle sowohl das Popup schliessen als auch sofort die neue Zelle
+  // togglen (zwei Wirkungen aus einer Geste).
+  document.addEventListener('pointerdown', onOutsidePitchPopup, true);
+}
 
 export class StepSeq {
   /**
@@ -366,67 +462,83 @@ export class StepSeq {
     });
   }
 
-  /** Multi-Touch: pointerId → { idx, startY, startMidi, moved } je Geste
-   *  (nicht ein einzelnes gemeinsames Objekt) -- sonst würde ein zweiter
-   *  Finger, der eine ANDERE Zelle antippt, den ersten mitten in der
-   *  Geste überschreiben (dessen pointerup fände dann keine Zelle mehr
-   *  und würde stattdessen die falsche togglen). */
+  /** Multi-Touch: pointerId → { idx, startY, startX, moved, holdFired,
+   *  holdTimer } je Geste (nicht ein einzelnes gemeinsames Objekt) --
+   *  sonst würde ein zweiter Finger, der eine ANDERE Zelle antippt, den
+   *  ersten mitten in der Geste überschreiben (dessen pointerup fände
+   *  dann keine Zelle mehr und würde stattdessen die falsche togglen). */
   #wirePointer() {
     const active = new Map();
 
     this.grid.addEventListener('pointerdown', (e) => {
       // Accent-/Slide-Zonen haben ihre eigene, einfache Klick-Behandlung
       // (s. #wireAccentSlide) -- hier aussteigen, sonst würde dieselbe
-      // Berührung ZUSÄTZLICH den Step selbst an/aus schalten oder (im
-      // Pitch-Modus) einen Zieh-Vorgang beginnen.
+      // Berührung ZUSÄTZLICH den Step selbst an/aus schalten.
       if (e.target.closest('.cell__accent, .cell__slide')) return;
       const cell = e.target.closest('.cell');
       if (!cell) return;
       e.preventDefault();
       this.grid.setPointerCapture?.(e.pointerId);
       const idx = this.#patIdx(parseInt(cell.dataset.cell, 10));
-      active.set(e.pointerId, { idx, startY: e.clientY, startMidi: this.pattern[idx].midi, moved: false });
+      const drag = { idx, startY: e.clientY, startX: e.clientX, moved: false, holdFired: false, holdTimer: null };
+      active.set(e.pointerId, drag);
+
+      // Halten auf einem BEREITS AKTIVEN Step (nur pitchMode) öffnet den
+      // Pitch-Picker (s. Dateikopf-Kommentar/openPitchPopup()) -- ersetzt
+      // das frühere vertikale Ziehen. Ein ausgeschalteter Step hat keine
+      // Tonhöhe zu bearbeiten, dafür bleibt der normale kurze Tipp
+      // (schaltet ihn mit der zuletzt genutzten Tonhöhe ein).
+      if (this.pitchMode && this.pattern[idx]?.on) {
+        drag.holdTimer = setTimeout(() => {
+          if (drag.moved) return;
+          drag.holdFired = true;
+          openPitchPopup(
+            this.pattern[idx].midi, e.clientX, e.clientY,
+            (pitch) => {
+              this.pattern[idx].midi = pitch;
+              this.#renderCell(idx % BAR_STEPS);
+              this.onChange?.();
+            },
+            () => {
+              this.pattern[idx].on = false;
+              this.#renderCell(idx % BAR_STEPS);
+              this.onChange?.();
+            },
+          );
+        }, HOLD_MS);
+      }
     });
 
     this.grid.addEventListener('pointermove', (e) => {
       const drag = active.get(e.pointerId);
-      if (!drag) return;
+      if (!drag || drag.moved) return;
       const dy = drag.startY - e.clientY;
-      if (!drag.moved && Math.abs(dy) < TAP_THRESHOLD) return;
+      const dx = (e.clientX ?? drag.startX) - drag.startX;
+      if (Math.hypot(dx, dy) < TAP_THRESHOLD) return;
 
-      // Bewegung über der Schwelle markiert die Geste als "kein Tap" --
-      // WICHTIG auch im Nicht-Pitch-Modus (Drum-Grids): touch-action:none
-      // aufs Grid blockiert dort ohnehin das Scrollen (nötig, damit ein
-      // echter Pitch-Drag nicht mit Seiten-Scroll kollidiert). Ohne dieses
-      // frühe drag.moved=true würde eine abgebrochene Wisch-/Scroll-Geste
-      // beim Loslassen trotzdem als Tap gewertet und den Step stumm an/aus
-      // schalten -- genau das gemeldete "Step kippt beim Scrollversuch"-
-      // Problem. Im Pitch-Modus lief das schon immer so (drag.moved=true
-      // setzt hier gleich den Step an UND beginnt den Pitch-Drag); im
-      // Drum-Modus bleibt es jetzt bei "kein Toggle", ohne den Step
-      // zusätzlich zu verändern -- schlimmstenfalls ein No-Op statt einer
-      // stillen, unerwünschten Pattern-Änderung.
-      if (!drag.moved) drag.moved = true;
-      if (!this.pitchMode) return;
-
-      const step = this.pattern[drag.idx];
-      step.on = true;
-      step.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
-        drag.startMidi + Math.round(dy / SEMITONE_PX)));
-      this.#renderCell(drag.idx % BAR_STEPS);
+      // Bewegung über der Schwelle markiert die Geste als "kein Tap" UND
+      // bricht ein evtl. laufendes Halten ab -- wichtig auch im Nicht-
+      // Pitch-Modus (Drum-Grids): touch-action:none aufs Grid blockiert
+      // dort ohnehin das Scrollen, ohne dieses früh gesetzte moved=true
+      // würde eine abgebrochene Wisch-/Scroll-Geste beim Loslassen
+      // trotzdem als Tap gewertet und den Step stumm an/aus schalten --
+      // genau das früher gemeldete "Step kippt beim Scrollversuch"-Problem.
+      drag.moved = true;
+      clearTimeout(drag.holdTimer);
     });
 
     const finish = (e) => {
       const drag = active.get(e.pointerId);
       if (!drag) return;
-      if (!drag.moved) {
+      clearTimeout(drag.holdTimer);
+      if (!drag.moved && !drag.holdFired) {
         const step = this.pattern[drag.idx];
         step.on = !step.on;
         this.#renderCell(drag.idx % BAR_STEPS);
+        this.onChange?.();
       }
       this.grid.releasePointerCapture?.(e.pointerId);
       active.delete(e.pointerId);
-      this.onChange?.();
     };
     this.grid.addEventListener('pointerup', finish);
     this.grid.addEventListener('pointercancel', finish);

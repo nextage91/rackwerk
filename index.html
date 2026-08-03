@@ -1716,8 +1716,21 @@ button {
 .macros x-knob { --knob-size: 34px; gap: 3px; }
 /* Master-Kanal in der Jam-Ansicht: nur 2 Filter-Knobs (Sweep/Reso) statt
    4 Makros -- eine Reihe statt eines halbleeren 2x2-Rasters. */
-.macros--master { grid-template-rows: 1fr; }
-.macros--master x-knob { --knob-size: 40px; }
+/* 3 schmale Spalten (Sweep-Knob | Auto-Return-Taster | Reso-Knob) statt
+   des symmetrischen 2-Spalten-Rasters von .macros -- die schmale Jam-
+   Kanalbreite (~99px) reicht sonst nicht für Knob+Taster in einer Spalte.
+   x-knob hat eine FESTE Breite (calc(var(--knob-size) + 12px), s. Regel
+   oben) -- 1fr-Spalten können darum NICHT unter diese Breite schrumpfen
+   (nachgemessen: mit dem normalen --knob-size:34px [=46px Breite] pro
+   Knob + Taster-Spalte überlief der Inhalt um über 20px). --knob-size
+   deshalb hier gezielt kleiner, der Taster ebenfalls etwas schmaler --
+   beides passt danach mit Marge in die ~99px. */
+.macros--master { grid-template-columns: 1fr auto 1fr; grid-template-rows: 1fr; }
+.macros--master x-knob { --knob-size: 24px; }
+.macros--master .xy-spring-btn { width: 16px; font-size: 10px; }
+
+.knob-spring-wrap { display: flex; align-items: center; gap: 2px; }
+.knob-spring-wrap .xy-spring-btn { align-self: center; }
 /* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
    "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
    place-items:center zentriert dann ungleich hohe Zellen, was wie ein
@@ -2461,6 +2474,40 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   color: var(--m-color, var(--lcd-ink));
   box-shadow: 0 0 0 2px var(--m-color-glow, rgba(255,184,77,.45)) inset;
 }
+
+/* Pitch-Picker (Halten auf einem aktiven Sequenzer-Step, s. ui/step-seq.js
+   #openPitchPopup) -- .pat-chip als Basis (Position/Chip-Look), aber
+   Spalte statt umbrechender Reihe: Oktave-Zeile oben (wiederverwendet
+   .keybed__oct-btn/-label wie .stepseq__rollbar), darunter ein kompaktes
+   4-spaltiges Tonhöhen-Raster (13 Noten = 4 Zeilen), Turn-off-Knopf unten.
+   Anders als die übrigen .pat-chip-Menüs (3-5 Knöpfe, transparente Lücken
+   bewusst OK) bekommt dieses Popup wegen seiner Dichte (14 Elemente) einen
+   eigenen blickdichten Kartenhintergrund -- sonst verschmilzt es sichtbar
+   mit den Reglern/Labels dahinter (nachgemessen: SubSynth-Panel hat direkt
+   hinter dem Grid mehrere Knob-/Text-Zeilen). */
+.pitch-picker {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  max-width: min(260px, calc(100vw - 16px));
+  background: linear-gradient(#2b2822, #1a1815);
+  border: 1px solid rgba(255,236,190,.14);
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.65), 0 1px 0 var(--edge-light) inset;
+}
+.pitch-picker__oct {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.pitch-picker__notes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.pitch-picker__note { min-height: 34px; padding: 0 2px; font-size: 12px; }
 
 /* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
    gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
@@ -15723,7 +15770,10 @@ const { StepSeq, resizePattern } = (() => {
  * alle 8 Spuren gleichzeitig anpassen muss.
  *
  * Bedienung (Grid-Modus):
- * - Tippen: Step an/aus · vertikal ziehen: Tonhöhe (nur pitchMode)
+ * - Tippen: Step an/aus · Halten auf einem AKTIVEN Step (nur pitchMode):
+ *   öffnet den Pitch-Picker (s. #openPitchPopup) -- ersetzt das frühere
+ *   vertikale Ziehen, das Nutzer als "fummelig" gemeldet haben (schnelles
+ *   Antippen der Zieltonhöhe statt Pixel-genauem Ziehen).
  * - Pattern-Daten gehören der Maschine (Array beliebiger 16er-Länge)
  *
  * Roll-Modus (nur pitchMode, s. #buildRoll()): echtes Tonhöhe×Zeit-Raster
@@ -15741,12 +15791,12 @@ const { StepSeq, resizePattern } = (() => {
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const noteLabel = (midi) => NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
 
-const SEMITONE_PX = 10;
 const TAP_THRESHOLD = 8;
 const MIDI_MIN = 24;
 const MIDI_MAX = 84;
 const BAR_STEPS = 16;
 const BAR_CHOICES = [1, 2, 4, 8];
+const HOLD_MS = 500; // wie CLIP_HOLD_MS/insert-chain.js' Halten-Menüs
 
 // Roll-Modus: 13 Tonhöhen sichtbar (eine Oktave + Grundton), gleicher
 // Ausschnitt wie createKeybed() -- vertraute Bedienung, dieselben Oktave-
@@ -15755,6 +15805,99 @@ const BAR_CHOICES = [1, 2, 4, 8];
 // zum treffsicheren Antippen).
 const ROLL_ROWS = 13;
 const ROLL_STEPS_PER_PAGE = 8;
+
+/* ---------- Pitch-Picker-Popup (Halten auf einem aktiven Grid-Step) ----------
+ * Ein einzelnes, modulweites Popup -- gleiches Muster wie eq8Menu in
+ * insert-chain.js (nie mehr als eines gleichzeitig offen, egal welche
+ * StepSeq-Instanz/welches Panel gerade offen ist). Ersetzt das frühere
+ * vertikale Ziehen zum Tonhöhe-Ändern: Antippen der Zieltonhöhe statt
+ * Pixel-genauem Ziehen (Nutzer-Anfrage, s. Dateikopf-Kommentar).
+ */
+let pitchPopup = null;
+const dismissPitchPopup = () => {
+  pitchPopup?.remove();
+  pitchPopup = null;
+  document.removeEventListener('pointerdown', onOutsidePitchPopup, true);
+};
+const onOutsidePitchPopup = (e) => { if (pitchPopup && !pitchPopup.contains(e.target)) dismissPitchPopup(); };
+
+/**
+ * @param {number} currentMidi  Aktuelle Tonhöhe des Steps (bestimmt das
+ *   anfangs sichtbare Oktav-Fenster, ungefähr mittig wie beim Roll-Modus).
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {(midi:number)=>void} onPick  Neue Tonhöhe gewählt.
+ * @param {()=>void} onTurnOff  Step stattdessen ausschalten.
+ */
+function openPitchPopup(currentMidi, clientX, clientY, onPick, onTurnOff) {
+  dismissPitchPopup();
+  let base = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
+    Math.max(MIDI_MIN, currentMidi - Math.floor(ROLL_ROWS / 2)));
+
+  pitchPopup = document.createElement('div');
+  pitchPopup.className = 'pat-chip pitch-picker';
+  document.body.appendChild(pitchPopup);
+
+  const position = () => {
+    const left = Math.max(8, Math.min(window.innerWidth - pitchPopup.offsetWidth - 8, clientX - pitchPopup.offsetWidth / 2));
+    pitchPopup.style.left = `${left}px`;
+    // Anders als eq8Menu (immer über dem Tap-Punkt) kann dieses Popup
+    // deutlich höher werden (13 Notenknöpfe + Oktave-Zeile + Turn-off) --
+    // ein Step ganz oben im Grid liesse es sonst über den oberen Rand
+    // hinaus wachsen und in den Inhalt darüber hineinragen. Reicht der
+    // Platz oberhalb nicht, klappt es stattdessen UNTER den Tap-Punkt.
+    const spaceAbove = clientY - 30;
+    const top = spaceAbove >= pitchPopup.offsetHeight
+      ? clientY - pitchPopup.offsetHeight - 30
+      : clientY + 30;
+    pitchPopup.style.top = `${Math.max(8, Math.min(window.innerHeight - pitchPopup.offsetHeight - 8, top))}px`;
+  };
+
+  const rebuild = () => {
+    pitchPopup.innerHTML = `
+      <div class="pitch-picker__oct">
+        <button class="keybed__oct-btn" data-poct="-1" aria-label="Octave down">−</button>
+        <span class="keybed__oct-label" data-poctlabel></span>
+        <button class="keybed__oct-btn" data-poct="1" aria-label="Octave up">+</button>
+      </div>
+      <div class="pitch-picker__notes">
+        ${Array.from({ length: ROLL_ROWS }, (_, i) => {
+          const pitch = base + (ROLL_ROWS - 1 - i);
+          return `<button class="pat-chip__btn pitch-picker__note${pitch === currentMidi ? ' is-active' : ''}" data-pitch="${pitch}">${noteLabel(pitch)}</button>`;
+        }).join('')}
+      </div>
+      <button class="pat-chip__btn pat-chip__btn--danger" data-stepoff>Turn off</button>
+    `;
+    pitchPopup.querySelectorAll('[data-pitch]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        onPick(parseInt(btn.dataset.pitch, 10));
+        dismissPitchPopup();
+      });
+    });
+    pitchPopup.querySelector('[data-poct="-1"]').addEventListener('click', () => {
+      base = Math.max(MIDI_MIN, base - 12);
+      rebuild(); position();
+    });
+    pitchPopup.querySelector('[data-poct="1"]').addEventListener('click', () => {
+      base = Math.min(MIDI_MAX - (ROLL_ROWS - 1), base + 12);
+      rebuild(); position();
+    });
+    pitchPopup.querySelector('[data-poct="-1"]').disabled = base - 12 < MIDI_MIN;
+    pitchPopup.querySelector('[data-poct="1"]').disabled = base + 12 > MIDI_MAX - (ROLL_ROWS - 1);
+    pitchPopup.querySelector('[data-poctlabel]').textContent = noteLabel(base);
+    pitchPopup.querySelector('[data-stepoff]').addEventListener('click', () => {
+      onTurnOff();
+      dismissPitchPopup();
+    });
+  };
+  rebuild();
+  position();
+  // capture:true wie onOutsideEq8Menu -- muss VOR dem eigentlichen Ziel-
+  // Handler des nächsten Taps feuern, sonst würde ein Tap auf eine ANDERE
+  // Zelle sowohl das Popup schliessen als auch sofort die neue Zelle
+  // togglen (zwei Wirkungen aus einer Geste).
+  document.addEventListener('pointerdown', onOutsidePitchPopup, true);
+}
 
 class StepSeq {
   /**
@@ -16080,67 +16223,83 @@ class StepSeq {
     });
   }
 
-  /** Multi-Touch: pointerId → { idx, startY, startMidi, moved } je Geste
-   *  (nicht ein einzelnes gemeinsames Objekt) -- sonst würde ein zweiter
-   *  Finger, der eine ANDERE Zelle antippt, den ersten mitten in der
-   *  Geste überschreiben (dessen pointerup fände dann keine Zelle mehr
-   *  und würde stattdessen die falsche togglen). */
+  /** Multi-Touch: pointerId → { idx, startY, startX, moved, holdFired,
+   *  holdTimer } je Geste (nicht ein einzelnes gemeinsames Objekt) --
+   *  sonst würde ein zweiter Finger, der eine ANDERE Zelle antippt, den
+   *  ersten mitten in der Geste überschreiben (dessen pointerup fände
+   *  dann keine Zelle mehr und würde stattdessen die falsche togglen). */
   #wirePointer() {
     const active = new Map();
 
     this.grid.addEventListener('pointerdown', (e) => {
       // Accent-/Slide-Zonen haben ihre eigene, einfache Klick-Behandlung
       // (s. #wireAccentSlide) -- hier aussteigen, sonst würde dieselbe
-      // Berührung ZUSÄTZLICH den Step selbst an/aus schalten oder (im
-      // Pitch-Modus) einen Zieh-Vorgang beginnen.
+      // Berührung ZUSÄTZLICH den Step selbst an/aus schalten.
       if (e.target.closest('.cell__accent, .cell__slide')) return;
       const cell = e.target.closest('.cell');
       if (!cell) return;
       e.preventDefault();
       this.grid.setPointerCapture?.(e.pointerId);
       const idx = this.#patIdx(parseInt(cell.dataset.cell, 10));
-      active.set(e.pointerId, { idx, startY: e.clientY, startMidi: this.pattern[idx].midi, moved: false });
+      const drag = { idx, startY: e.clientY, startX: e.clientX, moved: false, holdFired: false, holdTimer: null };
+      active.set(e.pointerId, drag);
+
+      // Halten auf einem BEREITS AKTIVEN Step (nur pitchMode) öffnet den
+      // Pitch-Picker (s. Dateikopf-Kommentar/openPitchPopup()) -- ersetzt
+      // das frühere vertikale Ziehen. Ein ausgeschalteter Step hat keine
+      // Tonhöhe zu bearbeiten, dafür bleibt der normale kurze Tipp
+      // (schaltet ihn mit der zuletzt genutzten Tonhöhe ein).
+      if (this.pitchMode && this.pattern[idx]?.on) {
+        drag.holdTimer = setTimeout(() => {
+          if (drag.moved) return;
+          drag.holdFired = true;
+          openPitchPopup(
+            this.pattern[idx].midi, e.clientX, e.clientY,
+            (pitch) => {
+              this.pattern[idx].midi = pitch;
+              this.#renderCell(idx % BAR_STEPS);
+              this.onChange?.();
+            },
+            () => {
+              this.pattern[idx].on = false;
+              this.#renderCell(idx % BAR_STEPS);
+              this.onChange?.();
+            },
+          );
+        }, HOLD_MS);
+      }
     });
 
     this.grid.addEventListener('pointermove', (e) => {
       const drag = active.get(e.pointerId);
-      if (!drag) return;
+      if (!drag || drag.moved) return;
       const dy = drag.startY - e.clientY;
-      if (!drag.moved && Math.abs(dy) < TAP_THRESHOLD) return;
+      const dx = (e.clientX ?? drag.startX) - drag.startX;
+      if (Math.hypot(dx, dy) < TAP_THRESHOLD) return;
 
-      // Bewegung über der Schwelle markiert die Geste als "kein Tap" --
-      // WICHTIG auch im Nicht-Pitch-Modus (Drum-Grids): touch-action:none
-      // aufs Grid blockiert dort ohnehin das Scrollen (nötig, damit ein
-      // echter Pitch-Drag nicht mit Seiten-Scroll kollidiert). Ohne dieses
-      // frühe drag.moved=true würde eine abgebrochene Wisch-/Scroll-Geste
-      // beim Loslassen trotzdem als Tap gewertet und den Step stumm an/aus
-      // schalten -- genau das gemeldete "Step kippt beim Scrollversuch"-
-      // Problem. Im Pitch-Modus lief das schon immer so (drag.moved=true
-      // setzt hier gleich den Step an UND beginnt den Pitch-Drag); im
-      // Drum-Modus bleibt es jetzt bei "kein Toggle", ohne den Step
-      // zusätzlich zu verändern -- schlimmstenfalls ein No-Op statt einer
-      // stillen, unerwünschten Pattern-Änderung.
-      if (!drag.moved) drag.moved = true;
-      if (!this.pitchMode) return;
-
-      const step = this.pattern[drag.idx];
-      step.on = true;
-      step.midi = Math.min(MIDI_MAX, Math.max(MIDI_MIN,
-        drag.startMidi + Math.round(dy / SEMITONE_PX)));
-      this.#renderCell(drag.idx % BAR_STEPS);
+      // Bewegung über der Schwelle markiert die Geste als "kein Tap" UND
+      // bricht ein evtl. laufendes Halten ab -- wichtig auch im Nicht-
+      // Pitch-Modus (Drum-Grids): touch-action:none aufs Grid blockiert
+      // dort ohnehin das Scrollen, ohne dieses früh gesetzte moved=true
+      // würde eine abgebrochene Wisch-/Scroll-Geste beim Loslassen
+      // trotzdem als Tap gewertet und den Step stumm an/aus schalten --
+      // genau das früher gemeldete "Step kippt beim Scrollversuch"-Problem.
+      drag.moved = true;
+      clearTimeout(drag.holdTimer);
     });
 
     const finish = (e) => {
       const drag = active.get(e.pointerId);
       if (!drag) return;
-      if (!drag.moved) {
+      clearTimeout(drag.holdTimer);
+      if (!drag.moved && !drag.holdFired) {
         const step = this.pattern[drag.idx];
         step.on = !step.on;
         this.#renderCell(drag.idx % BAR_STEPS);
+        this.onChange?.();
       }
       this.grid.releasePointerCapture?.(e.pointerId);
       active.delete(e.pointerId);
-      this.onChange?.();
     };
     this.grid.addEventListener('pointerup', finish);
     this.grid.addEventListener('pointercancel', finish);
@@ -24888,6 +25047,13 @@ class MasterFX {
     // Sonderbehandlung für "Master ist keine echte Machine" nötig.
     this.xySpring = false;
     this.xyMap = null;
+
+    // Auto-Return für den Sweep-Regler (Nutzer-Anfrage: beim Loslassen
+    // zurück auf 0/transparent, wie der Auto-Return-Taster am X/Y-Pad) --
+    // eigenes Sibling-Feld statt Teil von this.params, exakt wie xySpring
+    // oben. Gilt bewusst NUR für Sweep, nicht für Reso (keine "neutrale"
+    // Mitte, zu der ein Resonanz-Regler sinnvoll zurückspringen könnte).
+    this.filterSweepSpring = false;
   }
 
   /** Für insert-chain.js#renderInsertChain (Automation-Lane-Präfix) — fest
@@ -25275,13 +25441,21 @@ class MasterFX {
    *  deserialize()-Methode statt als Geschwisterfeld im Projekt-Schema --
    *  project.js selbst bleibt unverändert (masterFX.serialize() liefert
    *  bereits das komplette fx-Objekt). */
-  serialize() { return { ...this.params, xySpring: this.xySpring, xyMap: this.xyMap }; }
+  serialize() {
+    return {
+      ...this.params,
+      xySpring: this.xySpring,
+      xyMap: this.xyMap,
+      filterSweepSpring: this.filterSweepSpring,
+    };
+  }
 
   deserialize(state) {
     if (!state) return;
-    const { xySpring, xyMap, ...fxParams } = state;
+    const { xySpring, xyMap, filterSweepSpring, ...fxParams } = state;
     this.xySpring = !!xySpring;
     this.xyMap = xyMap ?? null;
+    this.filterSweepSpring = !!filterSweepSpring;
     Object.assign(this.params, fxParams);
     if (this.delayA) {
       this.#applyDelayTime();
@@ -25347,7 +25521,11 @@ class MasterFX {
         </div>
         <div class="machine__row fx__row">
           <span class="seg__label fx__revlabel">Filter</span>
-          <x-knob label="Sweep" min="-1" max="1" value="0" data-p="filterSweep"></x-knob>
+          <div class="knob-spring-wrap">
+            <x-knob label="Sweep" min="-1" max="1" value="0" data-p="filterSweep"></x-knob>
+            <button type="button" class="xy-spring-btn" data-sweep-spring
+              title="Auto-return to center" aria-label="Auto-return to center">⟲</button>
+          </div>
           <x-knob label="Reso" min="0.7" max="15" value="5" curve="log" data-p="filterReso"></x-knob>
         </div>
         <div class="machine__row machine__row--inserts">
@@ -25371,6 +25549,27 @@ class MasterFX {
       openInsertPicker((type) => {
         this.addInsert(type);
       });
+    });
+
+    // Auto-Return für Sweep (Nutzer-Anfrage, s. filterSweepSpring-Kommentar
+    // im Konstruktor) -- derselbe Taster/dasselbe "Loslassen springt zurück"
+    // Verhalten wie beim X/Y-Pad, hier aber an EINEM einzelnen Knob statt
+    // an einer zweiachsigen Pad-Position. knob-release feuert <x-knob>
+    // selbst nur am Ende einer ECHTEN Zieh-Geste (s. dortiger Kommentar in
+    // ui/knob.js), nie bei synthetisch gesetzten Werten (Automation/LFO/
+    // Jam-Klon) -- exakt das gewünschte "beim Loslassen", nicht "bei jeder
+    // Wertänderung".
+    const sweepKnob = el.querySelector('x-knob[data-p="filterSweep"]');
+    const sweepSpringBtn = el.querySelector('[data-sweep-spring]');
+    sweepSpringBtn.classList.toggle('is-active', this.filterSweepSpring);
+    sweepSpringBtn.addEventListener('click', () => {
+      this.filterSweepSpring = !this.filterSweepSpring;
+      sweepSpringBtn.classList.toggle('is-active', this.filterSweepSpring);
+    });
+    sweepKnob.addEventListener('knob-release', () => {
+      if (!this.filterSweepSpring) return;
+      sweepKnob.value = 0;
+      this.setParam('filterSweep', 0);
     });
 
     this.el = el;
@@ -28029,6 +28228,10 @@ class SubSynth extends StepSequencedSynth {
       release: 0.25,      // s (Amp)
       volume: 0.7,
       filterType: 'lowpass',
+      transpose: 0,       // Halbtöne -- verschiebt die ganze gezeichnete
+                           // Pattern-Linie, ohne die Steps selbst zu ändern
+                           // (Nutzer-Anfrage), s. polysynth.js für dasselbe
+                           // Prinzip/denselben Knob.
     };
     /** aktive Stimmen: midi → {osc, filter, env} */
     this.voices = new Map();
@@ -28068,7 +28271,7 @@ class SubSynth extends StepSequencedSynth {
 
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
+    osc.frequency.value = midiToHz(midi + p.transpose);
 
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
@@ -28109,7 +28312,7 @@ class SubSynth extends StepSequencedSynth {
 
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
+    osc.frequency.value = midiToHz(midi + p.transpose);
 
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
@@ -28123,6 +28326,9 @@ class SubSynth extends StepSequencedSynth {
     osc.connect(filter).connect(env).connect(this.output);
     osc.start(t);
 
+    // Map-Schlüssel bleibt die ROHE (nicht transponierte) MIDI-Note -- so
+    // findet noteOff(midi) mit derselben Note vom Keybed die Stimme wieder,
+    // unabhängig davon, ob Transpose inzwischen weitergedreht wurde.
     this.voices.set(midi, { osc, filter, env });
   }
 
@@ -28179,6 +28385,7 @@ class SubSynth extends StepSequencedSynth {
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
       <x-knob label="Attack" min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
       <x-knob label="Release" min="0.02" max="10" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Transpose" min="-24" max="24" step="1" default="0" value="0" data-p="transpose" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
@@ -28193,6 +28400,12 @@ class SubSynth extends StepSequencedSynth {
         for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
       } else if (key === 'resonance') {
         for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'transpose') {
+        // Gehaltene Stimmen gleiten live mit -- wie bei polysynth.js'
+        // Transpose-Knob, hier ohne zusätzliche Chord-Offsets.
+        for (const [rawMidi, v] of this.voices) {
+          v.osc.frequency.setTargetAtTime(midiToHz(rawMidi + val), t, 0.01);
+        }
       } else if (key === 'volume') {
         this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }
@@ -34479,7 +34692,40 @@ function buildMasterFilterKnobs() {
       nudgeParam(meta.knob, e.detail.value);
       reanchorIfMapped(masterFX, key, e.detail.value);
     });
+
     wrap.appendChild(knob);
+
+    // Auto-Return-Taster NUR beim Sweep-Knob (s. fx.js#filterSweepSpring-
+    // Kommentar am Konstruktor) -- geteilter Zustand mit dem Rack-Panel-
+    // Regler, aber eigens hier verdrahtet: dieser Jam-Klon ist ein
+    // EIGENSTÄNDIGES <x-knob>-Element, feuert sein eigenes knob-release,
+    // wenn in der Jam-Ansicht direkt daran gezogen wird. Als FLACHES
+    // drittes Grid-Kind (nicht in einen Wrapper mit dem Knob verpackt) --
+    // .macros--master nutzt dafür eine schmale dritte auto-Spalte statt
+    // eines symmetrischen 2-Spalten-Rasters, sonst reicht die schmale
+    // Jam-Kanalbreite nicht für Knob+Taster in einer Spalte (nachgemessen:
+    // wrap-Ansatz überlief die verfügbaren ~99px um über 30px). */
+    if (key === 'filterSweep') {
+      const springBtn = document.createElement('button');
+      springBtn.type = 'button';
+      springBtn.className = 'xy-spring-btn';
+      springBtn.setAttribute('data-sweep-spring', '');
+      springBtn.title = 'Auto-return to center';
+      springBtn.setAttribute('aria-label', 'Auto-return to center');
+      springBtn.textContent = '⟲';
+      springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+      springBtn.addEventListener('click', () => {
+        masterFX.filterSweepSpring = !masterFX.filterSweepSpring;
+        springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+      });
+      knob.addEventListener('knob-release', () => {
+        if (!masterFX.filterSweepSpring) return;
+        knob.value = 0;
+        nudgeParam(meta.knob, 0);
+        reanchorIfMapped(masterFX, key, 0);
+      });
+      wrap.appendChild(springBtn);
+    }
   }
   return wrap;
 }

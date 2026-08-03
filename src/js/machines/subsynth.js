@@ -48,6 +48,10 @@ export class SubSynth extends StepSequencedSynth {
       release: 0.25,      // s (Amp)
       volume: 0.7,
       filterType: 'lowpass',
+      transpose: 0,       // Halbtöne -- verschiebt die ganze gezeichnete
+                           // Pattern-Linie, ohne die Steps selbst zu ändern
+                           // (Nutzer-Anfrage), s. polysynth.js für dasselbe
+                           // Prinzip/denselben Knob.
     };
     /** aktive Stimmen: midi → {osc, filter, env} */
     this.voices = new Map();
@@ -87,7 +91,7 @@ export class SubSynth extends StepSequencedSynth {
 
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
+    osc.frequency.value = midiToHz(midi + p.transpose);
 
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
@@ -128,7 +132,7 @@ export class SubSynth extends StepSequencedSynth {
 
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.value = midiToHz(midi);
+    osc.frequency.value = midiToHz(midi + p.transpose);
 
     const filter = ctx.createBiquadFilter();
     filter.type = p.filterType;
@@ -142,6 +146,9 @@ export class SubSynth extends StepSequencedSynth {
     osc.connect(filter).connect(env).connect(this.output);
     osc.start(t);
 
+    // Map-Schlüssel bleibt die ROHE (nicht transponierte) MIDI-Note -- so
+    // findet noteOff(midi) mit derselben Note vom Keybed die Stimme wieder,
+    // unabhängig davon, ob Transpose inzwischen weitergedreht wurde.
     this.voices.set(midi, { osc, filter, env });
   }
 
@@ -198,6 +205,7 @@ export class SubSynth extends StepSequencedSynth {
       <x-knob label="F.Decay" min="0.03" max="1.5" value="0.18" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
       <x-knob label="Attack" min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
       <x-knob label="Release" min="0.02" max="10" value="0.25" curve="log" unit="s" data-p="release" data-auto></x-knob>
+      <x-knob label="Transpose" min="-24" max="24" step="1" default="0" value="0" data-p="transpose" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
     `;
     row.addEventListener('input', (e) => {
@@ -212,6 +220,12 @@ export class SubSynth extends StepSequencedSynth {
         for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
       } else if (key === 'resonance') {
         for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'transpose') {
+        // Gehaltene Stimmen gleiten live mit -- wie bei polysynth.js'
+        // Transpose-Knob, hier ohne zusätzliche Chord-Offsets.
+        for (const [rawMidi, v] of this.voices) {
+          v.osc.frequency.setTargetAtTime(midiToHz(rawMidi + val), t, 0.01);
+        }
       } else if (key === 'volume') {
         this.setLevel(val); // eine Quelle der Wahrheit, auch für den Mixer
       }

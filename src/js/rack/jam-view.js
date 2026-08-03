@@ -1376,7 +1376,40 @@ function buildMasterFilterKnobs() {
       nudgeParam(meta.knob, e.detail.value);
       reanchorIfMapped(masterFX, key, e.detail.value);
     });
+
     wrap.appendChild(knob);
+
+    // Auto-Return-Taster NUR beim Sweep-Knob (s. fx.js#filterSweepSpring-
+    // Kommentar am Konstruktor) -- geteilter Zustand mit dem Rack-Panel-
+    // Regler, aber eigens hier verdrahtet: dieser Jam-Klon ist ein
+    // EIGENSTÄNDIGES <x-knob>-Element, feuert sein eigenes knob-release,
+    // wenn in der Jam-Ansicht direkt daran gezogen wird. Als FLACHES
+    // drittes Grid-Kind (nicht in einen Wrapper mit dem Knob verpackt) --
+    // .macros--master nutzt dafür eine schmale dritte auto-Spalte statt
+    // eines symmetrischen 2-Spalten-Rasters, sonst reicht die schmale
+    // Jam-Kanalbreite nicht für Knob+Taster in einer Spalte (nachgemessen:
+    // wrap-Ansatz überlief die verfügbaren ~99px um über 30px). */
+    if (key === 'filterSweep') {
+      const springBtn = document.createElement('button');
+      springBtn.type = 'button';
+      springBtn.className = 'xy-spring-btn';
+      springBtn.setAttribute('data-sweep-spring', '');
+      springBtn.title = 'Auto-return to center';
+      springBtn.setAttribute('aria-label', 'Auto-return to center');
+      springBtn.textContent = '⟲';
+      springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+      springBtn.addEventListener('click', () => {
+        masterFX.filterSweepSpring = !masterFX.filterSweepSpring;
+        springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+      });
+      knob.addEventListener('knob-release', () => {
+        if (!masterFX.filterSweepSpring) return;
+        knob.value = 0;
+        nudgeParam(meta.knob, 0);
+        reanchorIfMapped(masterFX, key, 0);
+      });
+      wrap.appendChild(springBtn);
+    }
   }
   return wrap;
 }
