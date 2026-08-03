@@ -39,6 +39,23 @@ const addEffect = async (type) => {
   await page.waitForTimeout(150);
 };
 
+// ---- Insert-Picker: gruppiert nach Kategorie (s. inserts.js#INSERT_
+// CATEGORIES) -- Anzahl Gruppen-Überschriften + Gesamtanzahl Einträge
+// gegen die tatsächliche Insert-Typen-Liste prüfen, damit ein neuer
+// Insert-Typ ohne Kategorie-Zuordnung hier auffällt.
+await machine.evaluate((el) => el.querySelector('[data-add-insert]').click());
+await page.waitForTimeout(150);
+const pickerCounts = await page.evaluate(() => ({
+  groups: document.querySelectorAll('.sheet--insert-picker .sheet__group-title').length,
+  items: document.querySelectorAll('.sheet--insert-picker [data-type]').length,
+  swatches: document.querySelectorAll('.sheet--insert-picker .sheet__swatch').length,
+}));
+check('insert picker: renders category group headers', pickerCounts.groups >= 5);
+check('insert picker: every item has a color swatch', pickerCounts.swatches === pickerCounts.items && pickerCounts.items > 0);
+// Sheet bleibt offen -- die nächste addEffect()-Auswahl unten wählt direkt
+// ein Item und schliesst sie dabei ganz regulär (s. openInsertPicker()s
+// eigener Klick-Handler), kein separates Schliessen nötig.
+
 // ---- Compressor ----
 await addEffect('comp');
 let compRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));

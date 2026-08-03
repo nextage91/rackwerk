@@ -18,7 +18,7 @@
  *   owner.removeInsert(id)
  */
 import { automation } from '../core/automation.js';
-import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
+import { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -673,10 +673,14 @@ export function openInsertPicker(onPick) {
         <div class="sheet__grip"></div>
         <h2 class="sheet__title">Insert Effect</h2>
         <div class="sheet__list">
-          ${INSERT_TYPES.map((type) => `
-            <button type="button" class="sheet__item" data-type="${type}">
-              <span class="sheet__name">${insertMeta(type).name}</span>
-            </button>
+          ${INSERT_CATEGORIES.map((cat) => `
+            <div class="sheet__group-title">${cat.label}</div>
+            ${cat.types.map((type) => `
+              <button type="button" class="sheet__item" data-type="${type}">
+                <span class="sheet__swatch" style="background:${INSERT_COLORS[type]}"></span>
+                <span class="sheet__name">${insertMeta(type).name}</span>
+              </button>
+            `).join('')}
           `).join('')}
         </div>
       </div>
