@@ -1,17 +1,16 @@
 /**
- * jam-master-channel.mjs — Regressionstest für den neuen Master-Kanal in
- * der Jam-Ansicht (Nutzer-Anfrage: "Master-Effekte während des Jams live
- * performen können, wie bei den anderen Kanälen -- mit X/Y-Pad und
- * einer Filter-Sektion für die Song-Performance, statt zugeklappter
- * Makros, da kein Fader den Platz braucht").
+ * jam-master-channel.mjs — Regressionstest für den Master-Kanal in der
+ * Jam-Ansicht (Nutzer-Anfrage: "Master-Effekte während des Jams live
+ * performen können, wie bei den anderen Kanälen" -- inzwischen weiter-
+ * entwickelt zu "Sweep als eigene Touch-Fläche statt Encoder, wie das
+ * X/Y-Pad, nur eine Achse", s. jam-view.js#buildSweepPanel).
  *
- * Kernrisiko: buildXYPad()/buildMacros()-Äquivalente wurden ursprünglich
- * NUR für echte Machine-Instanzen geschrieben (machine.el/.xyMap/
- * .xySpring) -- masterFX ist keine Machine-Unterklasse. Dieser Test
- * prüft, dass die Wiederverwendung für masterFX TATSÄCHLICH funktioniert:
- * X/Y-Pad-Drag und Filter-Knob-Dreh müssen echte, hörbare Master-Parameter
- * verändern (revLevel/filterSweep), nicht nur eine Attrappe ohne Wirkung
- * zeigen.
+ * Kernrisiko: buildXYPad() wurde ursprünglich NUR für echte Machine-
+ * Instanzen geschrieben (machine.el/.xyMap/.xySpring) -- masterFX ist
+ * keine Machine-Unterklasse. Dieser Test prüft, dass die Wiederverwendung
+ * für masterFX TATSÄCHLICH funktioniert: X/Y-Pad-Drag und Sweep-Pad-Drag
+ * müssen echte, hörbare Master-Parameter verändern (revLevel/filterSweep),
+ * nicht nur eine Attrappe ohne Wirkung zeigen.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -33,27 +32,36 @@ await page.click('.bb-mode[data-mode="jam"]');
 await page.waitForTimeout(300);
 
 check('Jam view shows a Master column', await page.evaluate(() => !!document.querySelector('.channel--master')));
-check('Master column has an X/Y pad', await page.evaluate(() => !!document.querySelector('.channel--master .xypad')));
-check('Master column has filter knobs (Sweep/Reso), always visible (no popup toggle)',
-  await page.evaluate(() => document.querySelectorAll('.channel--master .macros x-knob').length === 2));
+check('Master column has an X/Y pad', await page.evaluate(() => !!document.querySelector('.channel--master .xy-wrap .xypad')));
+check('Master column has a dedicated Sweep pad (single-axis touch strip)',
+  await page.evaluate(() => !!document.querySelector('.channel--master .sweep-pad')));
+check('Master column has a Reso knob, always visible',
+  await page.evaluate(() => document.querySelectorAll('.channel--master .sweep-head x-knob').length === 1));
+check('Master column has an auto-return toggle for the Sweep pad',
+  await page.evaluate(() => !!document.querySelector('.channel--master [data-sweep-spring]')));
 check('Master column has no fader/clips/solo-mute', await page.evaluate(() => {
   const col = document.querySelector('.channel--master');
   return !col.querySelector('.fader-row') && !col.querySelector('.clips') && !col.querySelector('.strip__row');
 }));
 
-// ---- Filter knob tatsächlich mit dem echten Master-Regler verbunden? ----
+// ---- Sweep-Pad tatsächlich mit dem echten Master-Regler verbunden? ----
+// Echtes Touch-Event via CDP -- pad.setPointerCapture() braucht einen
+// ECHTEN, vom Browser erzeugten Pointer (s. xypad-multitouch.mjs für
+// dasselbe Muster/dieselbe Begründung).
 const beforeSweep = await page.evaluate(() =>
   parseFloat(document.querySelector('#master-fx x-knob[data-p="filterSweep"]').value));
-await page.evaluate(() => {
-  const filterKnob = document.querySelectorAll('.channel--master .macros x-knob')[0]; // Sweep (filterSweep)
-  filterKnob.value = 0.7;
-  filterKnob.dispatchEvent(new CustomEvent('input', { detail: { value: 0.7 }, bubbles: true }));
-});
-await page.waitForTimeout(50);
+const sweepPadBox = await page.locator('.channel--master .sweep-pad').boundingBox();
+const sweepCdp = await context.newCDPSession(page);
+const sweepX = sweepPadBox.x + sweepPadBox.width / 2;
+const sweepY = sweepPadBox.y + sweepPadBox.height * 0.05; // nahe oben -> Richtung Lowcut (-1)
+await sweepCdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: sweepX, y: sweepY, id: 1 }] });
+await page.waitForTimeout(80);
+await sweepCdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await page.waitForTimeout(80);
 const afterSweep = await page.evaluate(() =>
   parseFloat(document.querySelector('#master-fx x-knob[data-p="filterSweep"]').value));
-check('Dragging the Sweep filter knob updates the REAL filterSweep knob on the Rack-panel master-fx section',
-  Math.abs(afterSweep - 0.7) < 0.01 && afterSweep !== beforeSweep);
+check('Dragging near the top of the Sweep pad moves the REAL filterSweep knob toward -1 (lowcut)',
+  afterSweep < beforeSweep && afterSweep < -0.5);
 
 // ---- X/Y-Pad tatsächlich mit den echten Master-Reglern verbunden? ----
 // Echtes Touch-Event via CDP statt eines synthetischen PointerEvents --
@@ -62,7 +70,7 @@ check('Dragging the Sweep filter knob updates the REAL filterSweep knob on the R
 // Muster/dieselbe Begründung.
 const beforeRevLevel = await page.evaluate(() =>
   parseFloat(document.querySelector('#master-fx x-knob[data-p="revLevel"]').value));
-const padBox = await page.locator('.channel--master .xypad').boundingBox();
+const padBox = await page.locator('.channel--master .xy-wrap .xypad').boundingBox();
 const cdp = await context.newCDPSession(page);
 const padX = padBox.x + padBox.width * 0.9;
 const padY = padBox.y + padBox.height * 0.1; // nahe oben = hoher Y-Wert
