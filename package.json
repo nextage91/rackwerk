@@ -1,0 +1,8 @@
+{
+  "name": "rackwerk-dev-tools",
+  "private": true,
+  "description": "Dev-only tooling dependencies for RackWerk (the app itself ships as a single static index.html, no build step needed to run it). Currently only used by tools/build-resonator-worklet.mjs to (re)compile src/faust/resonator.dsp into src/js/core/resonator-worklet.js -- run `npm install` once, then `node tools/build-resonator-worklet.mjs` after editing the .dsp source.",
+  "devDependencies": {
+    "@grame/faustwasm": "^0.16.6"
+  }
+}
