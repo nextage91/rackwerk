@@ -36,6 +36,8 @@ export const INSERT_DISPLAY = {
   tape: { name: 'Tape Machine', badge: 'TAPE-SAT' },
   geq: { name: 'Graphic EQ', badge: 'GEQ-10' },
   limiter: { name: 'Limiter', badge: 'BRICKWALL' },
+  chorus: { name: 'Chorus', badge: 'CE-CHORUS' },
+  phaser: { name: 'Phaser', badge: 'PHASE-6' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate

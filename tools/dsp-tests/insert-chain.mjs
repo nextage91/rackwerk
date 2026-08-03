@@ -114,6 +114,21 @@ check('resonator: standard param knobs rendered (pitch/resonance/damping/width/m
 await resRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 
+// ---- Chorus / Phaser ---- (neue Modulationseffekte, s. inserts.js#DEFS.
+// chorus/DEFS.phaser -- beide nutzen wie der neue Resonator nur die
+// generischen UI_PARAMS-Regler, keine Sonder-UI.
+await addEffect('chorus');
+let chorusRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('chorus: standard param knobs rendered (rate/depth/width/mix)', await chorusRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 4));
+await chorusRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
+await addEffect('phaser');
+let phaserRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('phaser: standard param knobs rendered (rate/depth/feedback/mix)', await phaserRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 4));
+await phaserRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
 // ---- EQ8 ---- (synthetic PointerEvents, matching the proven eq8 test idiom —
 // real mouse actions don't reliably drive this graph's pointer-capture gestures)
 const dispatchPointer = async (type, id, x, y, opts = {}) => {

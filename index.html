@@ -17038,6 +17038,30 @@ const WAVESHAPER_4X_LATENCY_SEC = 0.004;
  *  dass sie praktisch nicht mehr als Flanger-Sweep wahrnehmbar sind. */
 const TAPE_WOWFLUTTER_BASE_DELAY_SEC = 0.0015;
 
+/** Grundverzögerung/max. Modulationshub der beiden Chorus-Delay-Leitungen
+ *  (s. DEFS.chorus) -- deutlich grösser als das Tape-Wow/Flutter oben
+ *  (15ms statt 1.5ms Basis), weil hier das Kammfilter-"Phasing" der
+ *  gewünschte Chorus-Effekt SELBST ist, nicht ein zu vermeidender
+ *  Nebeneffekt. depth=1 moduliert bis zu ±6ms um die 15ms-Basis --
+ *  15-6=9ms bleibt komfortabel über 0, keine Gefahr einer negativen
+ *  Delay-Zeit. */
+const CHORUS_BASE_DELAY_SEC = 0.015;
+const CHORUS_MAX_DEPTH_SEC = 0.006;
+
+/** Grundfrequenzen der sechs Allpass-Stufen des Phasers (s. DEFS.phaser) --
+ *  log-artig über den Mittenbereich gestaffelt (grob Faktor ~1.6 je Stufe),
+ *  näher an echten mehrstufigen Analog-Phasern (deren Stufen sich meist auf
+ *  einen mittleren Frequenzbereich konzentrieren) als eine gleichmässige
+ *  Streuung über den ganzen Hörbereich. PHASER_DEPTH_FACTOR bestimmt den
+ *  Modulationshub JEDER Stufe relativ zu ihrer eigenen Grundfrequenz (nicht
+ *  additiv in Hz) -- bei depth=1 sweept jede Stufe zwischen 0.3x und 1.7x
+ *  ihrer Grundfrequenz, bleibt garantiert positiv (0.3x > 0) und bleibt über
+ *  alle sechs Stufen hinweg musikalisch zusammenhängend (ein Sweep in
+ *  Oktaven statt in Hz-Schritten). */
+const PHASER_STAGE_FREQS = [220, 380, 620, 1000, 1600, 2600];
+const PHASER_STAGE_Q = 0.7;
+const PHASER_DEPTH_FACTOR = 0.7;
+
 /** Kompensations-Delay für den TROCKENEN Pfad eines Effekts -- derselbe
  *  Trick wie ein Mastering-Limiter mit Lookahead, nur umgekehrt: verzögert
  *  die unverarbeitete Kopie um genau die Zeit, die der Effekt-Pfad durch
@@ -18622,6 +18646,175 @@ const DEFS = {
       };
     },
   },
+  chorus: {
+    name: 'Chorus',
+    // Zwei modulierte Delay-Leitungen, GEGENPHASIG angesteuert von EINER
+    // einzigen LFO (Stimme 2 bekommt dieselbe LFO-Spannung nur mit -1
+    // multipliziert) -- klassischer "Boss CE-1"-artiger Stereo-Chorus.
+    // Bewusst KEINE zweite Oszillator-Instanz für die Phasenverschiebung
+    // (der naheliegende erste Ansatz): zwei unabhängige Oszillatoren mit
+    // zeitversetztem Start halten ihre relative Phase nur so lange exakt,
+    // wie sich die Rate nie ändert -- bei jeder rate-Automation würde ihre
+    // relative Phase graduell auseinanderlaufen (jeder Oszillator rundet
+    // seinen eigenen internen Phasenzähler für sich). Eine einzelne LFO,
+    // deren Signal einmal direkt und einmal invertiert abgegriffen wird,
+    // bleibt dagegen IMMER exakt 180° versetzt, unabhängig von rate-
+    // Änderungen -- kein Restrisiko, keine Sonderfallbehandlung nötig.
+    //
+    // Nicht rekursiv (kein Feedback) -- derselbe sichere Modulationsfall
+    // wie das Tape-Machine-Wow/Flutter-Delay oben (s. dortigen Kommentar);
+    // eine modulierte Delay-ZEIT innerhalb einer Rückkopplungsschleife wäre
+    // dagegen der bei DEFS.reverb dokumentierte Instabilitätsfall.
+    latencySec: CHORUS_BASE_DELAY_SEC,
+    defaults: { rate: 0.8, depth: 0.5, width: 0.7, mix: 0.35 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = p.rate;
+      const depthGain = ctx.createGain();
+      depthGain.gain.value = p.depth * CHORUS_MAX_DEPTH_SEC;
+      const invert = ctx.createGain();
+      invert.gain.value = -1;
+      lfo.connect(depthGain);
+      depthGain.connect(invert);
+      lfo.start();
+
+      const delayL = ctx.createDelay(CHORUS_BASE_DELAY_SEC + CHORUS_MAX_DEPTH_SEC + 0.002);
+      delayL.delayTime.value = CHORUS_BASE_DELAY_SEC;
+      const delayR = ctx.createDelay(CHORUS_BASE_DELAY_SEC + CHORUS_MAX_DEPTH_SEC + 0.002);
+      delayR.delayTime.value = CHORUS_BASE_DELAY_SEC;
+      depthGain.connect(delayL.delayTime);
+      invert.connect(delayR.delayTime);
+
+      const panL = ctx.createStereoPanner();
+      const panR = ctx.createStereoPanner();
+      panL.pan.value = -p.width;
+      panR.pan.value = p.width;
+
+      input.connect(delayL).connect(panL).connect(wet);
+      input.connect(delayR).connect(panR).connect(wet);
+
+      const dryDelay = makeDryCompensationDelay(ctx, CHORUS_BASE_DELAY_SEC);
+      input.connect(dryDelay).connect(dry).connect(output);
+      wet.connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'rate') lfo.frequency.setTargetAtTime(v, t, 0.05);
+          else if (key === 'depth') depthGain.gain.setTargetAtTime(v * CHORUS_MAX_DEPTH_SEC, t, 0.05);
+          else if (key === 'width') {
+            panL.pan.setTargetAtTime(-v, t, 0.02);
+            panR.pan.setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          lfo.stop(); lfo.disconnect();
+          depthGain.disconnect(); invert.disconnect();
+          delayL.disconnect(); delayR.disconnect(); panL.disconnect(); panR.disconnect();
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); dryDelay.disconnect();
+        },
+      };
+    },
+  },
+  phaser: {
+    name: 'Phaser',
+    // Sechs seriell geschaltete Allpass-Stufen (BiquadFilterNode, type
+    // 'allpass') -- ihre Summe mit dem trockenen Signal erzeugt die
+    // charakteristischen wandernden Kerben (Kammfilter durch Phasen-
+    // auslöschung, NICHT durch Laufzeitunterschiede wie beim Chorus/
+    // Flanger). Jede Stufe hat eine EIGENE Grundfrequenz (PHASER_STAGE_
+    // FREQS, log gestaffelt über den Mittenbereich) und wird von DERSELBEN
+    // LFO moduliert, aber mit einem zur jeweiligen Grundfrequenz
+    // proportionalem Hub (additive AudioParam-Modulation, gleiche Technik
+    // wie das Tape-Wow/Flutter oben) -- so bleibt der Sweep über alle
+    // Stufen musikalisch zusammenhängend (Oktaven statt Hz-Schritte).
+    //
+    // Feedback (Resonanz) schliesst den Ausgang der letzten Stufe über
+    // einen Weichbegrenzer (makeFeedbackClipCurve, gleiche Technik wie
+    // DEFS.filterDelay/DEFS.reverb) zurück auf den Eingang der Kette.
+    // Anders als eine modulierte DELAY-Zeit in einer Rückkopplungsschleife
+    // (s. Instabilitäts-Kommentar bei DEFS.reverb) ist eine modulierte
+    // FILTER-Frequenz hier unkritisch: ein Allpass hat per Definition bei
+    // JEDER Koeffizientenwahl exakt |H(f)|=1 für alle f -- die Verstärkung
+    // der Schleife ist also, unabhängig vom momentanen LFO-Stand, immer
+    // exakt durch den feedback-Reglerwert selbst begrenzt (<=0.9), nie
+    // höher. Trotzdem per Stresstest verifiziert (tools/dsp-tests/chorus-
+    // phaser.mjs), nicht nur aus der Theorie angenommen.
+    defaults: { rate: 0.3, depth: 0.6, feedback: 0.3, mix: 0.5 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = p.rate;
+      lfo.start();
+
+      const stages = PHASER_STAGE_FREQS.map((freq) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'allpass';
+        filter.frequency.value = freq;
+        filter.Q.value = PHASER_STAGE_Q;
+        const modGain = ctx.createGain();
+        modGain.gain.value = freq * PHASER_DEPTH_FACTOR * p.depth;
+        lfo.connect(modGain).connect(filter.frequency);
+        return { filter, modGain, baseFreq: freq };
+      });
+
+      const stageInput = ctx.createGain();
+      input.connect(stageInput);
+      let node = stageInput;
+      for (const stage of stages) { node.connect(stage.filter); node = stage.filter; }
+      const chainOut = node;
+
+      const feedbackGain = ctx.createGain();
+      feedbackGain.gain.value = p.feedback;
+      const feedbackClip = ctx.createWaveShaper();
+      feedbackClip.curve = makeFeedbackClipCurve();
+      feedbackClip.oversample = '2x';
+      chainOut.connect(feedbackGain).connect(feedbackClip).connect(stageInput);
+
+      input.connect(dry).connect(output);
+      chainOut.connect(wet).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'rate') lfo.frequency.setTargetAtTime(v, t, 0.05);
+          else if (key === 'depth') {
+            for (const stage of stages) stage.modGain.gain.setTargetAtTime(stage.baseFreq * PHASER_DEPTH_FACTOR * v, t, 0.05);
+          } else if (key === 'feedback') feedbackGain.gain.setTargetAtTime(v, t, 0.02);
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          lfo.stop(); lfo.disconnect();
+          for (const stage of stages) { stage.filter.disconnect(); stage.modGain.disconnect(); }
+          stageInput.disconnect(); feedbackGain.disconnect(); feedbackClip.disconnect();
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+        },
+      };
+    },
+  },
   geq: {
     name: 'Graphic EQ',
     // 10 feste Bänder (Oktavabstand, s. GEQ_FREQS oben) -- anders als das
@@ -18742,6 +18935,8 @@ const INSERT_COLORS = {
   tape: '#d99a5b',   // Tape Machine: warmes Sepia/Rostbraun, wie altes Bandmaterial
   geq: '#7fd9c4',    // Graphic EQ: helles Türkis, von eq/eq8's Teal/Cyan abgesetzt
   limiter: '#e0555f', // Limiter: warnendes Rot -- hartes Ceiling-Werkzeug
+  chorus: '#7fb8e0', // Chorus: kühles Himmelblau, deutlich vom Delay-Blau abgesetzt
+  phaser: '#e07fc0', // Phaser: Magenta/Pink, wie ein klassisches Modulations-Pedal
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -18845,6 +19040,18 @@ const UI_PARAMS = {
     { key: 'inputGain', label: 'Input', min: 0, max: 24, unit: 'dB' },
     { key: 'ceiling', label: 'Ceiling', min: -20, max: 0, unit: 'dB' },
     { key: 'release', label: 'Release', min: 0.01, max: 0.5, curve: 'log', unit: 's' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  chorus: [
+    { key: 'rate', label: 'Rate', min: 0.05, max: 8, curve: 'log', unit: 'Hz' },
+    { key: 'depth', label: 'Depth', min: 0, max: 1, unit: '' },
+    { key: 'width', label: 'Width', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  phaser: [
+    { key: 'rate', label: 'Rate', min: 0.02, max: 8, curve: 'log', unit: 'Hz' },
+    { key: 'depth', label: 'Depth', min: 0, max: 1, unit: '' },
+    { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
 };
@@ -21237,6 +21444,8 @@ const INSERT_DISPLAY = {
   tape: { name: 'Tape Machine', badge: 'TAPE-SAT' },
   geq: { name: 'Graphic EQ', badge: 'GEQ-10' },
   limiter: { name: 'Limiter', badge: 'BRICKWALL' },
+  chorus: { name: 'Chorus', badge: 'CE-CHORUS' },
+  phaser: { name: 'Phaser', badge: 'PHASE-6' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
