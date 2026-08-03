@@ -16907,8 +16907,331 @@ const RESONATOR_WORKLET_SRC = "\n// DSP name and JSON string for DSP are generat
 return { RESONATOR_PROCESSOR_NAME, RESONATOR_PARAMS, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, RESONATOR_WORKLET_SRC };
 })();
 
+/* ===== js/core/gate-worklet.js ===== */
+const { GATE_WORKLET_SRC } = (() => {
+/**
+ * Noise Gate/Expander als AudioWorkletProcessor.
+ *
+ * Web Audio hat kein natives Gate/Expander-Node -- DynamicsCompressorNode
+ * kann nur LAUTE Signale dämpfen (Kompression), niemals LEISE (die genau
+ * entgegengesetzte Dynamikrichtung eines Gates). Ein Gate braucht darum
+ * einen eigenen Hüllkurvenfolger + Schwellenvergleich, der pro Sample läuft
+ * -- wie schon core/onepole-worklet.js (dortiger Kommentar: eine
+ * Rückkopplungsschleife aus nativen Delay/Gain-Knoten bekommt durch die
+ * Web-Audio-Zyklus-Mindestlatenz von einem Render-Quantum (128 Samples)
+ * einen messbar falschen Zeitkonstanten-Wert, ein Worklet rechnet die
+ * Rekursion dagegen exakt sample-für-Sample im eigenen JS-Code).
+ *
+ * Zwei getrennte Hüllkurven statt einer:
+ *  - Detektor-Hüllkurve (this.env): FEST schnell (1ms Attack/50ms Release),
+ *    unabhängig von den Regler-Werten -- reine Pegel-MESSUNG, soll nicht
+ *    durch eine absichtlich langsame Release-Einstellung des Nutzers selbst
+ *    "blind" für kurze Pegelspitzen werden.
+ *  - Gate-Hüllkurve (this.gainState): die eigentliche, hörbare Verstärkung,
+ *    geglättet mit den NUTZER-Reglern attack/release -- bestimmt wie schnell
+ *    das Tor auf-/zufährt, unabhängig von der (immer schnellen) Erkennung.
+ *
+ * `range` (dB) ist der Boden im geschlossenen Zustand, NICHT hartes Muten
+ * (0/-Infinity) -- ein reales Gate lässt meist einen Rest durch (typisch
+ * -40 bis -80dB), volles Stummschalten klingt bei perkussiven Signalen
+ * unnatürlich abgeschnitten ("Klick" am Übergang).
+ */
+const GATE_WORKLET_SRC = `
+const DET_ATTACK_COEFF = 1 - Math.exp(-1 / (sampleRate * 0.001));
+const DET_RELEASE_COEFF = 1 - Math.exp(-1 / (sampleRate * 0.05));
+const DENORMAL_FLOOR = 1e-30;
+
+class RackwerkGateProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'threshold', defaultValue: -40, minValue: -80, maxValue: 0, automationRate: 'a-rate' },
+      { name: 'attack', defaultValue: 0.005, minValue: 0.0002, maxValue: 0.5, automationRate: 'a-rate' },
+      { name: 'release', defaultValue: 0.15, minValue: 0.005, maxValue: 2, automationRate: 'a-rate' },
+      { name: 'range', defaultValue: -60, minValue: -80, maxValue: 0, automationRate: 'a-rate' },
+    ];
+  }
+  constructor() {
+    super();
+    this.env = new Float64Array(32);
+    // Startet OFFEN (1), nicht bei 0 -- sonst müsste sich das Tor beim
+    // allerersten Ton erst "freispielen", statt sofort durchzulassen.
+    this.gainState = new Float64Array(32).fill(1);
+    this.lastAttack = -1; this.attCoeff = 0;
+    this.lastRelease = -1; this.relCoeff = 0;
+  }
+
+  updateGainCoeffs(attack, release) {
+    if (attack !== this.lastAttack) {
+      this.lastAttack = attack;
+      this.attCoeff = 1 - Math.exp(-1 / (sampleRate * Math.max(0.0002, attack)));
+    }
+    if (release !== this.lastRelease) {
+      this.lastRelease = release;
+      this.relCoeff = 1 - Math.exp(-1 / (sampleRate * Math.max(0.005, release)));
+    }
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length) return true;
+    const thresholdP = parameters.threshold;
+    const attackP = parameters.attack;
+    const releaseP = parameters.release;
+    const rangeP = parameters.range;
+    const modulated = thresholdP.length > 1 || attackP.length > 1 || releaseP.length > 1 || rangeP.length > 1;
+    if (!modulated) this.updateGainCoeffs(attackP[0], releaseP[0]);
+
+    for (let ch = 0; ch < output.length; ch++) {
+      const inCh = input && input.length ? input[ch % input.length] : null;
+      const outCh = output[ch];
+      let env = this.env[ch];
+      let gain = this.gainState[ch];
+      for (let i = 0; i < outCh.length; i++) {
+        const x = inCh ? inCh[i] : 0;
+        if (modulated) this.updateGainCoeffs(attackP[attackP.length > 1 ? i : 0], releaseP[releaseP.length > 1 ? i : 0]);
+        const rect = Math.abs(x);
+        env += (rect - env) * (rect > env ? DET_ATTACK_COEFF : DET_RELEASE_COEFF);
+        const thresholdDb = thresholdP[thresholdP.length > 1 ? i : 0];
+        const rangeDb = rangeP[rangeP.length > 1 ? i : 0];
+        const envDb = env > 1e-8 ? 20 * Math.log10(env) : -160;
+        const targetLin = envDb >= thresholdDb ? 1 : Math.pow(10, rangeDb / 20);
+        gain += (targetLin - gain) * (targetLin > gain ? this.attCoeff : this.relCoeff);
+        outCh[i] = x * gain;
+      }
+      if (env < DENORMAL_FLOOR) env = 0;
+      if (!Number.isFinite(env)) env = 0;
+      if (!Number.isFinite(gain)) gain = 1;
+      this.env[ch] = env;
+      this.gainState[ch] = gain;
+    }
+    return true;
+  }
+}
+registerProcessor('rackwerk-gate', RackwerkGateProcessor);
+`;
+
+return { GATE_WORKLET_SRC };
+})();
+
+/* ===== js/core/freqshift-worklet.js ===== */
+const { FREQSHIFT_WORKLET_SRC } = (() => {
+/**
+ * Frequenzverschiebung via Hilbert-Transformation + Einseitenband-Modulation
+ * (SSB) -- ECHTE Frequenzverschiebung (ALLE Teiltöne um denselben Hz-Betrag
+ * verschoben, dadurch bewusst INHARMONISCH/"glockig"/"metallisch"), nicht zu
+ * verwechseln mit Pitch-Shifting (das die Verhältnisse der Teiltöne erhält
+ * und darum harmonisch bleibt).
+ *
+ * Hilbert-Transformator: zwei parallele Kaskaden aus je 4 Allpass-Stufen
+ * 2. Ordnung (die seit Jahrzehnten frei publizierten, weit verbreiteten
+ * Koeffizienten für einen breitbandigen ~90°-Phasenteiler -- s. Bernie
+ * Hutchins' "Musical Engineer's Handbook" bzw. das seither vielfach
+ * reproduzierte musicdsp.org-Rezept, u. a. in etlichen Open-Source-
+ * Frequenzschiebern verwendet). Aus dem Eingangssignal x entstehen so zwei
+ * Zweige I (0°) und Q (~90° phasenverschoben über den ganzen Hörbereich) --
+ * das "analytische Signal".
+ *
+ * Multipliziert mit einem Quadratur-Träger (sin/cos DERSELBEN Frequenz, aus
+ * EINEM gemeinsamen Phasenakkumulator abgeleitet) ergibt sich die
+ * verschobene Ausgabe:
+ *   y = I*cos(wt) - sign(shift)*Q*sin(wt)
+ * -- schiebt bei shift>0 nach oben, bei shift<0 nach unten (dieselbe Formel,
+ * nur das Vorzeichen von Q dreht die Richtung um; der Akkumulator selbst
+ * läuft immer mit |shift|, damit die Trägerfrequenz nie negativ wird).
+ * Zwei UNABHÄNGIGE OszillatorNode-Instanzen für sin/cos würden bei jeder
+ * Live-Automation von `shift` ihre relative 90°-Phase verlieren (jeder
+ * Oszillator rundet seinen eigenen Phasenzähler für sich, s. DEFS.chorus im
+ * Hauptmodul für dasselbe Grundproblem bei nur 180°) -- ein gemeinsamer
+ * Akkumulator in einem Worklet bleibt dagegen exakt in Quadratur, egal wie
+ * `shift` sich ändert. Da der Träger ohnehin sample-genau im Worklet
+ * gebraucht wird, laufen die acht Allpass-Stufen gleich mit statt über
+ * einen separaten IIRFilterNode-Signalpfad.
+ */
+const FREQSHIFT_WORKLET_SRC = `
+const HILBERT_A = [0.6923877778065, 0.9360654322959, 0.9882295226860, 0.9987488452737];
+const HILBERT_B = [0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278];
+const TWO_PI = Math.PI * 2;
+
+class Allpass2 {
+  constructor(c) { this.c = c; this.x1 = 0; this.x2 = 0; this.y1 = 0; this.y2 = 0; }
+  process(x0) {
+    const y0 = this.c * (x0 - this.y2) + this.x2;
+    this.x2 = this.x1; this.x1 = x0;
+    this.y2 = this.y1; this.y1 = y0;
+    if (!Number.isFinite(y0)) { this.x1 = this.x2 = this.y1 = this.y2 = 0; return 0; }
+    return y0;
+  }
+}
+
+class HilbertChannel {
+  constructor() {
+    this.a = HILBERT_A.map((c) => new Allpass2(c));
+    this.b = HILBERT_B.map((c) => new Allpass2(c));
+  }
+  processI(x) { let y = x; for (const ap of this.a) y = ap.process(y); return y; }
+  processQ(x) { let y = x; for (const ap of this.b) y = ap.process(y); return y; }
+}
+
+class RackwerkFreqShiftProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [{ name: 'shift', defaultValue: 0, minValue: -4000, maxValue: 4000, automationRate: 'a-rate' }];
+  }
+  constructor() {
+    super();
+    this.channels = [];
+    this.phase = 0;
+  }
+  ensureChannels(n) { while (this.channels.length < n) this.channels.push(new HilbertChannel()); }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length || !output[0].length) return true;
+    this.ensureChannels(output.length);
+    const shiftP = parameters.shift;
+    let phase = this.phase;
+    const n = output[0].length;
+    for (let i = 0; i < n; i++) {
+      const shift = shiftP[shiftP.length > 1 ? i : 0];
+      const freq = Math.abs(shift);
+      const sign = shift < 0 ? -1 : 1;
+      const s = Math.sin(phase);
+      const c = Math.cos(phase);
+      phase += (TWO_PI * freq) / sampleRate;
+      if (phase > TWO_PI) phase -= TWO_PI;
+      for (let ch = 0; ch < output.length; ch++) {
+        const inCh = input && input.length ? input[ch % input.length] : null;
+        const x = inCh ? inCh[i] : 0;
+        const chan = this.channels[ch];
+        const I = chan.processI(x);
+        const Q = chan.processQ(x);
+        output[ch][i] = I * c - sign * Q * s;
+      }
+    }
+    this.phase = Number.isFinite(phase) ? phase : 0;
+    return true;
+  }
+}
+registerProcessor('rackwerk-freqshift', RackwerkFreqShiftProcessor);
+`;
+
+return { FREQSHIFT_WORKLET_SRC };
+})();
+
+/* ===== js/core/beatrepeat-worklet.js ===== */
+const { BEATREPEAT_WORKLET_SRC } = (() => {
+/**
+ * Beat Repeat als AudioWorkletProcessor -- tempo-synchrones Stottern/
+ * Wiederholen einer soeben live gespielten Audio-Scheibe (wie Abletons
+ * "Beat Repeat"), mit denselben zwei Kernreglern wie das Original:
+ *
+ *  - chance: Wahrscheinlichkeit pro Intervall, dass STATT frischem Live-
+ *    Signal die zuletzt eingefangene Scheibe NOCHMAL abgespielt wird.
+ *  - decay: wie stark jede weitere Wiederholung DERSELBEN eingefrorenen
+ *    Scheibe zusätzlich leiser wird (kumulativ, s. repeatCount unten).
+ *
+ * Funktionsweise: ein Ringpuffer nimmt IMMER das Live-Signal auf, egal in
+ * welchem Zustand sich der Effekt gerade befindet. An jeder Intervall-
+ * grenze (Länge = `intervalSec`, tempo-synchron von aussen gesetzt, s.
+ * inserts.js#DEFS.beatRepeat) würfelt der Prozessor:
+ *  - Treffer (< chance) UND es gibt bereits eine eingefrorene Scheibe:
+ *    dieselbe Leseposition wie beim letzten Mal wird erneut abgespielt
+ *    (nicht neu eingefangen) -- repeatCount steigt, die Lautstärke sinkt
+ *    um (1-decay)^repeatCount.
+ *  - sonst: die Leseposition wird auf die AKTUELLE Schreibposition gelegt
+ *    (frisch eingefangen) und das Live-Signal läuft für dieses Intervall
+ *    unverändert durch (repeatCount=0, Gain=1) -- bei chance=0 macht das
+ *    dieses Insert zur reinen Durchleitung (keine hörbare Verzögerung, da
+ *    im Frisch-Zustand IMMER live statt aus dem Puffer ausgegeben wird).
+ *
+ * Da der Ringpuffer beim Wiederholen exakt an der Stelle weiterliest, wo
+ * die vorige Intervall-Länge live durchlief, enthält er zu diesem Zeitpunkt
+ * bereits genau das Material der VORHERIGEN Runde -- kein zusätzlicher
+ * Einfang-Schritt nötig, das Schreiben läuft ja ununterbrochen mit.
+ */
+const BEATREPEAT_WORKLET_SRC = `
+class RackwerkBeatRepeatProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'intervalSec', defaultValue: 0.125, minValue: 0.01, maxValue: 4, automationRate: 'k-rate' },
+      { name: 'chance', defaultValue: 0.35, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'decay', defaultValue: 0.3, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+    ];
+  }
+  constructor() {
+    super();
+    // 4s Maximum -- dieselbe Obergrenze wie DEFS.filterDelay (langsamstes
+    // Tempo + längste Notenwert-Auswahl bleibt darunter, s. dortigen
+    // Kommentar zu delayL/delayR).
+    this.ringLen = Math.ceil(sampleRate * 4.0);
+    this.ring = [];
+    this.writePos = 0;
+    this.cyclePos = 0;
+    this.cycleLen = Math.max(1, Math.round(sampleRate * 0.125));
+    this.repeating = false;
+    this.repeatCount = 0;
+    this.repeatStartPos = 0;
+    this.gain = 1;
+    this.hasCapturedBefore = false;
+  }
+  ensureChannels(n) { while (this.ring.length < n) this.ring.push(new Float32Array(this.ringLen)); }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length || !output[0].length) return true;
+    const chCount = Math.max(output.length, input && input.length ? input.length : 0, 1);
+    this.ensureChannels(chCount);
+    const intervalSec = parameters.intervalSec[0];
+    const chance = parameters.chance[0];
+    const decay = parameters.decay[0];
+    const newCycleLen = Math.max(1, Math.round(intervalSec * sampleRate));
+    const n = output[0].length;
+
+    for (let i = 0; i < n; i++) {
+      for (let ch = 0; ch < this.ring.length; ch++) {
+        const inCh = input && input.length ? input[ch % input.length] : null;
+        this.ring[ch][this.writePos] = inCh ? inCh[i] : 0;
+      }
+      if (this.cyclePos === 0) {
+        this.cycleLen = newCycleLen;
+        if (this.hasCapturedBefore && Math.random() < chance) {
+          this.repeating = true;
+          this.repeatCount += 1;
+          this.gain = Math.pow(1 - decay, this.repeatCount);
+        } else {
+          this.repeating = false;
+          this.repeatCount = 0;
+          this.gain = 1;
+          this.repeatStartPos = this.writePos;
+          this.hasCapturedBefore = true;
+        }
+      }
+      for (let ch = 0; ch < output.length; ch++) {
+        if (this.repeating) {
+          const idx = (this.repeatStartPos + (this.cyclePos % this.cycleLen)) % this.ringLen;
+          output[ch][i] = this.ring[ch % this.ring.length][idx] * this.gain;
+        } else {
+          const inCh = input && input.length ? input[ch % input.length] : null;
+          output[ch][i] = inCh ? inCh[i] : 0;
+        }
+      }
+      this.writePos = (this.writePos + 1) % this.ringLen;
+      this.cyclePos = (this.cyclePos + 1) % this.cycleLen;
+    }
+    if (!Number.isFinite(this.gain)) this.gain = 1;
+    return true;
+  }
+}
+registerProcessor('rackwerk-beatrepeat', RackwerkBeatRepeatProcessor);
+`;
+
+return { BEATREPEAT_WORKLET_SRC };
+})();
+
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve } = (() => {
+const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -17062,6 +17385,47 @@ const PHASER_STAGE_FREQS = [220, 380, 620, 1000, 1600, 2600];
 const PHASER_STAGE_Q = 0.7;
 const PHASER_DEPTH_FACTOR = 0.7;
 
+/** Acht Analyse-/Synthese-Bänder des Vocoders (s. DEFS.vocoder) -- log-artig
+ *  über den für Sprachverständlichkeit wichtigsten Bereich gestaffelt
+ *  (Grundton bis Zischlaute), dieselbe Bandanzahl wie eq8 (8), aber mit
+ *  eigener, für Vocoder-Zwecke optimierter Frequenzverteilung statt
+ *  EQ8_FREQ_MIN/MAX gleichmässig log über den GESAMTEN Hörbereich. */
+const VOCODER_BANDS = [200, 350, 600, 1000, 1600, 2500, 4000, 6500];
+const VOCODER_BAND_Q = 3.5;
+/** Fester Rauschanteil im Carrier -- klassischer Vocoder-Trick, verbessert
+ *  die Verständlichkeit von Konsonanten/Zischlauten spürbar (ein reiner
+ *  Sägezahn-Carrier hat in den oberen Bändern kaum eigene Energie mehr,
+ *  Rauschen füllt genau diese Lücke). Bewusst NICHT als Regler exponiert --
+ *  hält die Bedienung auf drei Kernregler fokussiert (wie beim Opto-
+ *  Kompressor), ein Fixwert reicht für den beabsichtigten Effekt. */
+const VOCODER_NOISE_MIX = 0.12;
+/** Empirisch (Stresstest, s. tools/dsp-tests/vocoder-gate-freqshift.mjs)
+ *  bestimmte Pegel-Kalibrierung: VOCODER_ANALYSIS_GAIN hebt die (nach
+ *  Gleichrichtung+Glättung typischerweise leise) Hüllkurve auf einen
+ *  Bereich an, der die Carrier-Bandgains sinnvoll zwischen ~0 und ~1
+ *  aussteuert; VOCODER_OUT_LEVEL gleicht die Summe aller acht Bänder auf
+ *  einen mit dem Dry-Pfad vergleichbaren Pegel aus (dieselbe Rolle wie
+ *  DATTORRO_OUT_LEVEL beim Reverb). */
+const VOCODER_ANALYSIS_GAIN = 6;
+const VOCODER_OUT_LEVEL = 1.4;
+let vocoderAbsCurve = null;
+/** Vollweg-Gleichrichtung (|x|) als WaveShaper-Kurve -- billiger Trick,
+ *  einen ctx.createWaveShaper() als Gleichrichter zu missbrauchen, statt
+ *  eine eigene AudioParam-Rechnung zu bauen. Modulweit EINMAL berechnet
+ *  und wiederverwendet (dieselbe Kurve für jedes Band jeder Vocoder-
+ *  Instanz, ändert sich nie). */
+function getVocoderAbsCurve() {
+  if (!vocoderAbsCurve) {
+    const n = 1024;
+    vocoderAbsCurve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / (n - 1) - 1;
+      vocoderAbsCurve[i] = Math.abs(x);
+    }
+  }
+  return vocoderAbsCurve;
+}
+
 /** Kompensations-Delay für den TROCKENEN Pfad eines Effekts -- derselbe
  *  Trick wie ein Mastering-Limiter mit Lookahead, nur umgekehrt: verzögert
  *  die unverarbeitete Kopie um genau die Zeit, die der Effekt-Pfad durch
@@ -17162,6 +17526,37 @@ function createResonatorNode(ctx) {
       sampleSize: 4,
     },
   });
+}
+
+/** Generisches Lazy-Ladeschema für die drei einfachen Hand-geschriebenen
+ *  Worklets unten (Gate/Frequenzschieber/Beat-Repeat) -- dasselbe Muster
+ *  wie ensureOnePoleWorklet, aber ohne WASM-Kompilierschritt (reines JS,
+ *  kein Faust-Build nötig). EIN gemeinsamer Cache (Map von Prozessorname
+ *  auf Promise) statt drei fast identischer Funktionen. */
+const simpleWorkletPromises = new Map();
+const simpleWorkletReadyFlags = new Map();
+function ensureSimpleWorklet(ctx, processorName, src) {
+  if (!simpleWorkletPromises.has(processorName)) {
+    let promise;
+    if (!ctx.audioWorklet) {
+      promise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([src], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      promise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); simpleWorkletReadyFlags.set(processorName, true); return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error(`Worklet-Modul "${processorName}" konnte nicht geladen werden -- betroffener Effekt bleibt transparent.`, err);
+          return false;
+        });
+    }
+    simpleWorkletPromises.set(processorName, promise);
+  }
+  return simpleWorkletPromises.get(processorName);
+}
+function simpleWorkletReady(processorName) {
+  return simpleWorkletReadyFlags.get(processorName) === true;
 }
 
 /** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
@@ -18815,6 +19210,317 @@ const DEFS = {
       };
     },
   },
+  gate: {
+    name: 'Gate',
+    // Web Audio kennt kein natives Gate/Expander-Node (DynamicsCompressorNode
+    // kann nur LAUTE Signale dämpfen, nie LEISE -- die entgegengesetzte
+    // Dynamikrichtung) -- braucht darum einen eigenen Hüllkurvenfolger +
+    // Schwellenvergleich, s. gate-worklet.js. Gleiches Lazy-Lade-/
+    // Platzhalter-Muster wie der Resonator-Worklet oben: bis das Modul
+    // geladen ist, läuft das Signal unverändert durch (transparent statt
+    // stumm) -- ein Gate, das während des Ladens die Musik verschluckt,
+    // wäre schlimmer als kurzzeitig gar keine Wirkung zu haben.
+    defaults: { threshold: -40, attack: 0.005, release: 0.15, range: -60, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      let gateNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const pushParams = (node) => {
+        const t = ctx.currentTime;
+        node.parameters.get('threshold').setTargetAtTime(p.threshold, t, 0.001);
+        node.parameters.get('attack').setTargetAtTime(p.attack, t, 0.001);
+        node.parameters.get('release').setTargetAtTime(p.release, t, 0.001);
+        node.parameters.get('range').setTargetAtTime(p.range, t, 0.001);
+      };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        gateNode = new AudioWorkletNode(ctx, 'rackwerk-gate', { numberOfInputs: 1, numberOfOutputs: 1 });
+        pushParams(gateNode);
+        coreIn.connect(gateNode).connect(coreOut);
+      };
+      if (simpleWorkletReady('rackwerk-gate')) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureSimpleWorklet(ctx, 'rackwerk-gate', GATE_WORKLET_SRC).then((ok) => { if (ok) swapInRealNode(); });
+      }
+
+      input.connect(coreIn);
+      coreOut.connect(wet).connect(output);
+      input.connect(dry).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'threshold' || key === 'attack' || key === 'release' || key === 'range') {
+            if (gateNode) gateNode.parameters.get(key).setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          disposed = true;
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          coreIn.disconnect(); coreOut.disconnect();
+          gateNode?.disconnect();
+        },
+      };
+    },
+  },
+  freqShift: {
+    name: 'Frequency Shifter',
+    // ECHTE Frequenzverschiebung (alle Teiltöne um denselben Hz-Betrag
+    // verschoben, dadurch inharmonisch/"glockig"), nicht zu verwechseln mit
+    // Pitch-Shifting -- s. freqshift-worklet.js für die Hilbert-Transform-/
+    // Einseitenband-Herleitung. Gleiches Lazy-Lade-/Platzhalter-Muster wie
+    // Gate/Resonator oben.
+    defaults: { shift: 150, mix: 0.5 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      let shiftNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        shiftNode = new AudioWorkletNode(ctx, 'rackwerk-freqshift', { numberOfInputs: 1, numberOfOutputs: 1 });
+        shiftNode.parameters.get('shift').setTargetAtTime(p.shift, ctx.currentTime, 0.001);
+        coreIn.connect(shiftNode).connect(coreOut);
+      };
+      if (simpleWorkletReady('rackwerk-freqshift')) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureSimpleWorklet(ctx, 'rackwerk-freqshift', FREQSHIFT_WORKLET_SRC).then((ok) => { if (ok) swapInRealNode(); });
+      }
+
+      input.connect(coreIn);
+      coreOut.connect(wet).connect(output);
+      input.connect(dry).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'shift') {
+            if (shiftNode) shiftNode.parameters.get('shift').setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          disposed = true;
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          coreIn.disconnect(); coreOut.disconnect();
+          shiftNode?.disconnect();
+        },
+      };
+    },
+  },
+  vocoder: {
+    name: 'Vocoder',
+    // Klassische Bode/Dudley-Vocoder-Architektur: das Eingangssignal
+    // (Modulator, z. B. eine Stimme) wird in VOCODER_BANDS.length Bänder
+    // zerlegt (Bandpass), jedes Band gleichgerichtet (WaveShaper, s.
+    // getVocoderAbsCurve) und geglättet (derselbe 1-Pol-Tiefpass-Worklet
+    // wie Reverb-Damping/Resonator, s. makeOnePoleLowpass) -- die
+    // resultierende Hüllkurve moduliert direkt die Lautstärke des JEWEILS
+    // GLEICHEN Bandpass-Bands, aber angewandt auf einen EINGEBAUTEN
+    // Carrier-Oszillator (Sägezahn + etwas Rauschen, s. VOCODER_NOISE_MIX)
+    // statt auf ein zweites, extern angeschlossenes Signal -- ein "echter"
+    // Vocoder mit externem Carrier (z. B. ein Synth-Sound, den die Stimme
+    // moduliert) bräuchte eine Sidechain-Routing-Infrastruktur, die es in
+    // RackWerk noch nirgends gibt; der eingebaute Carrier liefert sofort
+    // den klassischen "Roboterstimme"-Vocoder-Sound ohne neue Architektur.
+    defaults: { carrierPitch: 110, response: 25, mix: 0.7 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const carrierOsc = ctx.createOscillator();
+      carrierOsc.type = 'sawtooth';
+      carrierOsc.frequency.value = p.carrierPitch;
+      carrierOsc.start();
+      const carrierNoise = ctx.createBufferSource();
+      carrierNoise.buffer = noise(ctx);
+      carrierNoise.loop = true;
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.value = VOCODER_NOISE_MIX;
+      carrierNoise.connect(noiseGain);
+      carrierNoise.start();
+      const carrierSum = ctx.createGain();
+      carrierOsc.connect(carrierSum);
+      noiseGain.connect(carrierSum);
+
+      const wetSum = ctx.createGain();
+      const absCurve = getVocoderAbsCurve();
+      const bands = VOCODER_BANDS.map((freq) => {
+        const analysis = ctx.createBiquadFilter();
+        analysis.type = 'bandpass';
+        analysis.frequency.value = freq;
+        analysis.Q.value = VOCODER_BAND_Q;
+        input.connect(analysis);
+
+        const rectify = ctx.createWaveShaper();
+        rectify.curve = absCurve;
+        analysis.connect(rectify);
+
+        const analysisGain = ctx.createGain();
+        analysisGain.gain.value = VOCODER_ANALYSIS_GAIN;
+        rectify.connect(analysisGain);
+
+        const envelope = makeOnePoleLowpass(ctx, p.response);
+        analysisGain.connect(envelope.input);
+
+        const carrierFilter = ctx.createBiquadFilter();
+        carrierFilter.type = 'bandpass';
+        carrierFilter.frequency.value = freq;
+        carrierFilter.Q.value = VOCODER_BAND_Q;
+        carrierSum.connect(carrierFilter);
+
+        const bandGain = ctx.createGain();
+        bandGain.gain.value = 0;
+        envelope.output.connect(bandGain.gain);
+        carrierFilter.connect(bandGain);
+        bandGain.connect(wetSum);
+
+        return { analysis, rectify, analysisGain, envelope, carrierFilter, bandGain };
+      });
+
+      const outLevel = ctx.createGain();
+      outLevel.gain.value = VOCODER_OUT_LEVEL;
+      wetSum.connect(outLevel);
+
+      input.connect(dry).connect(output);
+      outLevel.connect(wet).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'carrierPitch') carrierOsc.frequency.setTargetAtTime(v, t, 0.02);
+          else if (key === 'response') {
+            for (const band of bands) band.envelope.setFreq(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          carrierOsc.stop(); carrierOsc.disconnect();
+          carrierNoise.stop(); carrierNoise.disconnect();
+          noiseGain.disconnect(); carrierSum.disconnect(); wetSum.disconnect(); outLevel.disconnect();
+          for (const band of bands) {
+            band.analysis.disconnect(); band.rectify.disconnect(); band.analysisGain.disconnect();
+            band.envelope.dispose(); band.carrierFilter.disconnect(); band.bandGain.disconnect();
+          }
+        },
+      };
+    },
+  },
+  beatRepeat: {
+    name: 'Beat Repeat',
+    // Tempo-synchrones Stottern/Wiederholen einer live gespielten Scheibe
+    // (wie Abletons "Beat Repeat") -- s. beatrepeat-worklet.js für die
+    // Chance-/Decay-Semantik. IMMER tempo-synchron (anders als Filter
+    // Delay: kein 'free'-Sekunden-Modus) -- "Grid" ist bei Beat Repeat
+    // konzeptionell immer ein Notenwert, nie eine freie Zeit.
+    defaults: { division: '1/16', chance: 0.35, decay: 0.3, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      let repeatNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const computeIntervalSec = () => transport.stepDuration * 4 * (DELAY_SYNC_DIVISIONS[p.division] ?? 0.25);
+      const applyInterval = () => {
+        if (repeatNode) repeatNode.parameters.get('intervalSec').setTargetAtTime(computeIntervalSec(), ctx.currentTime, 0.001);
+      };
+      const pushParams = (node) => {
+        const t = ctx.currentTime;
+        node.parameters.get('intervalSec').setTargetAtTime(computeIntervalSec(), t, 0.001);
+        node.parameters.get('chance').setTargetAtTime(p.chance, t, 0.001);
+        node.parameters.get('decay').setTargetAtTime(p.decay, t, 0.001);
+      };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        repeatNode = new AudioWorkletNode(ctx, 'rackwerk-beatrepeat', { numberOfInputs: 1, numberOfOutputs: 1 });
+        pushParams(repeatNode);
+        coreIn.connect(repeatNode).connect(coreOut);
+      };
+      if (simpleWorkletReady('rackwerk-beatrepeat')) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureSimpleWorklet(ctx, 'rackwerk-beatrepeat', BEATREPEAT_WORKLET_SRC).then((ok) => { if (ok) swapInRealNode(); });
+      }
+
+      const bpmListener = { onTransport(event) { if (event === 'bpm') applyInterval(); } };
+      transport.addListener(bpmListener);
+
+      input.connect(coreIn);
+      coreOut.connect(wet).connect(output);
+      input.connect(dry).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'division') applyInterval();
+          else if (key === 'chance') { if (repeatNode) repeatNode.parameters.get('chance').setTargetAtTime(v, t, 0.02); }
+          else if (key === 'decay') { if (repeatNode) repeatNode.parameters.get('decay').setTargetAtTime(v, t, 0.02); }
+          else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          disposed = true;
+          transport.removeListener(bpmListener);
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          coreIn.disconnect(); coreOut.disconnect();
+          repeatNode?.disconnect();
+        },
+      };
+    },
+  },
   geq: {
     name: 'Graphic EQ',
     // 10 feste Bänder (Oktavabstand, s. GEQ_FREQS oben) -- anders als das
@@ -18937,6 +19643,10 @@ const INSERT_COLORS = {
   limiter: '#e0555f', // Limiter: warnendes Rot -- hartes Ceiling-Werkzeug
   chorus: '#7fb8e0', // Chorus: kühles Himmelblau, deutlich vom Delay-Blau abgesetzt
   phaser: '#e07fc0', // Phaser: Magenta/Pink, wie ein klassisches Modulations-Pedal
+  gate: '#8fa0b0',   // Gate: nüchternes Grau-Blau, wie ein technisches Dynamik-Werkzeug
+  freqShift: '#5ee0b0', // Frequency Shifter: kühles Türkis-Grün, exotisch/unharmonisch wirkend
+  vocoder: '#c0e05e', // Vocoder: giftiges Gelb-Grün, wie eine klassische Roboterstimme
+  beatRepeat: '#e08f5e', // Beat Repeat: warmes Orange, Performance-/Glitch-Charakter
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -19054,6 +19764,27 @@ const UI_PARAMS = {
     { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
+  gate: [
+    { key: 'threshold', label: 'Threshold', min: -80, max: 0, unit: 'dB' },
+    { key: 'attack', label: 'Attack', min: 0.0002, max: 0.5, curve: 'log', unit: 's' },
+    { key: 'release', label: 'Release', min: 0.005, max: 2, curve: 'log', unit: 's' },
+    { key: 'range', label: 'Range', min: -80, max: 0, unit: 'dB' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  freqShift: [
+    { key: 'shift', label: 'Shift', min: -1000, max: 1000, unit: 'Hz' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  vocoder: [
+    { key: 'carrierPitch', label: 'Carrier', min: 55, max: 880, curve: 'log', unit: 'Hz' },
+    { key: 'response', label: 'Response', min: 5, max: 60, curve: 'log', unit: 'Hz' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  beatRepeat: [
+    { key: 'chance', label: 'Chance', min: 0, max: 1, unit: '' },
+    { key: 'decay', label: 'Decay', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
 };
 
 /** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
@@ -19120,6 +19851,10 @@ const DELAY_SYNC_BUTTONS = [
   { value: '1/2', label: '1/2' },
 ];
 
+/** Notenwert-Auswahl für Beat Repeat (s. DEFS.beatRepeat) -- dieselben
+ *  Werte wie DELAY_SYNC_BUTTONS, aber OHNE 'free': Beat Repeats "Grid" ist
+ *  konzeptionell immer ein Notenwert, nie eine freie Sekundenzahl. */
+const BEATREPEAT_DIVISIONS = DELAY_SYNC_BUTTONS.filter((b) => b.value !== 'free');
 
 let nextInsertId = 1;
 
@@ -19238,7 +19973,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve };
+return { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve };
 })();
 
 /* ===== js/core/modular.js ===== */
@@ -21446,6 +22181,10 @@ const INSERT_DISPLAY = {
   limiter: { name: 'Limiter', badge: 'BRICKWALL' },
   chorus: { name: 'Chorus', badge: 'CE-CHORUS' },
   phaser: { name: 'Phaser', badge: 'PHASE-6' },
+  gate: { name: 'Gate', badge: 'NOISE-GATE' },
+  freqShift: { name: 'Frequency Shifter', badge: 'FREQ-SHIFT' },
+  vocoder: { name: 'Vocoder', badge: 'VOCODER-8' },
+  beatRepeat: { name: 'Beat Repeat', badge: 'BEAT-RPT' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -22248,6 +22987,18 @@ function renderInsertChain(listEl, owner) {
         </div>
         <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/slope/remove</p>
       `;
+    } else if (insert.type === 'beatRepeat') {
+      // Kein 'free'-Modus (anders als Filter Delay) -- "Grid" ist bei Beat
+      // Repeat konzeptionell immer ein Notenwert, deshalb keine bedingt
+      // ein-/ausgeblendeten Regler nötig wie dort.
+      bodyHtml = `
+        <div class="seg">
+          ${BEATREPEAT_DIVISIONS.map((s) => `
+            <button type="button" class="seg__btn${insert.params.division === s.value ? ' is-active' : ''}" data-beatrepeat-division="${s.value}">${s.label}</button>
+          `).join('')}
+        </div>
+        <div class="insert-row__params">${knobsHtml}</div>
+      `;
     } else {
       bodyHtml = `<div class="insert-row__params">${knobsHtml}</div>`;
     }
@@ -22331,6 +23082,12 @@ function renderInsertChain(listEl, owner) {
       btn.addEventListener('click', () => {
         owner.setInsertParam(id, 'division', btn.dataset.filterdelaySync);
         renderInsertChain(listEl, owner); // Time-Regler muss ggf. ein-/ausgeblendet werden
+      });
+    }
+    for (const btn of row.querySelectorAll('[data-beatrepeat-division]')) {
+      btn.addEventListener('click', () => {
+        owner.setInsertParam(id, 'division', btn.dataset.beatrepeatDivision);
+        renderInsertChain(listEl, owner);
       });
     }
     const pingPongBtn = row.querySelector('[data-filterdelay-pingpong]');

@@ -129,6 +129,40 @@ check('phaser: standard param knobs rendered (rate/depth/feedback/mix)', await p
 await phaserRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 
+// ---- Gate / Frequency Shifter / Vocoder ---- (generische UI_PARAMS-Regler,
+// keine Sonder-UI, s. inserts.js#DEFS.gate/freqShift/vocoder).
+await addEffect('gate');
+let gateRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('gate: standard param knobs rendered (threshold/attack/release/range/mix)', await gateRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 5));
+await gateRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
+await addEffect('freqShift');
+let freqShiftRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('freqShift: standard param knobs rendered (shift/mix)', await freqShiftRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 2));
+await freqShiftRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
+await addEffect('vocoder');
+let vocoderRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('vocoder: standard param knobs rendered (carrierPitch/response/mix)', await vocoderRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 3));
+await vocoderRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
+// ---- Beat Repeat ---- (division-Button-Reihe wie Filter Delays Sync-
+// Buttons, s. inserts.js#DEFS.beatRepeat -- immer tempo-synchron, kein
+// 'free'-Modus).
+await addEffect('beatRepeat');
+let beatRepeatRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('beatRepeat: division buttons rendered', await beatRepeatRow.evaluate((r) => r.querySelectorAll('[data-beatrepeat-division]').length > 0));
+check('beatRepeat: standard param knobs rendered (chance/decay/mix)', await beatRepeatRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 3));
+await beatRepeatRow.evaluate((r) => r.querySelectorAll('[data-beatrepeat-division]')[2].click());
+await page.waitForTimeout(50);
+beatRepeatRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('beatRepeat: division click re-renders with new active state', await beatRepeatRow.evaluate((r) => r.querySelectorAll('[data-beatrepeat-division]')[2].classList.contains('is-active')));
+await beatRepeatRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
 // ---- EQ8 ---- (synthetic PointerEvents, matching the proven eq8 test idiom —
 // real mouse actions don't reliably drive this graph's pointer-capture gestures)
 const dispatchPointer = async (type, id, x, y, opts = {}) => {
