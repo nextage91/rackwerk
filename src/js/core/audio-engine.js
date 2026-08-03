@@ -31,6 +31,17 @@ class AudioEngine {
      *  zum bisherigen Verhalten ohne Insert-Kette). */
     this.masterChainIn = null;
     this.masterChainOut = null;
+    /** @type {GainNode|null}  Analoge feste Anker für MasterFX' Filter-
+     *  Sektion (s. fx.js#buildFilterChain) -- gleiches Prinzip wie
+     *  masterChainIn/-Out oben, nur NACH der Insert-Kette und VOR dem
+     *  Limiter gespleisst (masterChainOut->filterIn, filterOut->limiter),
+     *  damit das Sweep/Reso-Filter den kompletten fertigen Mix (alle
+     *  Maschinen + Delay/Reverb-Fahnen + alle Master-Inserts) erfasst,
+     *  wie bei einem echten DJ-Mixer-Filter, aber vor dem Sicherheits-
+     *  Limiter bleibt. Leer/bei Sweep=0 verbindet filterIn direkt mit
+     *  filterOut (Identität). */
+    this.masterFilterIn = null;
+    this.masterFilterOut = null;
     this.unlocked = false;
   }
 
@@ -98,7 +109,16 @@ class AudioEngine {
     this.masterChainOut = ctx.createGain();
     this.masterBus.connect(this.masterChainIn);
     this.masterChainIn.connect(this.masterChainOut);
-    this.masterChainOut.connect(this.limiter);
+
+    // Anker-Punkte für MasterFX' Filter-Sektion (s. Feld-Kommentar oben) --
+    // direkt verbunden, solange das Filter noch nicht übernommen hat
+    // (fx.js#init ersetzt masterFilterIn->masterFilterOut durch die
+    // eigentliche HP/LP/Dry-Kette, identisch zum masterChainIn/-Out-Muster).
+    this.masterFilterIn = ctx.createGain();
+    this.masterFilterOut = ctx.createGain();
+    this.masterChainOut.connect(this.masterFilterIn);
+    this.masterFilterIn.connect(this.masterFilterOut);
+    this.masterFilterOut.connect(this.limiter);
     this.limiter.connect(ctx.destination);
 
     // FX-Send-Busse: Maschinen docken hier zusätzlich an (Post-Fader).

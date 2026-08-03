@@ -1342,22 +1342,27 @@ function buildColumn(machine) {
  *  eingebauten Synth-Regler auf, nie Insert-Parameter, s. MACRO_PARAMS).
  *  Insert-Effekt-Regler bleiben trotzdem übers X/Y-Pad erreichbar (dessen
  *  Achsen-Picker listet ALLE data-p/insert-Regler auf masterFX.el, s.
- *  availableXYParams()) -- nur die 4 fest sichtbaren Makro-Knobs sind
- *  darauf beschränkt. */
-const MASTER_MACRO_PARAMS = ['delayLevel', 'feedback', 'revLevel', 'revDecay'];
+ *  availableXYParams()) -- nur die 2 fest sichtbaren Filter-Knobs sind
+ *  darauf beschränkt.
+ *
+ *  Nutzer-Anfrage (Folge-Wunsch): statt der 4 Makro-Knobs ein DJ-mixer-
+ *  artiges Filter für die Song-Performance -- Sweep (bipolar: Highpass
+ *  gegen den Uhrzeigersinn, Lowpass im Uhrzeigersinn, Mitte = transparent)
+ *  + Reso, s. fx.js#buildFilterChain für die vollständige DSP-Begründung. */
+const MASTER_FILTER_PARAMS = ['filterSweep', 'filterReso'];
 
 /** Wie buildMacros(machine), aber für masterFX statt eine echte Machine-
  *  Instanz -- eigene, kleine Kopie statt Wiederverwendung, weil
  *  buildMacros() über machine.constructor.meta.type in MACRO_PARAMS
  *  nachschlägt (masterFX ist keine Machine-Unterklasse, hat also weder
  *  eine Meta-Konstante noch einen "Typ" in diesem Sinn). Anders als bei
- *  den Maschinen-Spalten stehen die Makro-Knobs hier DAUERHAFT sichtbar
+ *  den Maschinen-Spalten stehen die Regler hier DAUERHAFT sichtbar
  *  (kein "•••"-Umschalter dahinter) -- Nutzer-Anfrage: der Master-Kanal
  *  hat keinen Fader, der den Platz sonst bräuchte. */
-function buildMasterMacros() {
+function buildMasterFilterKnobs() {
   const wrap = document.createElement('div');
   wrap.className = 'macros macros--master';
-  for (const key of MASTER_MACRO_PARAMS) {
+  for (const key of MASTER_FILTER_PARAMS) {
     const meta = readKnobMeta(masterFX, key);
     if (!meta) continue;
     const knob = document.createElement('x-knob');
@@ -1407,7 +1412,7 @@ function buildMasterColumn() {
     </div>
   `;
   col.appendChild(buildXYPad(masterFX));
-  col.appendChild(buildMasterMacros());
+  col.appendChild(buildMasterFilterKnobs());
   return col;
 }
 
