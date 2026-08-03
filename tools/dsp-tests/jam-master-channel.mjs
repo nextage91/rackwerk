@@ -2,15 +2,16 @@
  * jam-master-channel.mjs — Regressionstest für den neuen Master-Kanal in
  * der Jam-Ansicht (Nutzer-Anfrage: "Master-Effekte während des Jams live
  * performen können, wie bei den anderen Kanälen -- mit X/Y-Pad und
- * Makros, aber ohne zugeklappte Makros, da kein Fader den Platz braucht").
+ * einer Filter-Sektion für die Song-Performance, statt zugeklappter
+ * Makros, da kein Fader den Platz braucht").
  *
  * Kernrisiko: buildXYPad()/buildMacros()-Äquivalente wurden ursprünglich
  * NUR für echte Machine-Instanzen geschrieben (machine.el/.xyMap/
  * .xySpring) -- masterFX ist keine Machine-Unterklasse. Dieser Test
  * prüft, dass die Wiederverwendung für masterFX TATSÄCHLICH funktioniert:
- * X/Y-Pad-Drag und Makro-Knob-Dreh müssen echte, hörbare Master-Parameter
- * verändern (delayLevel/revLevel/feedback/revDecay), nicht nur eine
- * Attrappe ohne Wirkung zeigen.
+ * X/Y-Pad-Drag und Filter-Knob-Dreh müssen echte, hörbare Master-Parameter
+ * verändern (revLevel/filterSweep), nicht nur eine Attrappe ohne Wirkung
+ * zeigen.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -33,26 +34,26 @@ await page.waitForTimeout(300);
 
 check('Jam view shows a Master column', await page.evaluate(() => !!document.querySelector('.channel--master')));
 check('Master column has an X/Y pad', await page.evaluate(() => !!document.querySelector('.channel--master .xypad')));
-check('Master column has macro knobs, always visible (no popup toggle)',
-  await page.evaluate(() => document.querySelectorAll('.channel--master .macros x-knob').length === 4));
+check('Master column has filter knobs (Sweep/Reso), always visible (no popup toggle)',
+  await page.evaluate(() => document.querySelectorAll('.channel--master .macros x-knob').length === 2));
 check('Master column has no fader/clips/solo-mute', await page.evaluate(() => {
   const col = document.querySelector('.channel--master');
   return !col.querySelector('.fader-row') && !col.querySelector('.clips') && !col.querySelector('.strip__row');
 }));
 
-// ---- Macro knob tatsächlich mit dem echten Master-Regler verbunden? ----
-const beforeDelayLevel = await page.evaluate(() =>
-  parseFloat(document.querySelector('#master-fx x-knob[data-p="delayLevel"]').value));
+// ---- Filter knob tatsächlich mit dem echten Master-Regler verbunden? ----
+const beforeSweep = await page.evaluate(() =>
+  parseFloat(document.querySelector('#master-fx x-knob[data-p="filterSweep"]').value));
 await page.evaluate(() => {
-  const macroKnob = document.querySelectorAll('.channel--master .macros x-knob')[0]; // Level (delayLevel)
-  macroKnob.value = 0.9;
-  macroKnob.dispatchEvent(new CustomEvent('input', { detail: { value: 0.9 }, bubbles: true }));
+  const filterKnob = document.querySelectorAll('.channel--master .macros x-knob')[0]; // Sweep (filterSweep)
+  filterKnob.value = 0.7;
+  filterKnob.dispatchEvent(new CustomEvent('input', { detail: { value: 0.7 }, bubbles: true }));
 });
 await page.waitForTimeout(50);
-const afterDelayLevel = await page.evaluate(() =>
-  parseFloat(document.querySelector('#master-fx x-knob[data-p="delayLevel"]').value));
-check('Dragging the Level macro knob updates the REAL delayLevel knob on the Rack-panel master-fx section',
-  Math.abs(afterDelayLevel - 0.9) < 0.01 && afterDelayLevel !== beforeDelayLevel);
+const afterSweep = await page.evaluate(() =>
+  parseFloat(document.querySelector('#master-fx x-knob[data-p="filterSweep"]').value));
+check('Dragging the Sweep filter knob updates the REAL filterSweep knob on the Rack-panel master-fx section',
+  Math.abs(afterSweep - 0.7) < 0.01 && afterSweep !== beforeSweep);
 
 // ---- X/Y-Pad tatsächlich mit den echten Master-Reglern verbunden? ----
 // Echtes Touch-Event via CDP statt eines synthetischen PointerEvents --

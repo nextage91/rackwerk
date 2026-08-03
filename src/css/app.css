@@ -1617,6 +1617,10 @@ button {
   place-items: center;
 }
 .macros x-knob { --knob-size: 34px; gap: 3px; }
+/* Master-Kanal in der Jam-Ansicht: nur 2 Filter-Knobs (Sweep/Reso) statt
+   4 Makros -- eine Reihe statt eines halbleeren 2x2-Rasters. */
+.macros--master { grid-template-rows: 1fr; }
+.macros--master x-knob { --knob-size: 40px; }
 /* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
    "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
    place-items:center zentriert dann ungleich hohe Zellen, was wie ein
