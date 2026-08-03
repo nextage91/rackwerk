@@ -92,6 +92,16 @@ class MasterFX {
      *  bewusst so: der Limiter bleibt reines Sicherheitsnetz, die Inserts
      *  sind der kreative Bearbeitungsweg des Gesamtmixes davor. */
     this.inserts = [];
+
+    // X/Y-Pad-Zustand für den Master-Kanal in der Jam-Ansicht (s.
+    // jam-view.js#buildMasterColumn) -- exakt dieselben zwei Sibling-Felder
+    // wie Machine#xySpring/#xyMap (machine.js), hier direkt auf dem
+    // MasterFX-Singleton statt einer Maschinen-Instanz: buildXYPad()/
+    // xyStateFor() in jam-view.js sind bereits generisch genug (nur auf
+    // .el/.xySpring/.xyMap angewiesen, s. dortige Kommentare), keine
+    // Sonderbehandlung für "Master ist keine echte Machine" nötig.
+    this.xySpring = false;
+    this.xyMap = null;
   }
 
   /** Für insert-chain.js#renderInsertChain (Automation-Lane-Präfix) — fest
@@ -387,11 +397,22 @@ class MasterFX {
     }
   }
 
-  serialize() { return { ...this.params }; }
+  /** xySpring/xyMap sitzen als eigene Felder neben den FX-Params (nicht IN
+   *  this.params gemischt -- das würde #syncUI()s knob.dataset.p-Lookup
+   *  zwar nicht kaputt machen, aber this.params bliebe kein reiner
+   *  Parameter-Datensatz mehr). Gleiches Konzept wie Machine#xySpring/
+   *  #xyMap in project.js, hier nur innerhalb DIESER EINEN serialize()/
+   *  deserialize()-Methode statt als Geschwisterfeld im Projekt-Schema --
+   *  project.js selbst bleibt unverändert (masterFX.serialize() liefert
+   *  bereits das komplette fx-Objekt). */
+  serialize() { return { ...this.params, xySpring: this.xySpring, xyMap: this.xyMap }; }
 
   deserialize(state) {
     if (!state) return;
-    Object.assign(this.params, state);
+    const { xySpring, xyMap, ...fxParams } = state;
+    this.xySpring = !!xySpring;
+    this.xyMap = xyMap ?? null;
+    Object.assign(this.params, fxParams);
     if (this.delayA) {
       this.#applyDelayTime();
       this.fbA.gain.value = this.params.feedback;
