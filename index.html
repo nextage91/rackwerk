@@ -24843,6 +24843,16 @@ class MasterFX {
      *  bewusst so: der Limiter bleibt reines Sicherheitsnetz, die Inserts
      *  sind der kreative Bearbeitungsweg des Gesamtmixes davor. */
     this.inserts = [];
+
+    // X/Y-Pad-Zustand für den Master-Kanal in der Jam-Ansicht (s.
+    // jam-view.js#buildMasterColumn) -- exakt dieselben zwei Sibling-Felder
+    // wie Machine#xySpring/#xyMap (machine.js), hier direkt auf dem
+    // MasterFX-Singleton statt einer Maschinen-Instanz: buildXYPad()/
+    // xyStateFor() in jam-view.js sind bereits generisch genug (nur auf
+    // .el/.xySpring/.xyMap angewiesen, s. dortige Kommentare), keine
+    // Sonderbehandlung für "Master ist keine echte Machine" nötig.
+    this.xySpring = false;
+    this.xyMap = null;
   }
 
   /** Für insert-chain.js#renderInsertChain (Automation-Lane-Präfix) — fest
@@ -25138,11 +25148,22 @@ class MasterFX {
     }
   }
 
-  serialize() { return { ...this.params }; }
+  /** xySpring/xyMap sitzen als eigene Felder neben den FX-Params (nicht IN
+   *  this.params gemischt -- das würde #syncUI()s knob.dataset.p-Lookup
+   *  zwar nicht kaputt machen, aber this.params bliebe kein reiner
+   *  Parameter-Datensatz mehr). Gleiches Konzept wie Machine#xySpring/
+   *  #xyMap in project.js, hier nur innerhalb DIESER EINEN serialize()/
+   *  deserialize()-Methode statt als Geschwisterfeld im Projekt-Schema --
+   *  project.js selbst bleibt unverändert (masterFX.serialize() liefert
+   *  bereits das komplette fx-Objekt). */
+  serialize() { return { ...this.params, xySpring: this.xySpring, xyMap: this.xyMap }; }
 
   deserialize(state) {
     if (!state) return;
-    Object.assign(this.params, state);
+    const { xySpring, xyMap, ...fxParams } = state;
+    this.xySpring = !!xySpring;
+    this.xyMap = xyMap ?? null;
+    Object.assign(this.params, fxParams);
     if (this.delayA) {
       this.#applyDelayTime();
       this.fbA.gain.value = this.params.feedback;
@@ -34287,6 +34308,84 @@ function buildColumn(machine) {
   return col;
 }
 
+/** Kuratierte Makro-Parameter für den Master-Kanal (Gegenstück zu
+ *  MACRO_PARAMS je Maschinentyp oben) -- die vier Sends/Effekt-Regler, die
+ *  sich live am meisten zum "Aufdrehen" für einen Break/Drop eignen
+ *  (Delay-/Reverb-Sendpegel, Delay-Feedback, Reverb-Decay). Bewusst NUR
+ *  die eingebauten Delay/Reverb-Regler, keine Insert-Effekt-Parameter --
+ *  genau wie bei den Maschinen-Makros (auch dort tauchen nur die
+ *  eingebauten Synth-Regler auf, nie Insert-Parameter, s. MACRO_PARAMS).
+ *  Insert-Effekt-Regler bleiben trotzdem übers X/Y-Pad erreichbar (dessen
+ *  Achsen-Picker listet ALLE data-p/insert-Regler auf masterFX.el, s.
+ *  availableXYParams()) -- nur die 4 fest sichtbaren Makro-Knobs sind
+ *  darauf beschränkt. */
+const MASTER_MACRO_PARAMS = ['delayLevel', 'feedback', 'revLevel', 'revDecay'];
+
+/** Wie buildMacros(machine), aber für masterFX statt eine echte Machine-
+ *  Instanz -- eigene, kleine Kopie statt Wiederverwendung, weil
+ *  buildMacros() über machine.constructor.meta.type in MACRO_PARAMS
+ *  nachschlägt (masterFX ist keine Machine-Unterklasse, hat also weder
+ *  eine Meta-Konstante noch einen "Typ" in diesem Sinn). Anders als bei
+ *  den Maschinen-Spalten stehen die Makro-Knobs hier DAUERHAFT sichtbar
+ *  (kein "•••"-Umschalter dahinter) -- Nutzer-Anfrage: der Master-Kanal
+ *  hat keinen Fader, der den Platz sonst bräuchte. */
+function buildMasterMacros() {
+  const wrap = document.createElement('div');
+  wrap.className = 'macros macros--master';
+  for (const key of MASTER_MACRO_PARAMS) {
+    const meta = readKnobMeta(masterFX, key);
+    if (!meta) continue;
+    const knob = document.createElement('x-knob');
+    knob.setAttribute('label', meta.label);
+    knob.setAttribute('min', meta.min);
+    knob.setAttribute('max', meta.max);
+    if (meta.curve) knob.setAttribute('curve', meta.curve);
+    if (meta.unit) knob.setAttribute('unit', meta.unit);
+    knob.setAttribute('value', meta.value);
+    knob.addEventListener('input', (e) => {
+      nudgeParam(meta.knob, e.detail.value);
+      reanchorIfMapped(masterFX, key, e.detail.value);
+    });
+    wrap.appendChild(knob);
+  }
+  return wrap;
+}
+
+/** Fester "Master"-Kanal ganz am Ende der Jam-Kanalliste (wie das feste
+ *  Master-FX-Panel am Ende des Rack-Views) -- keine Clips/kein Stop/keine
+ *  Solo-Mute-Reihe/kein Fader (keins davon hat für den Summenbus eine
+ *  Entsprechung), aber X/Y-Pad UND Makro-Knobs GENAU wie bei den
+ *  Maschinen-Spalten (Nutzer-Anfrage: Master-Effekte während des Jams
+ *  genauso live bespielen können). buildXYPad()/xyStateFor() sind bereits
+ *  generisch genug für masterFX (nur auf .el/.xySpring/.xyMap angewiesen,
+ *  s. dortige Kommentare + fx.js#MasterFX-Konstruktor) -- keine Sonder-
+ *  behandlung nötig, nur ein Master-spezifischer XY-Default (s. u.), weil
+ *  der generische Default (sendDelay/sendReverb) auf masterFX gar nicht
+ *  existiert (Master sendet nicht an sich selbst). */
+function buildMasterColumn() {
+  if (!masterFX.xyMap) {
+    const delayMeta = readKnobMeta(masterFX, 'delayLevel');
+    const revMeta = readKnobMeta(masterFX, 'revLevel');
+    masterFX.xyMap = {
+      x: [{ key: 'delayLevel', from: 0, to: 1, anchor: parseFloat(delayMeta?.value ?? '0.5') }],
+      y: [{ key: 'revLevel', from: 0, to: 1, anchor: parseFloat(revMeta?.value ?? '0.4') }],
+    };
+  }
+  const col = document.createElement('div');
+  col.className = 'channel channel--master';
+  col.style.setProperty('--ch-color', '#d8c9a3');
+  col.style.setProperty('--ch-glow', 'rgba(216,201,163,.5)');
+  col.innerHTML = `
+    <div class="channel__head">
+      <span class="channel__stripe"></span>
+      <div class="channel__name">Master</div>
+    </div>
+  `;
+  col.appendChild(buildXYPad(masterFX));
+  col.appendChild(buildMasterMacros());
+  return col;
+}
+
 /** Makro-Knobs-Popup (Tap auf ".macro-toggle") -- ein einzelnes, modul-
  *  weites Popup wie clipMenu/xyMenu (nie mehr als eines gleichzeitig
  *  offen), gleiche Positionierungs-/Einklemm-Logik wie openXYPicker.
@@ -34639,6 +34738,8 @@ function renderJamView(listEl, scenesContainerEl) {
   for (const machine of boundRack?.machines ?? []) {
     listEl.appendChild(buildColumn(machine));
   }
+  // Ganz am Ende, wie das feste Master-FX-Panel am Ende des Rack-Views.
+  listEl.appendChild(buildMasterColumn());
   // Fängt z. B. eine Maschine ab, die WÄHREND laufender Clip-Wiedergabe neu
   // ins Rack kam (setJamGate() lief für sie noch nie) — beim (Wieder-)
   // Öffnen des Sheets bekommt jede Maschine garantiert den aktuell

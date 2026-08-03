@@ -48,7 +48,10 @@ await page.click('.bb-mode[data-mode="jam"]');
 await page.waitForSelector('#jam-sheet:not([hidden])');
 await page.waitForTimeout(300);
 
-const channel = page.locator('.channel').last();
+// .channel--master (s. jam-view.js#buildMasterColumn) sitzt jetzt fest am
+// Ende der Liste, hat aber keine Clips -- ausschliessen, sonst zielt
+// .last() auf den Master- statt den letzten Maschinen-Kanal.
+const channel = page.locator('.channel:not(.channel--master)').last();
 // Zwei Clips anlegen -- ERST ab dem zweiten Clip lief makeReorderable()
 // vor dem Fix ein zweites Mal und stapelte die doppelten Listener.
 await channel.locator('.proto-clip[data-slot="0"]').click();
