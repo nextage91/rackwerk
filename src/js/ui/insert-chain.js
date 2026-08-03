@@ -42,6 +42,7 @@ export const INSERT_DISPLAY = {
   freqShift: { name: 'Frequency Shifter', badge: 'FREQ-SHIFT' },
   vocoder: { name: 'Vocoder', badge: 'VOCODER-8' },
   beatRepeat: { name: 'Beat Repeat', badge: 'BEAT-RPT' },
+  bitcrush: { name: 'Bitcrusher', badge: '8-BIT' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -709,6 +710,7 @@ export function renderInsertChain(listEl, owner) {
         value="${insert.params[def.key]}"
         ${def.curve ? `curve="${def.curve}"` : ''}
         ${def.unit ? `unit="${def.unit}"` : ''}
+        ${def.step ? `step="${def.step}"` : ''}
         data-insert-id="${insert.id}" data-insert-param="${def.key}"></x-knob>
     `;
     const knobsHtml = paramDefs.map(knobHtml).join('');

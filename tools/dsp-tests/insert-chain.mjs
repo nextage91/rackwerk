@@ -163,6 +163,16 @@ check('beatRepeat: division click re-renders with new active state', await beatR
 await beatRepeatRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 
+// ---- Bitcrusher ---- (generische UI_PARAMS-Regler, keine Sonder-UI, s.
+// inserts.js#DEFS.bitcrush -- 'bits' hat als einziger Insert-Regler ein
+// step="1"-Attribut, s. UI_PARAMS.bitcrush).
+await addEffect('bitcrush');
+let bitcrushRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
+check('bitcrush: standard param knobs rendered (rate/bits/jitter/mix)', await bitcrushRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 4));
+check('bitcrush: bits knob has step=1', await bitcrushRow.evaluate((r) => r.querySelector('x-knob[data-insert-param="bits"]').getAttribute('step') === '1'));
+await bitcrushRow.evaluate((r) => r.querySelector('[data-remove]').click());
+await page.waitForTimeout(100);
+
 // ---- EQ8 ---- (synthetic PointerEvents, matching the proven eq8 test idiom —
 // real mouse actions don't reliably drive this graph's pointer-capture gestures)
 const dispatchPointer = async (type, id, x, y, opts = {}) => {

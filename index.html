@@ -17230,6 +17230,87 @@ registerProcessor('rackwerk-beatrepeat', RackwerkBeatRepeatProcessor);
 return { BEATREPEAT_WORKLET_SRC };
 })();
 
+/* ===== js/core/bitcrush-worklet.js ===== */
+const { BITCRUSH_WORKLET_SRC } = (() => {
+/**
+ * Bitcrusher (Sample-Rate-/Bit-Reduktion, wie Abletons "Redux") als
+ * AudioWorkletProcessor.
+ *
+ * Zwei UNABHÄNGIGE Lo-Fi-Mechanismen in einem Knoten:
+ *  - Bit-Tiefe (`bits`): reine Amplitudenquantisierung (Rundung auf eine
+ *    feste Anzahl Stufen) -- könnte man auch mit einer WaveShaperNode-Kurve
+ *    bauen (kein Speicherzustand nötig, reine Funktion des Momentanwerts,
+ *    wie makeDriveCurve()/makeTapeCurve() in inserts.js), wird hier aber
+ *    im selben Worklet miterledigt, weil Sample-Rate-Reduktion (s. u.)
+ *    ohnehin einen eigenen Prozessor braucht.
+ *  - Sample-Rate-Reduktion (`rate`): "Sample & Hold" -- ein Wert wird für
+ *    mehrere echte Samples am Stück gehalten, bevor er durch den nächsten
+ *    Eingangswert ersetzt wird. Das hat KEIN natives Web-Audio-Äquivalent
+ *    (eine WaveShaperNode kennt nur den aktuellen Sample, kein Gedächtnis
+ *    über die Zeit) und braucht daher zwingend eigenen, sample-genauen
+ *    Zustand -- wie schon Gate/Frequency-Shifter/Beat-Repeat.
+ *
+ * BEWUSST keine Anti-Aliasing-Filterung vor der Dezimierung: das daraus
+ * entstehende Aliasing (hohe Frequenzen falten sich zu neuen, unteren
+ * Frequenzen) IST der gewünschte Effekt -- exakt der Klangcharakter alter
+ * 8-Bit-Sampler/früher Digitalgeräte, die auch nicht anti-aliast haben.
+ *
+ * `jitter` verwackelt die Haltezeit zufällig um einen kleinen Prozentsatz
+ * -- simuliert die unregelmässige Abtasttaktung billiger analoger Sample &
+ * Hold-Schaltungen statt eines exakten digitalen Taktgebers, ein
+ * klassischer zusätzlicher Lo-Fi-"Wackel"-Regler (wie Reduxs "Jitter").
+ */
+const BITCRUSH_WORKLET_SRC = `
+class RackwerkBitcrushProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'rate', defaultValue: 8000, minValue: 200, maxValue: 48000, automationRate: 'k-rate' },
+      { name: 'bits', defaultValue: 8, minValue: 1, maxValue: 16, automationRate: 'k-rate' },
+      { name: 'jitter', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+    ];
+  }
+  constructor() {
+    super();
+    this.heldValue = new Float64Array(32);
+    this.holdCounter = 1;
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length || !output[0].length) return true;
+    const rate = parameters.rate[0];
+    const bits = parameters.bits[0];
+    const jitter = parameters.jitter[0];
+    const step = 1 / Math.pow(2, Math.max(1, Math.round(bits)) - 1);
+    const basePeriod = sampleRate / Math.max(1, rate);
+    const n = output[0].length;
+
+    for (let i = 0; i < n; i++) {
+      this.holdCounter -= 1;
+      const needsNewSample = this.holdCounter <= 0;
+      if (needsNewSample) {
+        const jitterFactor = jitter > 0 ? 1 + (Math.random() * 2 - 1) * jitter * 0.5 : 1;
+        this.holdCounter = Math.max(1, Math.round(basePeriod * jitterFactor));
+      }
+      for (let ch = 0; ch < output.length; ch++) {
+        if (needsNewSample) {
+          const inCh = input && input.length ? input[ch % input.length] : null;
+          this.heldValue[ch] = inCh ? inCh[i] : 0;
+        }
+        const quantized = step * Math.round(this.heldValue[ch] / step);
+        output[ch][i] = Math.max(-1, Math.min(1, quantized));
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('rackwerk-bitcrush', RackwerkBitcrushProcessor);
+`;
+
+return { BITCRUSH_WORKLET_SRC };
+})();
+
 /* ===== js/core/inserts.js ===== */
 const { INSERT_TYPES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve } = (() => {
 /**
@@ -19521,6 +19602,72 @@ const DEFS = {
       };
     },
   },
+  bitcrush: {
+    name: 'Bitcrusher',
+    // Sample-Rate-/Bit-Reduktion (wie Abletons "Redux") -- s.
+    // bitcrush-worklet.js für die Sample&Hold-/Quantisierungs-Herleitung
+    // und warum hier BEWUSST keine Anti-Aliasing-Filterung stattfindet
+    // (das Aliasing IST der gewünschte Lo-Fi-Effekt). Gleiches Lazy-Lade-/
+    // Platzhalter-Muster wie Gate/Frequency Shifter/Beat Repeat oben.
+    defaults: { rate: 8000, bits: 8, jitter: 0, mix: 1 },
+    build(ctx, p) {
+      const input = ctx.createGain();
+      const output = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 1 - p.mix;
+      wet.gain.value = p.mix;
+
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      let crushNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const pushParams = (node) => {
+        const t = ctx.currentTime;
+        node.parameters.get('rate').setTargetAtTime(p.rate, t, 0.001);
+        node.parameters.get('bits').setTargetAtTime(p.bits, t, 0.001);
+        node.parameters.get('jitter').setTargetAtTime(p.jitter, t, 0.001);
+      };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        crushNode = new AudioWorkletNode(ctx, 'rackwerk-bitcrush', { numberOfInputs: 1, numberOfOutputs: 1 });
+        pushParams(crushNode);
+        coreIn.connect(crushNode).connect(coreOut);
+      };
+      if (simpleWorkletReady('rackwerk-bitcrush')) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureSimpleWorklet(ctx, 'rackwerk-bitcrush', BITCRUSH_WORKLET_SRC).then((ok) => { if (ok) swapInRealNode(); });
+      }
+
+      input.connect(coreIn);
+      coreOut.connect(wet).connect(output);
+      input.connect(dry).connect(output);
+
+      return {
+        input, output,
+        setParam(key, v) {
+          const t = engine.now;
+          if (key === 'rate' || key === 'bits' || key === 'jitter') {
+            if (crushNode) crushNode.parameters.get(key).setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
+            dry.gain.setTargetAtTime(1 - v, t, 0.01);
+            wet.gain.setTargetAtTime(v, t, 0.01);
+          }
+        },
+        dispose() {
+          disposed = true;
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
+          coreIn.disconnect(); coreOut.disconnect();
+          crushNode?.disconnect();
+        },
+      };
+    },
+  },
   geq: {
     name: 'Graphic EQ',
     // 10 feste Bänder (Oktavabstand, s. GEQ_FREQS oben) -- anders als das
@@ -19647,6 +19794,7 @@ const INSERT_COLORS = {
   freqShift: '#5ee0b0', // Frequency Shifter: kühles Türkis-Grün, exotisch/unharmonisch wirkend
   vocoder: '#c0e05e', // Vocoder: giftiges Gelb-Grün, wie eine klassische Roboterstimme
   beatRepeat: '#e08f5e', // Beat Repeat: warmes Orange, Performance-/Glitch-Charakter
+  bitcrush: '#9ae05e', // Bitcrusher: schrilles Lime-Grün, wie ein 8-Bit-Retro-Gerät
 };
 
 /** UI-Metadaten je Parameter (Label/Bereich/Kurve/Einheit) — getrennt von
@@ -19783,6 +19931,12 @@ const UI_PARAMS = {
   beatRepeat: [
     { key: 'chance', label: 'Chance', min: 0, max: 1, unit: '' },
     { key: 'decay', label: 'Decay', min: 0, max: 1, unit: '' },
+    { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
+  ],
+  bitcrush: [
+    { key: 'rate', label: 'Rate', min: 200, max: 48000, curve: 'log', unit: 'Hz' },
+    { key: 'bits', label: 'Bits', min: 1, max: 16, step: 1, unit: '' },
+    { key: 'jitter', label: 'Jitter', min: 0, max: 1, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
 };
@@ -22185,6 +22339,7 @@ const INSERT_DISPLAY = {
   freqShift: { name: 'Frequency Shifter', badge: 'FREQ-SHIFT' },
   vocoder: { name: 'Vocoder', badge: 'VOCODER-8' },
   beatRepeat: { name: 'Beat Repeat', badge: 'BEAT-RPT' },
+  bitcrush: { name: 'Bitcrusher', badge: '8-BIT' },
 };
 
 /** Dieselbe Farbvarianten-Mathematik wie Machine.render() fürs Faceplate
@@ -22852,6 +23007,7 @@ function renderInsertChain(listEl, owner) {
         value="${insert.params[def.key]}"
         ${def.curve ? `curve="${def.curve}"` : ''}
         ${def.unit ? `unit="${def.unit}"` : ''}
+        ${def.step ? `step="${def.step}"` : ''}
         data-insert-id="${insert.id}" data-insert-param="${def.key}"></x-knob>
     `;
     const knobsHtml = paramDefs.map(knobHtml).join('');
