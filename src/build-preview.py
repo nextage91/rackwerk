@@ -38,7 +38,7 @@ MODULES = [
     ("js/core/freqshift-worklet.js", ["FREQSHIFT_WORKLET_SRC"]),
     ("js/core/beatrepeat-worklet.js", ["BEATREPEAT_WORKLET_SRC"]),
     ("js/core/bitcrush-worklet.js", ["BITCRUSH_WORKLET_SRC"]),
-    ("js/core/inserts.js",      ["INSERT_TYPES", "insertMeta", "createInsert", "insertChainLatencySec", "UI_PARAMS", "EQ_TYPES", "EQ_SLOPES", "EQ8_GAIN_RANGES", "FILTER_DELAY_TYPES", "DELAY_SYNC_BUTTONS", "BEATREPEAT_DIVISIONS", "INSERT_COLORS", "RATIO_MODE_BUTTONS", "OPTO_MODE_BUTTONS", "GEQ_FREQS", "makeFeedbackClipCurve", "makeDriveCurve"]),
+    ("js/core/inserts.js",      ["INSERT_TYPES", "INSERT_CATEGORIES", "insertMeta", "createInsert", "insertChainLatencySec", "UI_PARAMS", "EQ_TYPES", "EQ_SLOPES", "EQ8_GAIN_RANGES", "FILTER_DELAY_TYPES", "DELAY_SYNC_BUTTONS", "BEATREPEAT_DIVISIONS", "INSERT_COLORS", "RATIO_MODE_BUTTONS", "OPTO_MODE_BUTTONS", "GEQ_FREQS", "makeFeedbackClipCurve", "makeDriveCurve"]),
     ("js/core/modular.js",      ["MODULE_TYPES", "moduleMeta", "ModularPatch", "MODULE_PORTS", "MODULE_UI_PARAMS", "OSCILLATOR_WAVES", "FILTER_TYPES"]),
     ("js/core/transport.js",    ["transport", "STEPS_PER_BAR", "shuffleTime"]),
     ("js/core/automation.js",   ["automation"]),

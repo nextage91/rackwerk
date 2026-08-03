@@ -2468,6 +2468,38 @@ export function insertMeta(type) {
   return { name: DEFS[type].name, defaults: { ...DEFS[type].defaults } };
 }
 
+/** Gruppierung der Insert-Typen für den "+ Insert Effect"-Picker (s.
+ *  ui/insert-chain.js#openInsertPicker) -- rein kosmetisch/für die Übersicht,
+ *  KEIN Ersatz für INSERT_TYPES (das bleibt die vollständige, unsortierte
+ *  Liste aus DEFS-Schlüsseln, z. B. für insertChainLatencySec()). Bei jedem
+ *  neuen Insert-Typ MUSS er hier in genau einer Kategorie auftauchen --
+ *  sonst fehlt er im Picker (s. Sanity-Check gleich unten).
+ *
+ * Reihenfolge der Kategorien selbst ist ebenfalls bewusst gewählt: die
+ * "Werkzeug"-artigen Effekte (Dynamik, EQ) zuerst, die "Charakter"-artigen
+ * (Modulation, Zeit-basiert, Sättigung, exotische Klangerzeugung) danach --
+ * ungefähr dieselbe Reihenfolge, in der ein Insert-Chain typischerweise
+ * aufgebaut wird. */
+export const INSERT_CATEGORIES = [
+  { label: 'Dynamics', types: ['comp', 'opto', 'limiter', 'gate'] },
+  { label: 'EQ & Filter', types: ['eq', 'eq8', 'geq'] },
+  { label: 'Modulation', types: ['chorus', 'phaser'] },
+  { label: 'Delay & Reverb', types: ['filterDelay', 'reverb', 'beatRepeat'] },
+  { label: 'Saturation & Lo-Fi', types: ['drive', 'tape', 'bitcrush'] },
+  { label: 'Spectral & Synthesis', types: ['resonator', 'freqShift', 'vocoder'] },
+];
+// Sanity-Check (entwicklungszeitlich, kein Laufzeitrisiko in Produktion):
+// jeder INSERT_TYPES-Eintrag muss in GENAU einer Kategorie vorkommen --
+// sonst würde ein neuer Insert-Typ im Picker stillschweigend fehlen.
+{
+  const categorized = INSERT_CATEGORIES.flatMap((c) => c.types);
+  const missing = INSERT_TYPES.filter((t) => !categorized.includes(t));
+  const extra = categorized.filter((t) => !INSERT_TYPES.includes(t));
+  if (missing.length || extra.length) {
+    console.error('INSERT_CATEGORIES ist nicht deckungsgleich mit INSERT_TYPES -- fehlend:', missing, 'überzählig:', extra);
+  }
+}
+
 /** Frontplatten-Farbe je Insert-Typ — dieselbe --m-color-Mechanik wie bei
  *  den Maschinen, macht jedes Modul auf einen Blick unterscheidbar. */
 export const INSERT_COLORS = {

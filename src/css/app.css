@@ -355,6 +355,21 @@ button {
 .sheet__title { margin: 0 0 12px; font-size: 16px; }
 .sheet__list { display: flex; flex-direction: column; gap: 8px; }
 
+/* Kategorie-Überschrift innerhalb einer .sheet__list (s. z. B. den "+
+   Insert Effect"-Picker, ui/insert-chain.js#openInsertPicker) -- eigener
+   Abstand nach oben statt dem generischen 8px-gap der Liste, damit sich
+   eine neue Gruppe optisch von der vorigen absetzt; die erste Gruppe
+   braucht den Abstand nicht (:first-child). */
+.sheet__group-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 12px 4px 0;
+}
+.sheet__group-title:first-child { margin-top: 0; }
+
 .sheet__item {
   display: flex;
   align-items: center;
