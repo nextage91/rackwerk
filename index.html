@@ -1714,23 +1714,22 @@ button {
   place-items: center;
 }
 .macros x-knob { --knob-size: 34px; gap: 3px; }
-/* Master-Kanal in der Jam-Ansicht: nur 2 Filter-Knobs (Sweep/Reso) statt
-   4 Makros -- eine Reihe statt eines halbleeren 2x2-Rasters. */
-/* 3 schmale Spalten (Sweep-Knob | Auto-Return-Taster | Reso-Knob) statt
-   des symmetrischen 2-Spalten-Rasters von .macros -- die schmale Jam-
-   Kanalbreite (~99px) reicht sonst nicht für Knob+Taster in einer Spalte.
-   x-knob hat eine FESTE Breite (calc(var(--knob-size) + 12px), s. Regel
-   oben) -- 1fr-Spalten können darum NICHT unter diese Breite schrumpfen
-   (nachgemessen: mit dem normalen --knob-size:34px [=46px Breite] pro
-   Knob + Taster-Spalte überlief der Inhalt um über 20px). --knob-size
-   deshalb hier gezielt kleiner, der Taster ebenfalls etwas schmaler --
-   beides passt danach mit Marge in die ~99px. */
-.macros--master { grid-template-columns: 1fr auto 1fr; grid-template-rows: 1fr; }
-.macros--master x-knob { --knob-size: 24px; }
-.macros--master .xy-spring-btn { width: 16px; font-size: 10px; }
 
 .knob-spring-wrap { display: flex; align-items: center; gap: 2px; }
 .knob-spring-wrap .xy-spring-btn { align-self: center; }
+
+/* Master-Kanal in der Jam-Ansicht: Sweep als eigene Touch-Fläche statt
+   Encoder (Nutzer-Anfrage, 2. Folge-Wunsch nach dem ersten Filter-Umbau
+   -- s. jam-view.js#buildSweepPanel). FEST wie .fader-row bei den
+   Maschinen-Spalten (flex:1 1 auto): der Master-Kanal hat keinen Fader,
+   dieser Rest-Platz geht sonst ungenutzt verloren. */
+.sweep-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.sweep-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* .xypad/.xypad__grid/.xypad__dot wiederverwendet (dieselbe Optik wie
+   das echte X/Y-Pad) -- nur das vertikale Fadenkreuz unterdrückt, da
+   dieses Pad keine X-Achse hat (horizontale Mittellinie bleibt als
+   Dry-Markierung). */
+.sweep-pad::before { display: none; }
 /* Label/Wert dürfen NICHT umbrechen: ein zweizeiliger Wert (z. B.
    "1800 Hz") macht diesen einen Knob höher als seinen Zeilen-Nachbarn --
    place-items:center zentriert dann ungleich hohe Zellen, was wie ein
@@ -34658,75 +34657,108 @@ function buildColumn(machine) {
  *  eingebauten Synth-Regler auf, nie Insert-Parameter, s. MACRO_PARAMS).
  *  Insert-Effekt-Regler bleiben trotzdem übers X/Y-Pad erreichbar (dessen
  *  Achsen-Picker listet ALLE data-p/insert-Regler auf masterFX.el, s.
- *  availableXYParams()) -- nur die 2 fest sichtbaren Filter-Knobs sind
- *  darauf beschränkt.
+ *  availableXYParams()) -- nur Reso/Sweep sind fest verdrahtet.
  *
- *  Nutzer-Anfrage (Folge-Wunsch): statt der 4 Makro-Knobs ein DJ-mixer-
- *  artiges Filter für die Song-Performance -- Sweep (bipolar: Highpass
- *  gegen den Uhrzeigersinn, Lowpass im Uhrzeigersinn, Mitte = transparent)
- *  + Reso, s. fx.js#buildFilterChain für die vollständige DSP-Begründung. */
-const MASTER_FILTER_PARAMS = ['filterSweep', 'filterReso'];
+ *  Nutzer-Anfrage (2. Folge-Wunsch, nach dem ersten Filter-Umbau): Sweep
+ *  soll keine kleine Encoder-Zelle mehr sein, sondern eine eigene Touch-
+ *  Fläche wie das X/Y-Pad -- nur eine Achse (Y). Der Master-Kanal hat
+ *  keinen Fader, der den Platz sonst bräuchte; dieses Pad füllt genau
+ *  den Rest-Platz, den .fader-row bei den Maschinen-Spalten bekäme
+ *  (s. .sweep-wrap in app.css, `flex: 1 1 auto` wie .fader-row). */
+function buildSweepPanel() {
+  const sweepMeta = readKnobMeta(masterFX, 'filterSweep');
+  const resoMeta = readKnobMeta(masterFX, 'filterReso');
 
-/** Wie buildMacros(machine), aber für masterFX statt eine echte Machine-
- *  Instanz -- eigene, kleine Kopie statt Wiederverwendung, weil
- *  buildMacros() über machine.constructor.meta.type in MACRO_PARAMS
- *  nachschlägt (masterFX ist keine Machine-Unterklasse, hat also weder
- *  eine Meta-Konstante noch einen "Typ" in diesem Sinn). Anders als bei
- *  den Maschinen-Spalten stehen die Regler hier DAUERHAFT sichtbar
- *  (kein "•••"-Umschalter dahinter) -- Nutzer-Anfrage: der Master-Kanal
- *  hat keinen Fader, der den Platz sonst bräuchte. */
-function buildMasterFilterKnobs() {
   const wrap = document.createElement('div');
-  wrap.className = 'macros macros--master';
-  for (const key of MASTER_FILTER_PARAMS) {
-    const meta = readKnobMeta(masterFX, key);
-    if (!meta) continue;
-    const knob = document.createElement('x-knob');
-    knob.setAttribute('label', meta.label);
-    knob.setAttribute('min', meta.min);
-    knob.setAttribute('max', meta.max);
-    if (meta.curve) knob.setAttribute('curve', meta.curve);
-    if (meta.unit) knob.setAttribute('unit', meta.unit);
-    knob.setAttribute('value', meta.value);
-    knob.addEventListener('input', (e) => {
-      nudgeParam(meta.knob, e.detail.value);
-      reanchorIfMapped(masterFX, key, e.detail.value);
+  wrap.className = 'sweep-wrap';
+
+  const head = document.createElement('div');
+  head.className = 'sweep-head';
+  if (resoMeta) {
+    const resoKnob = document.createElement('x-knob');
+    resoKnob.setAttribute('label', resoMeta.label);
+    resoKnob.setAttribute('min', resoMeta.min);
+    resoKnob.setAttribute('max', resoMeta.max);
+    if (resoMeta.curve) resoKnob.setAttribute('curve', resoMeta.curve);
+    if (resoMeta.unit) resoKnob.setAttribute('unit', resoMeta.unit);
+    resoKnob.setAttribute('value', resoMeta.value);
+    resoKnob.addEventListener('input', (e) => {
+      nudgeParam(resoMeta.knob, e.detail.value);
+      reanchorIfMapped(masterFX, 'filterReso', e.detail.value);
     });
-
-    wrap.appendChild(knob);
-
-    // Auto-Return-Taster NUR beim Sweep-Knob (s. fx.js#filterSweepSpring-
-    // Kommentar am Konstruktor) -- geteilter Zustand mit dem Rack-Panel-
-    // Regler, aber eigens hier verdrahtet: dieser Jam-Klon ist ein
-    // EIGENSTÄNDIGES <x-knob>-Element, feuert sein eigenes knob-release,
-    // wenn in der Jam-Ansicht direkt daran gezogen wird. Als FLACHES
-    // drittes Grid-Kind (nicht in einen Wrapper mit dem Knob verpackt) --
-    // .macros--master nutzt dafür eine schmale dritte auto-Spalte statt
-    // eines symmetrischen 2-Spalten-Rasters, sonst reicht die schmale
-    // Jam-Kanalbreite nicht für Knob+Taster in einer Spalte (nachgemessen:
-    // wrap-Ansatz überlief die verfügbaren ~99px um über 30px). */
-    if (key === 'filterSweep') {
-      const springBtn = document.createElement('button');
-      springBtn.type = 'button';
-      springBtn.className = 'xy-spring-btn';
-      springBtn.setAttribute('data-sweep-spring', '');
-      springBtn.title = 'Auto-return to center';
-      springBtn.setAttribute('aria-label', 'Auto-return to center');
-      springBtn.textContent = '⟲';
-      springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
-      springBtn.addEventListener('click', () => {
-        masterFX.filterSweepSpring = !masterFX.filterSweepSpring;
-        springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
-      });
-      knob.addEventListener('knob-release', () => {
-        if (!masterFX.filterSweepSpring) return;
-        knob.value = 0;
-        nudgeParam(meta.knob, 0);
-        reanchorIfMapped(masterFX, key, 0);
-      });
-      wrap.appendChild(springBtn);
-    }
+    head.appendChild(resoKnob);
   }
+  // Auto-Return-Taster (s. fx.js#filterSweepSpring-Kommentar am
+  // Konstruktor) -- geteilter Zustand mit dem Rack-Panel-Regler, hier
+  // eigens verdrahtet, weil das Pad ein komplett eigenständiges
+  // Bauteil ist (kein <x-knob>, kein knob-release-Event).
+  const springBtn = document.createElement('button');
+  springBtn.type = 'button';
+  springBtn.className = 'xy-spring-btn';
+  springBtn.setAttribute('data-sweep-spring', '');
+  springBtn.title = 'Auto-return to center';
+  springBtn.setAttribute('aria-label', 'Auto-return to center');
+  springBtn.textContent = '⟲';
+  springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+  springBtn.addEventListener('click', () => {
+    masterFX.filterSweepSpring = !masterFX.filterSweepSpring;
+    springBtn.classList.toggle('is-active', masterFX.filterSweepSpring);
+  });
+  head.appendChild(springBtn);
+  wrap.appendChild(head);
+
+  // .xypad/.xypad__grid wiederverwendet -- exakt dieselbe Optik wie das
+  // echte X/Y-Pad, nur mit unterdrücktem vertikalem Fadenkreuz (s.
+  // .sweep-pad::before in app.css) -- hier gibt es keine X-Achse.
+  const pad = document.createElement('div');
+  pad.className = 'xypad sweep-pad';
+  pad.innerHTML = '<div class="xypad__grid"></div><div class="xypad__dot"></div>';
+  const dot = pad.querySelector('.xypad__dot');
+  wrap.appendChild(pad);
+
+  // Oben ziehen -> Richtung Lowcut/Highpass (filterSweep -1), unten
+  // ziehen -> Richtung Highcut/Lowpass (filterSweep +1) -- Nutzer-Vorgabe.
+  const setDot = (value) => {
+    dot.style.left = '50%';
+    dot.style.top = `${((value + 1) / 2) * 100}%`;
+  };
+  setDot(sweepMeta ? parseFloat(sweepMeta.value) : 0);
+
+  const applyFromEvent = (e) => {
+    const r = pad.getBoundingClientRect();
+    const t = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    const value = -1 + 2 * t;
+    setDot(value);
+    if (sweepMeta) {
+      nudgeParam(sweepMeta.knob, value);
+      reanchorIfMapped(masterFX, 'filterSweep', value);
+    }
+  };
+  let dragging = false;
+  pad.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    pad.setPointerCapture(e.pointerId);
+    applyFromEvent(e);
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (dragging) applyFromEvent(e);
+  });
+  // Auto-Return: springt beim Loslassen zurück auf die Mittellinie
+  // (Dry) -- direkt auf value=0 gesetzt statt zurückgerechnet, exakt
+  // wie releasePad() beim echten X/Y-Pad.
+  const release = () => {
+    dragging = false;
+    if (masterFX.filterSweepSpring) {
+      setDot(0);
+      if (sweepMeta) {
+        nudgeParam(sweepMeta.knob, 0);
+        reanchorIfMapped(masterFX, 'filterSweep', 0);
+      }
+    }
+  };
+  pad.addEventListener('pointerup', release);
+  pad.addEventListener('pointercancel', release);
+
   return wrap;
 }
 
@@ -34761,7 +34793,7 @@ function buildMasterColumn() {
     </div>
   `;
   col.appendChild(buildXYPad(masterFX));
-  col.appendChild(buildMasterFilterKnobs());
+  col.appendChild(buildSweepPanel());
   return col;
 }
 

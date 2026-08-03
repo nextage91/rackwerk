@@ -4,13 +4,13 @@
  * Anfrage: "ein Button wie beim X/Y-Pad, wo der Regler beim Loslassen auf
  * die Mitte [Dry-Signal] zurückspringt").
  *
- * Geprüft wird an BEIDEN physischen Vorkommen des Sweep-Knobs -- dem
- * echten Regler im Rack-Panel-Master-FX-Abschnitt UND dem eigenständigen
- * Jam-Klon (s. jam-view.js#buildMasterFilterKnobs) -- weil beides
- * unabhängige <x-knob>-Elemente mit je eigenem Pointer-Handling/eigenem
- * 'knob-release' sind (s. Kommentare an beiden Verdrahtungsstellen).
- * Ausserdem: Reso hat KEINEN Auto-Return-Taster (keine "neutrale" Mitte)
- * -- und bei ausgeschaltetem Taster bleibt der Sweep-Wert nach dem
+ * Geprüft wird an BEIDEN physischen Vorkommen von Sweep -- dem echten
+ * Knob im Rack-Panel-Master-FX-Abschnitt UND dem eigenständigen Sweep-Pad
+ * in der Jam-Ansicht (s. jam-view.js#buildSweepPanel, Folge-Umbau: Sweep
+ * ist dort inzwischen eine einachsige Touch-Fläche statt eines Knobs) --
+ * weil beides unabhängige Bedienelemente mit je eigenem Pointer-Handling
+ * sind. Ausserdem: Reso hat KEINEN Auto-Return-Taster (keine "neutrale"
+ * Mitte) -- und bei ausgeschaltetem Taster bleibt der Sweep-Wert nach dem
  * Loslassen stehen wie jeder normale Regler.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
@@ -59,20 +59,33 @@ await dragAndRelease(rackDial, -60);
 const afterDragOn = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
 check('Rack-Panel, Auto-Return AN: Sweep springt beim Loslassen auf 0 zurück', afterDragOn === 0);
 
-// ---- Jam-Ansicht: derselbe geteilte Zustand, aber eigenständiger Knob ----
+// ---- Jam-Ansicht: derselbe geteilte Zustand, aber ein eigenständiges
+// Sweep-Pad statt eines Knobs ----
 await page.click('.bb-mode[data-mode="jam"]');
 await page.waitForSelector('#jam-sheet:not([hidden])');
 await page.waitForTimeout(300);
 check('Auto-Return-Taster im Jam-Master-Kanal zeigt den geteilten Zustand (bereits AN)',
   await page.locator('.channel--master [data-sweep-spring]').evaluate((el) => el.classList.contains('is-active')));
 
-const jamDial = page.locator('.channel--master .macros--master x-knob').first().locator('.knob__dial');
-await dragAndRelease(jamDial, -50);
-const jamAfter = await page.locator('.channel--master .macros--master x-knob').first().evaluate((el) => parseFloat(el.value));
-check('Jam-Klon, Auto-Return AN (geteilter Zustand): Sweep springt beim Loslassen auf 0 zurück', jamAfter === 0);
+const sweepPad = page.locator('.channel--master .sweep-pad');
+await sweepPad.scrollIntoViewIfNeeded();
+const padBox = await sweepPad.boundingBox();
+// Von der Mitte Richtung unten (Highcut/+1) ziehen und wieder loslassen --
+// bei aktivem Auto-Return muss der ECHTE Rack-Regler danach exakt auf 0
+// zurückspringen (dieselbe Prüfung wie zuvor beim Jam-Klon-Knob, nur mit
+// dem neuen Pad als Bedienelement).
+await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height * 0.5);
+await page.mouse.down();
+await page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height * 0.9, { steps: 6 });
+const duringDrag = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
+await page.mouse.up();
+await page.waitForTimeout(80);
+check('Sweep-Pad-Drag Richtung unten bewegt den echten Regler Richtung +1 (Highcut) vor dem Loslassen',
+  duringDrag > 0.5);
 
 const rackAfterJamDrag = await page.locator('#master-fx x-knob[data-p="filterSweep"]').evaluate((el) => parseFloat(el.value));
-check('Der echte Rack-Regler folgt dem Jam-Klon-Sprung (0)', rackAfterJamDrag === 0);
+check('Sweep-Pad, Auto-Return AN (geteilter Zustand): der echte Rack-Regler springt beim Loslassen auf 0 zurück',
+  rackAfterJamDrag === 0);
 
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);
