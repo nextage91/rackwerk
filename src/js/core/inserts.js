@@ -22,6 +22,7 @@ import { GATE_WORKLET_SRC } from './gate-worklet.js';
 import { FREQSHIFT_WORKLET_SRC } from './freqshift-worklet.js';
 import { BEATREPEAT_WORKLET_SRC } from './beatrepeat-worklet.js';
 import { BITCRUSH_WORKLET_SRC } from './bitcrush-worklet.js';
+import { PITCHTRACK_WORKLET_SRC } from './pitchtrack-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -2130,6 +2131,18 @@ const DEFS = {
     // moduliert) bräuchte eine Sidechain-Routing-Infrastruktur, die es in
     // RackWerk noch nirgends gibt; der eingebaute Carrier liefert sofort
     // den klassischen "Roboterstimme"-Vocoder-Sound ohne neue Architektur.
+    //
+    // Carrier-TONHÖHE folgt dem Eingang per Pitch-Tracking (s. pitchtrack-
+    // worklet.js), statt fest auf `carrierPitch` zu bleiben -- eine
+    // konstante Carrier-Frequenz war die eigentliche Ursache des Nutzer-
+    // Feedbacks "klingt wie ein Oszillator, der permanent eine Schwingung
+    // erzeugt" (die Formant-Hüllkurven-Modulation selbst arbeitete schon
+    // korrekt, s. tools/dsp-tests/gate-freqshift-vocoder-beatrepeat.mjs).
+    // `carrierPitch` bleibt der Ausgangs-/Ausweichwert für unstimmhafte
+    // Abschnitte (Stille, Perkussion, unklarer Tonhöhenverlauf) -- der
+    // Worklet meldet dann keine Frequenz, der Carrier hält einfach seinen
+    // zuletzt gesetzten Wert (kein Zurückspringen auf den Regler mitten in
+    // einer Phrase).
     defaults: { carrierPitch: 110, response: 25, mix: 0.7 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -2143,6 +2156,22 @@ const DEFS = {
       carrierOsc.type = 'sawtooth';
       carrierOsc.frequency.value = p.carrierPitch;
       carrierOsc.start();
+
+      let pitchNode = null;
+      let pitchDisposed = false;
+      const setupPitchTracking = () => {
+        if (pitchDisposed) return;
+        pitchNode = new AudioWorkletNode(ctx, 'rackwerk-pitchtrack', { numberOfInputs: 1, numberOfOutputs: 0 });
+        input.connect(pitchNode);
+        pitchNode.port.onmessage = (e) => {
+          if (e.data.freq > 0) carrierOsc.frequency.setTargetAtTime(e.data.freq, engine.now, 0.03);
+        };
+      };
+      if (simpleWorkletReady('rackwerk-pitchtrack')) {
+        setupPitchTracking();
+      } else {
+        ensureSimpleWorklet(ctx, 'rackwerk-pitchtrack', PITCHTRACK_WORKLET_SRC).then((ok) => { if (ok) setupPitchTracking(); });
+      }
       const carrierNoise = ctx.createBufferSource();
       carrierNoise.buffer = noise(ctx);
       carrierNoise.loop = true;
@@ -2209,6 +2238,8 @@ const DEFS = {
           }
         },
         dispose() {
+          pitchDisposed = true;
+          if (pitchNode) { pitchNode.port.onmessage = null; pitchNode.disconnect(); }
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
           carrierOsc.stop(); carrierOsc.disconnect();
           carrierNoise.stop(); carrierNoise.disconnect();
