@@ -18,7 +18,7 @@
  *   owner.removeInsert(id)
  */
 import { automation } from '../core/automation.js';
-import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, RESONATOR_INTERVALS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
+import { INSERT_TYPES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
@@ -771,27 +771,6 @@ export function renderInsertChain(listEl, owner) {
         </div>
         <div class="insert-row__params">${delayKnobsHtml}</div>
       `;
-    } else if (insert.type === 'resonator') {
-      // Preset-Knöpfe befüllen alle 5 Tune-Regler auf einen Schlag (s.
-      // inserts.js#RESONATOR_PRESET_SEMITONES) -- danach lässt sich jedes
-      // Band EINZELN weiterverstellen (wie Abletons Resonators: Tune pro
-      // Resonator statt nur fixer Akkord-Auswahl), kein knobsHtml/
-      // UI_PARAMS-Eintrag dafür (Array statt Einzelwert, gleiches Muster
-      // wie eq8s bands).
-      bodyHtml = `
-        <div class="seg">
-          ${RESONATOR_INTERVALS.map((t) => `
-            <button type="button" class="seg__btn${insert.params.interval === t.value ? ' is-active' : ''}" data-resonator-interval="${t.value}">${t.label}</button>
-          `).join('')}
-        </div>
-        <div class="resonator-tune">
-          ${insert.params.tune.map((v, i) => `
-            <x-knob label="${i + 1}" min="-36" max="48" value="${v}" unit="st"
-              data-resonator-tune="${i}"></x-knob>
-          `).join('')}
-        </div>
-        <div class="insert-row__params">${knobsHtml}</div>
-      `;
     } else if (insert.type === 'opto') {
       bodyHtml = `
         <div class="comp-meter">
@@ -949,54 +928,6 @@ export function renderInsertChain(listEl, owner) {
       owner.setInsertParam(id, 'pingPong', !insert.params.pingPong);
       pingPongBtn.classList.toggle('is-active', insert.params.pingPong);
     });
-    for (const btn of row.querySelectorAll('[data-resonator-interval]')) {
-      btn.addEventListener('click', () => {
-        const oldIdx = RESONATOR_INTERVALS.findIndex((t) => t.value === insert.params.interval);
-        owner.setInsertParam(id, 'interval', btn.dataset.resonatorInterval);
-        const newIdx = RESONATOR_INTERVALS.findIndex((t) => t.value === btn.dataset.resonatorInterval);
-        automation.recordSwitch(`${owner.laneKeyPrefix}:insert:${id}:interval`, oldIdx, newIdx);
-        renderInsertChain(listEl, owner);
-      });
-    }
-    if (insert.type === 'resonator') {
-      // Automatisierbar wie der Chord-Typ beim PolySynth (registerSwitch/
-      // recordSwitch, s. automation.js) -- die apply()-Rückgabe der
-      // Wiedergabe darf hier bewusst NICHT renderInsertChain() aufrufen
-      // (das würde bei jedem der ~45 Ticks/Sekunde die komplette Insert-
-      // Liste neu bauen), deshalb ein leichtgewichtiger Direkt-Abgleich der
-      // is-active-Klassen (und der 5 Tune-Regler, die ein Preset-Wechsel
-      // ebenfalls überschreibt) statt eines vollen Rerenders.
-      const seg = row.querySelector('.seg');
-      const autoKey = `${owner.laneKeyPrefix}:insert:${id}:interval`;
-      automation.registerSwitch(autoKey, seg, (v) => {
-        const idx = Math.max(0, Math.min(RESONATOR_INTERVALS.length - 1, Math.round(v)));
-        const value = RESONATOR_INTERVALS[idx].value;
-        owner.setInsertParam(id, 'interval', value);
-        for (const b of seg.querySelectorAll('[data-resonator-interval]')) {
-          b.classList.toggle('is-active', b.dataset.resonatorInterval === value);
-        }
-        for (const knob of row.querySelectorAll('[data-resonator-tune]')) {
-          knob.value = insert.params.tune[parseInt(knob.dataset.resonatorTune, 10)];
-        }
-      });
-      seg.classList.toggle('has-auto', automation.hasLane(autoKey));
-
-      // Einzelne Tune-Regler -- eigener Weg statt data-insert-param/
-      // setInsertParam (der kennt nur "ein Feld", nicht "ein Feld eines
-      // von 5 Bändern", s. inserts.js#setBandTune). Bewusst NICHT
-      // automatisierbar (wie die Sample-Editor-Regler in sampler.js) --
-      // das Automationssystem erwartet einen einzelnen Lane-Schlüssel pro
-      // Regler, 5 zusätzliche Lanes je Resonator-Insert wären ein
-      // unverhältnismässiger Ausbau für einen Regler, den man in der
-      // Praxis selten laufend automatisiert statt einmalig einzustellen.
-      for (const knob of row.querySelectorAll('[data-resonator-tune]')) {
-        knob.addEventListener('input', (e) => {
-          const i = parseInt(knob.dataset.resonatorTune, 10);
-          insert.params.tune[i] = e.detail.value;
-          insert.setBandTune?.(i, e.detail.value);
-        });
-      }
-    }
     for (const btn of row.querySelectorAll('[data-ratio-mode]')) {
       btn.addEventListener('click', () => {
         owner.setInsertParam(id, 'ratioMode', btn.dataset.ratioMode);

@@ -17,6 +17,7 @@ import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { noise } from './dsp.js';
 import { ONEPOLE_WORKLET_SRC } from './onepole-worklet.js';
+import { RESONATOR_PROCESSOR_NAME, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, RESONATOR_WORKLET_SRC } from './resonator-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -171,6 +172,66 @@ function ensureOnePoleWorklet(ctx) {
     }
   }
   return onePoleWorkletPromise;
+}
+
+/** Lädt den (per tools/build-resonator-worklet.mjs vorkompilierten) Faust-
+ *  Modal-Synthese-Worklet, gleiches Lazy-Muster wie ensureOnePoleWorklet
+ *  oben. Das WebAssembly-Modul wird EINMAL kompiliert und wiederverwendet
+ *  -- eine kompilierte WebAssembly.Module-Instanz ist beliebig oft neu
+ *  instanziierbar (s. createResonatorNode unten), ein Modul pro Resonator-
+ *  Insert wäre unnötig teuer. */
+let resonatorWorkletPromise = null;
+let resonatorReady = false;
+let resonatorWasmModule = null;
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+function ensureResonatorWorklet(ctx) {
+  if (!resonatorWorkletPromise) {
+    if (!ctx.audioWorklet) {
+      resonatorWorkletPromise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([RESONATOR_WORKLET_SRC], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      resonatorWorkletPromise = Promise.all([
+        ctx.audioWorklet.addModule(url),
+        WebAssembly.compile(base64ToBytes(RESONATOR_WASM_BASE64)),
+      ])
+        .then(([, wasmModule]) => {
+          URL.revokeObjectURL(url);
+          resonatorWasmModule = wasmModule;
+          resonatorReady = true;
+          return true;
+        })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error('Resonator-Worklet-Modul konnte nicht geladen werden -- Resonator bleibt transparent (kein Klangeffekt).', err);
+          return false;
+        });
+    }
+  }
+  return resonatorWorkletPromise;
+}
+
+/** Baut EINE frische Resonator-Node aus dem bereits kompilierten Modul
+ *  (s. ensureResonatorWorklet) -- ein AudioWorkletNode ist NICHT
+ *  wiederverwendbar über mehrere Instanzen hinweg, jeder Resonator-Insert
+ *  braucht seine eigene. `factory.json` muss das VOLLSTÄNDIGE Faust-Meta-
+ *  JSON sein (nicht nur die UI-Parameterliste) -- FaustWasmInstantiator
+ *  liest mehr daraus als nur die Regler-Adressen. */
+function createResonatorNode(ctx) {
+  return new AudioWorkletNode(ctx, RESONATOR_PROCESSOR_NAME, {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    processorOptions: {
+      factory: { module: resonatorWasmModule, json: RESONATOR_META_JSON, soundfiles: {} },
+      sampleSize: 4,
+    },
+  });
 }
 
 /** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
@@ -380,74 +441,6 @@ const DATTORRO_TAPS = {
  *  lauter als der Dry-Pfad. Empirisch per Peak-Messung bestimmt (s.
  *  Testprotokoll bei der Umstellung von FDN auf Dattorro). */
 const DATTORRO_OUT_LEVEL = 0.25;
-
-/** Frequenzverhältnisse relativ zur Grundtonhöhe je Resonator-"Akkord" --
- *  bewusst 5 Werte je Set (feste Bank-Grösse N=5 im Resonator-DEFS).
- *  'harmonic' ist die natürliche Obertonreihe (glockig/saitig), die
- *  anderen sind gleichstufig temperierte Intervall-Stapel. */
-const RESONATOR_INTERVAL_RATIOS = {
-  harmonic: [1, 2, 3, 4, 5],
-  octaves: [0.5, 1, 2, 4, 8],
-  fifths: [1, 1.5, 2, 3, 4],
-  minor: [1, Math.pow(2, 3 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
-  major: [1, Math.pow(2, 4 / 12), Math.pow(2, 7 / 12), 2, 2 * Math.pow(2, 7 / 12)],
-};
-
-/** Winzige, FESTE (nicht zufällige -- reproduzierbar) Verstimmung je Band,
- *  in Cent, als Multiplikationsfaktor auf die exakten Verhältnisse oben.
- *  Perfekt ganzzahlige Verhältnisse klingen sauber, aber synthetisch/
- *  "geometrisch" -- ein echtes mitschwingendes Objekt (Glocke, Saite,
- *  Platte) ist NIE exakt harmonisch gestimmt. Bewusst klein (unter 10 Cent,
- *  deutlich unter einem hörbaren "Verstimmt"-Effekt) und ohne erkennbares
- *  Muster (kein simples Alternieren +/-), nur genug, damit die Bänder beim
- *  Ausklingen leicht gegeneinander schweben statt exakt phasenstarr zu
- *  bleiben. Erstes Band (Grundton) bleibt unverstimmt -- der Referenzpunkt,
- *  auf den pitch/Tuner-Erwartung sich bezieht. */
-const RESONATOR_DETUNE = [0, -7, 5, -4, 9].map((cents) => Math.pow(2, cents / 1200));
-
-/** Dieselben Intervall-"Akkorde" wie RESONATOR_INTERVAL_RATIOS, nur in
- *  Halbtönen statt als Frequenzverhältnis -- Grundlage für die 5 frei
- *  bespielbaren "Tune"-Regler je Band (s. DEFS.resonator): ein Preset-
- *  Knopf befüllt damit einmalig alle 5 Regler, die man danach EINZELN
- *  weiterverstellen kann (wie bei Abletons Resonators-Effekt: Tune+Fine
- *  pro Resonator statt nur fixer Akkord-Auswahl). Rein rechnerisch aus den
- *  Verhältnissen abgeleitet (12*log2(ratio)), damit beide Tabellen
- *  garantiert dieselben Intervalle meinen. */
-const RESONATOR_PRESET_SEMITONES = Object.fromEntries(
-  Object.entries(RESONATOR_INTERVAL_RATIOS).map(([name, ratios]) => [name, ratios.map((r) => 12 * Math.log2(r))]),
-);
-
-/** Stereo-Panorama-Positionen je Band (-1=links .. 1=rechts), mit dem
- *  "width"-Regler skaliert -- Grundton bleibt immer mittig (Referenzpunkt),
- *  die Obertöne verteilen sich alternierend übers Stereobild. Gleiche Idee
- *  wie Abletons Resonators-Width (dort machen die geraden/ungeraden
- *  Resonatoren je einen Kanal), macht den sonst mono-tristen Klang
- *  spürbar "grösser"/lebendiger. */
-const RESONATOR_PAN = [0, -0.8, 0.8, -1, 1];
-
-/** Resonance-Regler (0..1) auf eine Nachklingzeit (T60, Sekunden) abbilden
- *  -- Grundlage für die Feedback-Stärke jeder Resonanz-Delayline in
- *  DEFS.resonator (s. dort). Log-Kurve wie zuvor bei der Bandpass-Güte,
- *  gleiche Idee: der Regler soll über den ganzen Bereich gleichmässig
- *  "greifen" statt am oberen Ende zu stauchen. */
-function resonanceToDecayTime(resonance) {
-  return 0.05 * Math.pow(120, resonance); // 50ms (kurzes "Blup") .. 6s (langes Glocken-Sustain)
-}
-
-/** Feedback-Stärke einer einzelnen Resonanz-Delayline (Länge `delayTime`
- *  Sekunden), so gewählt, dass die Amplitude nach `decayTime` Sekunden auf
- *  -60dB (0.001x) gefallen ist: nach n=decayTime/delayTime Schleifen-
- *  durchläufen soll g^n = 0.001 gelten, also g = 0.001^(delayTime/decayTime).
- *  Hart gedeckelt auf 0.999 -- nie exakt 1 (nie eine Schleife, die
- *  theoretisch unendlich klingt), zusätzliche Sicherheitsmarge oben drauf
- *  zur harten 1.0-Grenze. s. DEFS.resonator für die zwei WEITEREN
- *  Sicherungen (einpoliger Damping-Filter + Pro-Sample-Weichbegrenzer IN
- *  der Schleife), die zusammen echte Stabilität auch unter Live-Automation
- *  garantieren -- diese Formel allein reicht dafür NICHT (s. dortigen
- *  Kommentar). */
-function feedbackGainFor(delayTime, decayTime) {
-  return Math.min(Math.pow(0.001, delayTime / decayTime), 0.999);
-}
 
 /** Feste Schwelle statt Regler — wie beim 1176-Vorbild: kein Threshold-
  *  Knopf, stattdessen treibt Input den Pegel in einen fest eingestellten
@@ -1372,71 +1365,24 @@ const DEFS = {
     // Ducker unten + Sicherheits-Limiter, s. build()) -- doppelte
     // Zusatzlatenz gegenüber den anderen Kompressor-basierten Inserts.
     latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC * 2,
-    // Bank aus 5 rückgekoppelten Resonanz-Delaylines (Delay -> Damping ->
-    // Feedback -> zurück in die Delay), Karplus-Strong-artig -- genau das
-    // Prinzip, mit dem auch Abletons Resonators-Effekt arbeitet, statt
-    // der vorherigen Bandpass-Bank (Filter allein kann nur vorhandene
-    // Energie durchlassen, nie aktiv aufbauen -- deshalb war die alte
-    // Version selbst bei Mix=100% spürbar leiser als das Trockensignal,
-    // s. Chat). Eine Delayline erzeugt ausserdem automatisch die volle
-    // Obertonreihe der Grundtonhöhe (nicht nur einen einzelnen schmalen
-    // Peak), klingt dadurch voller/instrumentaler (Glocke/Saite).
+    // Kern (Anregung -> Resonanzkörper) ist jetzt eine echte Modal-
+    // Synthese (s. faust/resonator.dsp, zu WebAssembly kompiliert und in
+    // core/resonator-worklet.js eingebettet) statt der früheren 5-Band-
+    // Delayline-Bank -- Nutzer-Feedback: "klingt immer noch nicht so
+    // schön". 24 unabhängige Resonanz-Moden statt 5, mit individueller
+    // (nicht mehr geteilter) Abklingzeit pro Mode -- hohe Moden klingen
+    // automatisch schneller ab als tiefe, physikalisch korrekt, war mit
+    // EINEM gemeinsamen Damping-Filter für alle 5 Bänder vorher nicht
+    // abbildbar. Dafür entfallen die 5 einzeln bespielbaren Tune-Regler
+    // (setBandTune/interval-Presets) -- bei 24 automatisch verteilten,
+    // leicht inharmonischen Partialtönen ergibt "jeden einzeln von Hand
+    // stimmen" keinen Sinn mehr, das war explizit der Sinn der
+    // automatischen Verteilung (s. resonator.dsp).
     //
-    // Zwei von einander UNABHÄNGIGE Sicherungen halten jede der 5
-    // Schleifen stabil, beide bereits an anderer Stelle in dieser
-    // Codebase erfunden/bewährt:
-    //  (1) Der Damping-Filter in der Schleife ist ein EINPOLIGER Tiefpass
-    //      (makeOnePoleLowpass, schon vom Reverb-FDN genutzt), NICHT
-    //      ctx.createBiquadFilter() -- ein 2-poliger Biquad überschwingt
-    //      nachweislich >1.0 nahe der Grenzfrequenz, unabhängig von Q (s.
-    //      dortigen Kommentar). Ein einpoliger ist dagegen beweisbar
-    //      |H(w)|<=1 für JEDE Frequenz -- kombiniert mit feedbackGainFor()
-    //      (<1, s. oben) ist die Schleife für KONSTANTE Parameter damit
-    //      immer beweisbar stabil.
-    //  (2) Zusätzlich ein Pro-Sample-Weichbegrenzer (tanh, dieselbe Kurve
-    //      wie beim Filter Delay: makeFeedbackClipCurve()) IN jeder
-    //      Schleife -- nötig, weil Live-Automation ausgerechnet auf
-    //      Damping (LFO/Knob, während eine Bande klingt) beim Testen
-    //      trotz (1) kurzzeitig aufschaukeln konnte (Parameteränderung an
-    //      einem Filter MIT internem Zustand kann kurz übersteuern, auch
-    //      wenn der Filter selbst für jeden EINZELNEN, konstanten
-    //      Koeffizienten brav <=1 bleibt). Reagiert pro Sample ohne
-    //      Attack-/Release-Verzögerung, kann also nie "zu spät" kommen --
-    //      exakt der Grund, warum das Filter Delay dort ebenfalls einen
-    //      WaveShaper statt eines DynamicsCompressorNode nutzt.
-    // Verifiziert per Stresstest: 10s Sustain bei maximaler Resonance,
-    // dichte Retriggerung (alle 50ms) bei Max-Resonance+Damping, 100
-    // Parameter-Kombinationen (Pitch x Resonance x Damping) sowie Pitch/
-    // Resonance/Damping gleichzeitig live automatisiert WÄHREND aktiv
-    // geklungen und retriggert wird -- durchgehend kein NaN, kein
-    // unbegrenztes Aufschaukeln.
-    //
-    // Anreger-Ducker (s. build(), "exciter"): anders als ein Bandpass-
-    // Filter verschiebt eine Feedback-Delayline die Tonhöhe eines
-    // DAUERHAFTEN Eingangssignals nicht -- solange eine Note gehalten wird,
-    // läuft deren rohes, breitbandiges Signal ständig direkt in jede der 5
-    // Bänder-Schleifen, jede Bande gibt also grösstenteils weiter nur die
-    // ANSCHLAG-Tonhöhe wieder, nicht ihre eigene Stimmung (gemessen: bei
-    // einem gehaltenen Ton liegen alle 5 Bänder eines "Chord"-Presets zwar
-    // pegel-mässig nah beieinander, klingen aber kaum wie 5 unterschiedliche
-    // Töne -- Nutzer-Feedback: "ich höre die einzelnen Stimmen kaum").
-    // Ein DynamicsCompressorNode mit bewusst LANGSAMEM Attack lässt die
-    // ersten ~30ms einer neuen Anregung (den Anschlag) fast unkomprimiert
-    // durch, drosselt danach aber den GEHALTENEN Teil stark -- wie eine
-    // echte mitschwingende Saite, die vom Anschlag angeregt wird und
-    // danach EIGENSTÄNDIG (mit ihrer eigenen Stimmung) ausklingt, statt
-    // dauerhaft vom Halteton "nachgefüttert" zu werden. Ein erster Versuch
-    // mit eigenem Hüllkurven-Differenz-Schaltkreis (schnelle minus
-    // langsame Einpol-Hüllkurve) schlug fehl: minimales Restwelligkeit-
-    // "Leck" im Rest-Signal wurde von der Resonanz-Schleife über die Zeit
-    // unbegrenzt hochgeschaukelt, statt sauber gegen Null zu klingen --
-    // der native Kompressor hat dieses Problem nicht (gemessen: Pegel
-    // klingt nach dem Anschlag sauber auf einen stabilen, tiefen Sockel
-    // ab, kein Aufschaukeln über mehrere Sekunden). Gemessen über 150-
-    // 500ms-Retriggerung (schnelles Drum-Pattern): jeder Anschlag regt die
-    // Bänder gleich stark an wie der vorherige, kein Nachlassen durch
-    // vorherige Ducker-Aktivität.
-    defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, interval: 'harmonic', width: 0.5 },
+    // Anreger-Ducker + Sicherheits-Limiter (s. unten) bleiben UNVERÄNDERT
+    // -- die bestehende, ausgiebig stresstestete Kette (s. weiter unten in
+    // build()) funktioniert unabhängig davon, was dazwischenhängt.
+    defaults: { pitch: 220, resonance: 0.6, damping: 8000, mix: 0.35, width: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
       const output = ctx.createGain();
@@ -1445,167 +1391,125 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
-      const N = 5;
-      // Altprojekte kennen nur "interval" (Preset-Name), noch kein "tune"
-      // (5er-Halbton-Array, s. RESONATOR_PRESET_SEMITONES oben) -- fehlt es
-      // (frisch angelegtes Insert ODER ein vor diesem Update gespeichertes
-      // Projekt), einmalig aus dem gespeicherten interval ableiten, statt
-      // stumm auf "harmonic" zurückzufallen. Ist p.tune schon vorhanden
-      // (Projekt NACH diesem Update gespeichert, ggf. einzeln verstellt),
-      // bleibt es unangetastet -- p ist dieselbe Referenz wie insert.params,
-      // die Mutation hier landet also direkt im echten, serialisierten
-      // Zustand (gleiches Muster wie eq8s p.bands).
-      if (!Array.isArray(p.tune) || p.tune.length !== N) {
-        p.tune = [...(RESONATOR_PRESET_SEMITONES[p.interval] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
-      }
-      let pitch = p.pitch;
-      let decayTime = resonanceToDecayTime(p.resonance);
-      const freqFor = (i) => pitch * Math.pow(2, p.tune[i] / 12) * RESONATOR_DETUNE[i];
-
-      // Geteilte Weichbegrenzer-Kurve für alle 5 Bänder (statische Daten,
-      // hängt von keinem Parameter ab -- ein Array reicht, wie beim
-      // Filter Delay, das dieselbe Kurve für beide Kanäle wiederverwendet).
-      const clipCurve = makeFeedbackClipCurve();
-
-      // Anreger-Ducker (s. Kommentar oben beim DEFS-Eintrag) -- feste,
-      // nicht per Regler einstellbare Werte, wie schon der Sicherheits-
-      // Limiter weiter unten. Schwelle sehr niedrig (praktisch alles
-      // triggert die Kompression), Ratio hart, Attack bewusst langsam
-      // (lässt den Anschlag durch, bevor die Reduktion greift), Release
-      // moderat (erholt sich zwischen einzelnen Anschlägen eines Patterns).
+      // Anreger-Ducker: anders als ein Bandpass-Filter würde ein Modal-
+      // Resonator ein DAUERHAFTES Eingangssignal ständig weiter einfärben
+      // statt eigenständig auszuklingen -- der Ducker lässt nur den
+      // Anschlag (~30ms) fast unkomprimiert durch und drosselt den
+      // gehaltenen Teil, damit der Resonanzkörper nach dem Anschlag
+      // EIGENSTÄNDIG mit seiner eigenen Stimmung ausklingt.
+      //
+      // Schwelle/Ratio DEUTLICH milder als bei der alten Delayline-Bank
+      // (dort -50dB/20:1) -- die alte Bank reagierte nur auf Energie NAHE
+      // ihrer eigenen 5 Resonanzfrequenzen, praktisch unempfindlich
+      // gegenüber der Klangfarbe der Anregung selbst. Die neue, breitbandige
+      // 24-Moden-Synthese dagegen reagiert auf das GANZE Spektrum der
+      // Anregung -- ein derart hartes Ducking (-50dB/20:1) presst ein
+      // Anschlagssignal fast bis zur Rechteckwelle zusammen, deren massive
+      // Obertöne die vielen hochfrequenten Moden weit über den normalen
+      // Pegel hinaus anregten (gemessen: kurzzeitig >30x Übersteuerung vor
+      // dem Sicherheits-Limiter). -24dB/4:1 lässt die Anschlagsdynamik viel
+      // natürlicher durch, dämpft aber immer noch zuverlässig den
+      // gehaltenen Teil eines Dauertons.
       const exciter = ctx.createDynamicsCompressor();
-      exciter.threshold.value = -50;
-      exciter.knee.value = 0;
-      exciter.ratio.value = 20;
+      exciter.threshold.value = -24;
+      exciter.knee.value = 6;
+      exciter.ratio.value = 4;
       exciter.attack.value = 0.03;
       exciter.release.value = 0.2;
       input.connect(exciter);
 
-      const delays = [], damps = [], clips = [], fbGains = [], panners = [];
-      const bandDelayTime = new Array(N);
-      const sum = ctx.createGain();
-      for (let i = 0; i < N; i++) {
-        const delayTime = 1 / freqFor(i);
-        bandDelayTime[i] = delayTime;
-        const delayNode = ctx.createDelay(1);
-        delayNode.delayTime.value = delayTime;
-        const damp = makeOnePoleLowpass(ctx, p.damping);
-        const clip = ctx.createWaveShaper();
-        clip.curve = clipCurve;
-        clip.oversample = '2x';
-        const fb = ctx.createGain();
-        fb.gain.value = feedbackGainFor(delayTime, decayTime);
-        const panner = ctx.createStereoPanner();
-        panner.pan.value = RESONATOR_PAN[i] * p.width;
+      // Stabile Anker-Nodes um den eigentlichen Resonanzkern -- der lädt
+      // asynchron (s. ensureResonatorWorklet), coreIn/coreOut bleiben aber
+      // von Anfang an dieselbe Node-Referenz, unabhängig davon, ob gerade
+      // noch der transparente Platzhalter (direkte Verbindung) oder schon
+      // der echte AudioWorkletNode dazwischenhängt. Gleiches Muster wie
+      // die Damping-Filter-Platzhalter (makeOnePoleLowpass) und eq8s
+      // headIn/tailOut.
+      const coreIn = ctx.createGain();
+      const coreOut = ctx.createGain();
+      exciter.connect(coreIn);
 
-        exciter.connect(delayNode);
-        delayNode.connect(damp.input);
-        damp.output.connect(clip);
-        clip.connect(fb);
-        fb.connect(delayNode); // schliesst die Feedback-Schleife
-        delayNode.connect(panner);
-        panner.connect(sum);
-
-        delays.push(delayNode); damps.push(damp); clips.push(clip); fbGains.push(fb); panners.push(panner);
+      let resonatorNode = null;
+      let placeholderConnected = false;
+      let disposed = false;
+      const connectPlaceholder = () => { coreIn.connect(coreOut); placeholderConnected = true; };
+      const pushParams = (node) => {
+        const t = ctx.currentTime;
+        node.parameters.get('/resonator/pitch').setTargetAtTime(p.pitch, t, 0.001);
+        node.parameters.get('/resonator/resonance').setTargetAtTime(p.resonance, t, 0.001);
+        node.parameters.get('/resonator/damping').setTargetAtTime(p.damping, t, 0.001);
+      };
+      const swapInRealNode = () => {
+        if (disposed) return;
+        if (placeholderConnected) { coreIn.disconnect(coreOut); placeholderConnected = false; }
+        resonatorNode = createResonatorNode(ctx);
+        pushParams(resonatorNode);
+        coreIn.connect(resonatorNode).connect(coreOut);
+      };
+      if (resonatorReady) {
+        swapInRealNode();
+      } else {
+        connectPlaceholder();
+        ensureResonatorWorklet(ctx).then((ok) => { if (ok) swapInRealNode(); });
       }
 
-      // Pegel-Kompensation: fester Faktor statt eines resonance-abhängigen
-      // Ausgleichs wie bei der alten Bandpass-Bank -- gemessen bleibt der
-      // Pegel (anders als beim Filter, der bei niedrigem Q/kurzer
-      // Klingelzeit nur einen kleinen Ausschnitt der Energie einfängt)
-      // über den GESAMTEN Resonance-Bereich praktisch konstant, eine
-      // Delayline baut ihre Resonanz aktiv über die Feedback-Schleife auf
-      // statt nur passiv durchzulassen. 2.9/N kalibriert auf einen
-      // gehaltenen Ton durchs Default-Preset ('harmonic', 5 Bänder auf
-      // Grundton + Obertönen 2x-5x verteilt -- nur der Grundton-Band trifft
-      // die volle Sägezahn-Energie, die Obertöne entsprechend weniger,
-      // s. Testprotokoll) -- damit bleibt der Pegel bei Mix=100% praktisch
-      // deckungsgleich mit dem Trockensignal (~-1.3dB gemessen), statt wie
-      // vorher spürbar leiser.
-      sum.gain.value = 2.9 / N;
+      // Stereo-Weite über einen klassischen Haas-Trick statt echter
+      // Stereo-Ausgabe aus dem Faust-Patch (der Modal-Kern ist bewusst
+      // mono -- ein zweiter, leicht verstimmter Kern für "echte" Breite
+      // wäre doppelter Rechenaufwand für einen subtilen Unterschied):
+      // ein Kanal bleibt unverzögert, der andere läuft durch eine winzige
+      // (0..15ms) Verzögerung, per `width` gesteuert. Bei width=0 sind
+      // beide Kanäle identisch (Delay=0 -> Bild kollabiert zu Mono), bei
+      // width=1 ergibt sich ein hörbar breiteres Bild.
+      const widenDelay = ctx.createDelay(0.02);
+      widenDelay.delayTime.value = p.width * 0.015;
+      coreOut.connect(widenDelay);
+      const merger = ctx.createChannelMerger(2);
+      coreOut.connect(merger, 0, 0);
+      widenDelay.connect(merger, 0, 1);
 
-      // limiter: eine dicht bespielte/retriggerte Bande (Drum-Pattern,
-      // gehaltene Note) kann durch die Feedback-Schleifen über mehrere
-      // Sekunden Energie aufbauen, bevor der Damping-Filter sie wieder
-      // abbaut (gemessen: bis knapp 6x Vollausschlag im Worst-Case-
-      // Stresstest, kombinierte Live-Automation + dichte Retriggerung) --
-      // ein schneller Limiter fängt genau DAS ab. Schwelle bewusst auf 0dB
-      // (Web-Audio-Maximum), NICHT wie vorher -3dB: ein normaler
-      // gehaltener Ton liegt beim neuen Delay-Feedback-Design (anders als
-      // die alte Bandpass-Bank) schon nahe am Trockenpegel -- eine
-      // niedrigere Schwelle hätte genau DIESEN Alltagsfall dauerhaft
-      // klein komprimiert und wieder leiser gemacht, statt nur die
-      // seltenen Extremfälle abzufangen (gemessen: bei 0dB bleibt ein
-      // gehaltener Ton praktisch unangetastet, ein 6x-Ausreisser wird bei
-      // Ratio 20:1 trotzdem zuverlässig auf knapp über 0dB gezähmt).
+      // limiter: unverändert aus der alten Bank -- eine dicht retriggerte/
+      // stark resonierende Anregung kann kurzzeitig deutlich über den
+      // Trockenpegel hinausschiessen, bevor die modeneigenen Abklingzeiten
+      // greifen. Schwelle bewusst auf 0dB (Web-Audio-Maximum): ein
+      // normaler gehaltener Ton bleibt praktisch unangetastet, nur
+      // Ausreisser werden gezähmt.
       const limiter = ctx.createDynamicsCompressor();
       limiter.threshold.value = 0;
       limiter.knee.value = 0;
       limiter.ratio.value = 20;
       limiter.attack.value = 0.003;
       limiter.release.value = 0.15;
-      sum.connect(limiter);
+      merger.connect(limiter);
 
       // Kompensiert den Lookahead BEIDER Kompressoren im Wet-Pfad (Anreger-
       // Ducker oben + Sicherheits-Limiter unten, je DYNAMICS_COMPRESSOR_
-      // LATENCY_SEC) -- die sitzen NUR im Wet-Pfad, ohne Kompensation käme
-      // die trockene Kopie ~12ms VOR der resonierten an, beim Mischen
-      // (mix<1) ein hörbares Kammfilter-"Phasing".
+      // LATENCY_SEC) -- ohne Kompensation käme die trockene Kopie ~12ms VOR
+      // der resonierten an, beim Mischen (mix<1) ein hörbares Kammfilter-
+      // "Phasing".
       const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC * 2);
       input.connect(dryDelay).connect(dry).connect(output);
       limiter.connect(wet).connect(output);
-
-      // Band i neu stimmen (Pitch/Interval/Tune geändert): Delay-Zeit UND
-      // die davon abhängige Feedback-Stärke (feedbackGainFor braucht die
-      // AKTUELLE Delay-Zeit) gemeinsam nachziehen.
-      const retuneBand = (i, t, tc) => {
-        const delayTime = 1 / freqFor(i);
-        bandDelayTime[i] = delayTime;
-        delays[i].delayTime.setTargetAtTime(delayTime, t, tc);
-        fbGains[i].gain.setTargetAtTime(feedbackGainFor(delayTime, decayTime), t, tc);
-      };
 
       return {
         input, output,
         setParam(key, v) {
           const t = engine.now;
-          if (key === 'pitch') {
-            pitch = v;
-            for (let i = 0; i < N; i++) retuneBand(i, t, 0.02);
-          } else if (key === 'resonance') {
-            decayTime = resonanceToDecayTime(v);
-            for (let i = 0; i < N; i++) fbGains[i].gain.setTargetAtTime(feedbackGainFor(bandDelayTime[i], decayTime), t, 0.02);
-          } else if (key === 'damping') {
-            for (const damp of damps) damp.setFreq(v, t, 0.02);
-          } else if (key === 'interval') {
-            // Preset-Knopf: befüllt alle 5 Tune-Werte auf einen Schlag (s.
-            // Kommentar bei RESONATOR_PRESET_SEMITONES) -- einzelne Bänder
-            // lassen sich danach über setBandTune() wieder frei verstellen.
-            p.tune = [...(RESONATOR_PRESET_SEMITONES[v] ?? RESONATOR_PRESET_SEMITONES.harmonic)];
-            for (let i = 0; i < N; i++) retuneBand(i, t, 0.03);
+          if (key === 'pitch' || key === 'resonance' || key === 'damping') {
+            if (resonatorNode) resonatorNode.parameters.get(`/resonator/${key}`).setTargetAtTime(v, t, 0.02);
           } else if (key === 'width') {
-            for (let i = 0; i < N; i++) panners[i].pan.setTargetAtTime(RESONATOR_PAN[i] * v, t, 0.02);
+            widenDelay.delayTime.setTargetAtTime(v * 0.015, t, 0.02);
           } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
-        // Einzelnes Band frei umstimmen (Halbtöne relativ zu pitch) --
-        // eigene, zusätzliche Methode wie setBand() beim 8-Band-EQ (s.
-        // dortigen Kommentar): der generische setParam(key,value) kennt nur
-        // "ein Feld", nicht "ein Feld eines von 5 Bändern".
-        setBandTune(i, semitones) {
-          p.tune[i] = semitones;
-          retuneBand(i, engine.now, 0.02);
-        },
         dispose() {
-          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect(); sum.disconnect();
+          disposed = true;
+          input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
           dryDelay.disconnect(); exciter.disconnect(); limiter.disconnect();
-          for (const delayNode of delays) delayNode.disconnect();
-          for (const damp of damps) damp.dispose();
-          for (const clip of clips) clip.disconnect();
-          for (const fb of fbGains) fb.disconnect();
-          for (const panner of panners) panner.disconnect();
+          coreIn.disconnect(); coreOut.disconnect(); widenDelay.disconnect(); merger.disconnect();
+          resonatorNode?.disconnect();
         },
       };
     },
@@ -2103,15 +2007,6 @@ export const DELAY_SYNC_BUTTONS = [
   { value: '1/2', label: '1/2' },
 ];
 
-/** Resonator-Intervall-Set (welche Töne relativ zur Grundtonhöhe
- *  mitklingen) ist ebenfalls ein Enum, kein Knob. */
-export const RESONATOR_INTERVALS = [
-  { value: 'harmonic', label: 'Harmonic' },
-  { value: 'octaves', label: 'Octaves' },
-  { value: 'fifths', label: 'Fifths' },
-  { value: 'minor', label: 'Minor' },
-  { value: 'major', label: 'Major' },
-];
 
 let nextInsertId = 1;
 
@@ -2198,8 +2093,6 @@ export function createInsert(type, saved = null) {
     setBand: effect.setBand ? (i, field) => effect.setBand(i, field) : undefined,
     getEq8Response: effect.getEq8Response ? (freqArray) => effect.getEq8Response(freqArray) : undefined,
     setGainRange: effect.setGainRange ? (v) => effect.setGainRange(v) : undefined,
-    // Nur beim Resonator vorhanden (s. dortigen Kommentar in DEFS.resonator).
-    setBandTune: effect.setBandTune ? (i, semitones) => effect.setBandTune(i, semitones) : undefined,
     // Nur beim Graphic EQ vorhanden (s. dortigen Kommentar in DEFS.geq).
     setBandGain: effect.setBandGain ? (i, v) => effect.setBandGain(i, v) : undefined,
     setBypass(b) {

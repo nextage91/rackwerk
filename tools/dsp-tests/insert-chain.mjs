@@ -103,21 +103,14 @@ check('filterDelay: ping-pong button toggles active class', await fdRow.evaluate
 await fdRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 
-// ---- Resonator ----
+// ---- Resonator ---- (jetzt eine Faust-Modal-Synthese statt der früheren
+// 5-Band-Delayline-Bank, s. inserts.js#DEFS.resonator -- die Interval-
+// Presets/5 Tune-Regler entfielen dabei bewusst (24 automatisch verteilte
+// Partialtöne statt 5 einzeln stimmbarer Bänder), jetzt nur noch die
+// generischen UI_PARAMS-Regler wie bei den meisten anderen Inserts.
 await addEffect('resonator');
 let resRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
-check('resonator: interval preset buttons rendered', await resRow.evaluate((r) => r.querySelectorAll('[data-resonator-interval]').length > 0));
-check('resonator: 5 tune knobs rendered', await resRow.evaluate((r) => r.querySelectorAll('[data-resonator-tune]').length === 5));
-await resRow.evaluate((r) => r.querySelectorAll('[data-resonator-interval]')[1].click());
-await page.waitForTimeout(50);
-resRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
-check('resonator: preset click sets active + updates tune knobs', await resRow.evaluate((r) => r.querySelectorAll('[data-resonator-interval]')[1].classList.contains('is-active')));
-await resRow.evaluate((r) => {
-  const knob = r.querySelectorAll('[data-resonator-tune]')[0];
-  knob.dispatchEvent(new CustomEvent('input', { detail: { value: 12 }, bubbles: true }));
-});
-await page.waitForTimeout(50);
-check('resonator: individual tune knob input does not crash', await resRow.evaluate((r) => !!r));
+check('resonator: standard param knobs rendered (pitch/resonance/damping/width/mix)', await resRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 5));
 await resRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 
