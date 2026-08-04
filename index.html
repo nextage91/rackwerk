@@ -2537,6 +2537,43 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
 }
 .pitch-picker__note { min-height: 34px; padding: 0 2px; font-size: 12px; }
 
+/* Velocity-Ziehbalken (Pitch-Picker + reines Velocity-Popup bei Drum-Grids,
+   s. ui/step-seq.js#wireVelBar) -- kein <input type="range">, gleiche
+   Zieh-Technik wie die übrigen Touch-Regler dieses Projekts. */
+.pitch-picker__vel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pitch-picker__vel-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+  width: 24px;
+}
+.pitch-picker__vel-bar {
+  position: relative;
+  flex: 1;
+  height: 32px;
+  border-radius: 16px;
+  background: rgba(0,0,0,.35);
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+  touch-action: none; /* Ziehen gehört dem Balken, nicht dem Scroll */
+  overflow: hidden;
+}
+.pitch-picker__vel-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--m-color-dim, rgba(255,184,77,.4));
+  box-shadow: 0 0 8px var(--m-color-glow, rgba(255,184,77,.45)) inset;
+}
+.pitch-picker__vel-pct {
+  width: 34px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
 /* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
    gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
 .rename-pop {
@@ -2620,7 +2657,7 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   border-radius: 8px;
   background: rgba(0,0,0,.3);
   box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
-  touch-action: manipulation;
+  touch-action: none;                    /* Resize-Drag statt Scroll (s. #wireRollPointer) */
 }
 /* [hidden] hat dieselbe Spezifität wie die Klassen oben und käme im
    Stylesheet NACH der UA-Regel [hidden]{display:none} -- ohne diese
@@ -2646,6 +2683,38 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   background: var(--m-color-dim, rgba(77,195,255,.22));
   box-shadow: 0 0 8px var(--m-color-glow, rgba(77,195,255,.45)) inset,
               0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+/* Mehrspaltige Notenlänge (s. ui/step-seq.js#renderRollRow): Kopf/Körper/
+   Ende einer Note wachsen visuell zu EINEM durchgehenden Balken zusammen
+   (kein Spalt an den inneren Grenzen) statt wie einzelne Zellen zu wirken
+   -- klassischer Piano-Roll-Look. Nur die Kopf-Seite (links) bzw. Ende-
+   Seite (rechts) behalten eine Rundung, wenn sie tatsächlich ein Rand der
+   Note sind (bei 1-Step-Noten ist eine Zelle beides zugleich). */
+.roll-cell.roll-cell--head { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+.roll-cell.roll-cell--tail { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+.roll-cell.roll-cell--body,
+.roll-cell.roll-cell--head:not(.roll-cell--tail) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.roll-cell.roll-cell--body,
+.roll-cell.roll-cell--tail:not(.roll-cell--head) { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+/* Anfasser an der rechten Kante jeder Note (auch 1-Step-Noten) -- zieht man
+   von hier, verlängert/verkürzt sich die Note (s. #wireRollPointer). Bewusst
+   dezent (schmaler heller Strich) statt eines auffälligen Extra-Knopfs --
+   das Raster ist auf dem Handy schon dicht genug. */
+.roll-cell.roll-cell--tail {
+  position: relative; /* Anker fürs ::after unten (absolut, sonst wären
+    Prozent-Vertikalränder fälschlich relativ zur BREITE der Zelle, nicht
+    zur Höhe -- CSS-Eigenheit bei Block-Margins) */
+}
+.roll-cell.roll-cell--tail::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  right: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--m-color, rgba(255,255,255,.55));
+  opacity: .6;
 }
 .roll-cell.is-play {
   background: var(--lcd-ink);
@@ -15834,97 +15903,182 @@ const HOLD_MS = 500; // wie CLIP_HOLD_MS/insert-chain.js' Halten-Menüs
 const ROLL_ROWS = 13;
 const ROLL_STEPS_PER_PAGE = 8;
 
-/* ---------- Pitch-Picker-Popup (Halten auf einem aktiven Grid-Step) ----------
+/* ---------- Halten-Popups (Pitch-Picker + Velocity) ----------
  * Ein einzelnes, modulweites Popup -- gleiches Muster wie eq8Menu in
  * insert-chain.js (nie mehr als eines gleichzeitig offen, egal welche
- * StepSeq-Instanz/welches Panel gerade offen ist). Ersetzt das frühere
- * vertikale Ziehen zum Tonhöhe-Ändern: Antippen der Zieltonhöhe statt
- * Pixel-genauem Ziehen (Nutzer-Anfrage, s. Dateikopf-Kommentar).
+ * StepSeq-Instanz/welches Panel gerade offen ist). Der Pitch-Picker
+ * ersetzt das frühere vertikale Ziehen zum Tonhöhe-Ändern: Antippen der
+ * Zieltonhöhe statt Pixel-genauem Ziehen (Nutzer-Anfrage). Das Velocity-
+ * Popup (Drum-Grids, s. openVelocityPopup unten) teilt sich dasselbe
+ * Positionierungs-/Lebenszyklus-Gerüst -- nur der Inhalt unterscheidet sich.
  */
-let pitchPopup = null;
-const dismissPitchPopup = () => {
-  pitchPopup?.remove();
-  pitchPopup = null;
-  document.removeEventListener('pointerdown', onOutsidePitchPopup, true);
+let activePopup = null;
+const dismissActivePopup = () => {
+  activePopup?.remove();
+  activePopup = null;
+  document.removeEventListener('pointerdown', onOutsideActivePopup, true);
 };
-const onOutsidePitchPopup = (e) => { if (pitchPopup && !pitchPopup.contains(e.target)) dismissPitchPopup(); };
+const onOutsideActivePopup = (e) => { if (activePopup && !activePopup.contains(e.target)) dismissActivePopup(); };
 
 /**
- * @param {number} currentMidi  Aktuelle Tonhöhe des Steps (bestimmt das
- *   anfangs sichtbare Oktav-Fenster, ungefähr mittig wie beim Roll-Modus).
+ * @param {string} className  Zusätzliche Klasse (neben .pat-chip) fürs Popup-Element.
  * @param {number} clientX
  * @param {number} clientY
- * @param {(midi:number)=>void} onPick  Neue Tonhöhe gewählt.
- * @param {()=>void} onTurnOff  Step stattdessen ausschalten.
+ * @param {(el:HTMLElement, position:()=>void)=>void} render  Füllt den Inhalt;
+ *   bekommt `position` mit, damit Inhaltswechsel (z. B. Oktave-Klick im
+ *   Pitch-Picker) die Position neu berechnen können, ohne das Popup neu zu öffnen.
  */
-function openPitchPopup(currentMidi, clientX, clientY, onPick, onTurnOff) {
-  dismissPitchPopup();
-  let base = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
-    Math.max(MIDI_MIN, currentMidi - Math.floor(ROLL_ROWS / 2)));
-
-  pitchPopup = document.createElement('div');
-  pitchPopup.className = 'pat-chip pitch-picker';
-  document.body.appendChild(pitchPopup);
+function openChipPopup(className, clientX, clientY, render) {
+  dismissActivePopup();
+  const el = document.createElement('div');
+  el.className = `pat-chip ${className}`;
+  document.body.appendChild(el);
+  activePopup = el;
 
   const position = () => {
-    const left = Math.max(8, Math.min(window.innerWidth - pitchPopup.offsetWidth - 8, clientX - pitchPopup.offsetWidth / 2));
-    pitchPopup.style.left = `${left}px`;
-    // Anders als eq8Menu (immer über dem Tap-Punkt) kann dieses Popup
-    // deutlich höher werden (13 Notenknöpfe + Oktave-Zeile + Turn-off) --
-    // ein Step ganz oben im Grid liesse es sonst über den oberen Rand
-    // hinaus wachsen und in den Inhalt darüber hineinragen. Reicht der
-    // Platz oberhalb nicht, klappt es stattdessen UNTER den Tap-Punkt.
+    const left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, clientX - el.offsetWidth / 2));
+    el.style.left = `${left}px`;
+    // Kann höher werden als die übrigen .pat-chip-Menüs (z. B. 13
+    // Notenknöpfe + Oktave-Zeile + Turn-off) -- ein Step ganz oben im Grid
+    // liesse es sonst über den oberen Rand hinaus wachsen und in den
+    // Inhalt darüber hineinragen. Reicht der Platz oberhalb nicht, klappt
+    // es stattdessen UNTER den Tap-Punkt.
     const spaceAbove = clientY - 30;
-    const top = spaceAbove >= pitchPopup.offsetHeight
-      ? clientY - pitchPopup.offsetHeight - 30
+    const top = spaceAbove >= el.offsetHeight
+      ? clientY - el.offsetHeight - 30
       : clientY + 30;
-    pitchPopup.style.top = `${Math.max(8, Math.min(window.innerHeight - pitchPopup.offsetHeight - 8, top))}px`;
+    el.style.top = `${Math.max(8, Math.min(window.innerHeight - el.offsetHeight - 8, top))}px`;
   };
 
-  const rebuild = () => {
-    pitchPopup.innerHTML = `
-      <div class="pitch-picker__oct">
-        <button class="keybed__oct-btn" data-poct="-1" aria-label="Octave down">−</button>
-        <span class="keybed__oct-label" data-poctlabel></span>
-        <button class="keybed__oct-btn" data-poct="1" aria-label="Octave up">+</button>
-      </div>
-      <div class="pitch-picker__notes">
-        ${Array.from({ length: ROLL_ROWS }, (_, i) => {
-          const pitch = base + (ROLL_ROWS - 1 - i);
-          return `<button class="pat-chip__btn pitch-picker__note${pitch === currentMidi ? ' is-active' : ''}" data-pitch="${pitch}">${noteLabel(pitch)}</button>`;
-        }).join('')}
-      </div>
-      <button class="pat-chip__btn pat-chip__btn--danger" data-stepoff>Turn off</button>
-    `;
-    pitchPopup.querySelectorAll('[data-pitch]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        onPick(parseInt(btn.dataset.pitch, 10));
-        dismissPitchPopup();
-      });
-    });
-    pitchPopup.querySelector('[data-poct="-1"]').addEventListener('click', () => {
-      base = Math.max(MIDI_MIN, base - 12);
-      rebuild(); position();
-    });
-    pitchPopup.querySelector('[data-poct="1"]').addEventListener('click', () => {
-      base = Math.min(MIDI_MAX - (ROLL_ROWS - 1), base + 12);
-      rebuild(); position();
-    });
-    pitchPopup.querySelector('[data-poct="-1"]').disabled = base - 12 < MIDI_MIN;
-    pitchPopup.querySelector('[data-poct="1"]').disabled = base + 12 > MIDI_MAX - (ROLL_ROWS - 1);
-    pitchPopup.querySelector('[data-poctlabel]').textContent = noteLabel(base);
-    pitchPopup.querySelector('[data-stepoff]').addEventListener('click', () => {
-      onTurnOff();
-      dismissPitchPopup();
-    });
-  };
-  rebuild();
+  render(el, position);
   position();
   // capture:true wie onOutsideEq8Menu -- muss VOR dem eigentlichen Ziel-
   // Handler des nächsten Taps feuern, sonst würde ein Tap auf eine ANDERE
   // Zelle sowohl das Popup schliessen als auch sofort die neue Zelle
   // togglen (zwei Wirkungen aus einer Geste).
-  document.addEventListener('pointerdown', onOutsidePitchPopup, true);
+  document.addEventListener('pointerdown', onOutsideActivePopup, true);
+}
+
+/** Kompakter Ziehbalken (0..1) für die Velocity -- gemeinsam vom Pitch-
+ *  Picker und vom Velocity-Popup genutzt. Kein <input type="range">
+ *  (im restlichen Projekt bewusst keine nativen Formularelemente, s.
+ *  x-knob/x-fader) -- stattdessen dieselbe Zieh-Technik wie das Sweep-Pad
+ *  (jam-view.js): pointerdown/-move mit setPointerCapture, kontinuierliches
+ *  onChange während des Ziehens, kein separates Loslassen-Commit nötig. */
+function wireVelBar(el, currentVel, onVelChange) {
+  const bar = el.querySelector('[data-velbar]');
+  const fill = el.querySelector('[data-velfill]');
+  const pct = el.querySelector('[data-velpct]');
+  const setUI = (v) => {
+    fill.style.width = `${Math.round(v * 100)}%`;
+    pct.textContent = `${Math.round(v * 100)}%`;
+  };
+  setUI(currentVel);
+  const valueFromEvent = (e) => {
+    const r = bar.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  };
+  let dragging = false;
+  bar.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    bar.setPointerCapture?.(e.pointerId);
+    const v = valueFromEvent(e);
+    setUI(v);
+    onVelChange(v);
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const v = valueFromEvent(e);
+    setUI(v);
+    onVelChange(v);
+  });
+  const release = () => { dragging = false; };
+  bar.addEventListener('pointerup', release);
+  bar.addEventListener('pointercancel', release);
+}
+
+const velBarHtml = () => `
+  <div class="pitch-picker__vel">
+    <span class="pitch-picker__vel-label">Vel</span>
+    <div class="pitch-picker__vel-bar" data-velbar><div class="pitch-picker__vel-fill" data-velfill></div></div>
+    <span class="pitch-picker__vel-pct" data-velpct></span>
+  </div>
+`;
+
+/**
+ * @param {number} currentMidi  Aktuelle Tonhöhe des Steps (bestimmt das
+ *   anfangs sichtbare Oktav-Fenster, ungefähr mittig wie beim Roll-Modus).
+ * @param {number} currentVel   Aktuelle Velocity (0..1) des Steps.
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {(midi:number)=>void} onPick  Neue Tonhöhe gewählt.
+ * @param {(vel:number)=>void} onVelChange  Velocity gezogen (live, kein Dismiss).
+ * @param {()=>void} onTurnOff  Step stattdessen ausschalten.
+ */
+function openPitchPopup(currentMidi, currentVel, clientX, clientY, onPick, onVelChange, onTurnOff) {
+  let base = Math.min(MIDI_MAX - (ROLL_ROWS - 1),
+    Math.max(MIDI_MIN, currentMidi - Math.floor(ROLL_ROWS / 2)));
+
+  openChipPopup('pitch-picker', clientX, clientY, (el, position) => {
+    const rebuild = () => {
+      el.innerHTML = `
+        <div class="pitch-picker__oct">
+          <button class="keybed__oct-btn" data-poct="-1" aria-label="Octave down">−</button>
+          <span class="keybed__oct-label" data-poctlabel></span>
+          <button class="keybed__oct-btn" data-poct="1" aria-label="Octave up">+</button>
+        </div>
+        <div class="pitch-picker__notes">
+          ${Array.from({ length: ROLL_ROWS }, (_, i) => {
+            const pitch = base + (ROLL_ROWS - 1 - i);
+            return `<button class="pat-chip__btn pitch-picker__note${pitch === currentMidi ? ' is-active' : ''}" data-pitch="${pitch}">${noteLabel(pitch)}</button>`;
+          }).join('')}
+        </div>
+        ${onVelChange ? velBarHtml() : ''}
+        <button class="pat-chip__btn pat-chip__btn--danger" data-stepoff>Turn off</button>
+      `;
+      el.querySelectorAll('[data-pitch]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          onPick(parseInt(btn.dataset.pitch, 10));
+          dismissActivePopup();
+        });
+      });
+      el.querySelector('[data-poct="-1"]').addEventListener('click', () => {
+        base = Math.max(MIDI_MIN, base - 12);
+        rebuild(); position();
+      });
+      el.querySelector('[data-poct="1"]').addEventListener('click', () => {
+        base = Math.min(MIDI_MAX - (ROLL_ROWS - 1), base + 12);
+        rebuild(); position();
+      });
+      el.querySelector('[data-poct="-1"]').disabled = base - 12 < MIDI_MIN;
+      el.querySelector('[data-poct="1"]').disabled = base + 12 > MIDI_MAX - (ROLL_ROWS - 1);
+      el.querySelector('[data-poctlabel]').textContent = noteLabel(base);
+      if (onVelChange) wireVelBar(el, currentVel, onVelChange);
+      el.querySelector('[data-stepoff]').addEventListener('click', () => {
+        onTurnOff();
+        dismissActivePopup();
+      });
+    };
+    rebuild();
+  });
+}
+
+/** Schlankes Pendant zum Pitch-Picker für Drum-Grids (pitchMode:false) --
+ *  die haben keine Tonhöhe zu bearbeiten, aber jetzt (wie die Pitch-
+ *  Maschinen) eine Velocity pro Step. Nur Velocity-Balken + Turn off. */
+function openVelocityPopup(currentVel, clientX, clientY, onVelChange, onTurnOff) {
+  openChipPopup('pitch-picker', clientX, clientY, (el) => {
+    el.innerHTML = `
+      ${velBarHtml()}
+      <button class="pat-chip__btn pat-chip__btn--danger" data-stepoff>Turn off</button>
+    `;
+    wireVelBar(el, currentVel, onVelChange);
+    el.querySelector('[data-stepoff]').addEventListener('click', () => {
+      onTurnOff();
+      dismissActivePopup();
+    });
+  });
 }
 
 class StepSeq {
@@ -16103,6 +16257,9 @@ class StepSeq {
     const st = this.pattern[this.#patIdx(c)];
     const cell = this.cells[c];
     cell.classList.toggle('is-on', !!st?.on);
+    // Velocity als Helligkeit ablesbar (leiser = dunkler) -- gilt für
+    // Pitch- UND Drum-Grids gleichermassen, beide haben jetzt vel pro Step.
+    cell.style.opacity = st?.on ? String(0.4 + 0.6 * (st.vel ?? 1)) : '';
     cell.querySelector('.cell__label').textContent = st?.on && this.pitchMode ? noteLabel(st.midi) : '';
     if (this.accentSlide) {
       cell.querySelector('.cell__accent')?.classList.toggle('is-active', !!st?.accent);
@@ -16110,19 +16267,46 @@ class StepSeq {
     }
   }
 
-  /** Ein Roll-Raster-Feld (Zeile row 0..12, Spalte c 0..7) neu zeichnen. */
-  #renderRollCell(row, c) {
-    const st = this.pattern[this.#rollPatIdx(c)];
+  /** Für Zeile `row` (0..12): welche Spalten (0..ROLL_STEPS_PER_PAGE-1)
+   *  von einer Note dieser Tonhöhe belegt sind -- eine Note startet an
+   *  ihrem eigenen Step (on:true) und belegt `len` Spalten (an der
+   *  Roll-Seitengrenze geklemmt, s. Dateikopf-Kommentar zur v1-Grenze
+   *  "kein Auto-Scroll über die Seite hinaus"). Steps INNERHALB einer
+   *  Notenlänge tragen selbst kein on:true (s. #wireRollPointer/onLengthDrag) --
+   *  die Belegung entsteht rein aus Start-Step + len, nicht aus eigenen Flags. */
+  #rollCoverage(row) {
     const pitch = this.rollBase + (ROLL_ROWS - 1 - row);
-    const cell = this.rollCells[row][c];
-    cell.classList.toggle('is-on', !!st?.on && st.midi === pitch);
+    const coverage = new Array(ROLL_STEPS_PER_PAGE).fill(null);
+    for (let c = 0; c < ROLL_STEPS_PER_PAGE; c++) {
+      const st = this.pattern[this.#rollPatIdx(c)];
+      if (!st?.on || st.midi !== pitch) continue;
+      const len = Math.min(st.len ?? 1, ROLL_STEPS_PER_PAGE - c);
+      for (let k = 0; k < len; k++) coverage[c + k] = { startCol: c, len, idx: this.#rollPatIdx(c), vel: st.vel ?? 1 };
+    }
+    return coverage;
+  }
+
+  /** Eine Roll-Zeile (alle Spalten, Tonhöhe = row) neu zeichnen -- ersetzt
+   *  das frühere zellenweise Rendern: eine Notenlänge kann mehrere Spalten
+   *  gleichzeitig betreffen, ein einzelner Zell-Redraw wüsste das nicht. */
+  #renderRollRow(row) {
+    const coverage = this.#rollCoverage(row);
+    for (let c = 0; c < ROLL_STEPS_PER_PAGE; c++) {
+      const cov = coverage[c];
+      const cell = this.rollCells[row][c];
+      cell.classList.toggle('is-on', !!cov);
+      cell.classList.toggle('roll-cell--head', !!cov && cov.startCol === c);
+      cell.classList.toggle('roll-cell--tail', !!cov && cov.startCol + cov.len - 1 === c);
+      cell.classList.toggle('roll-cell--body', !!cov && cov.startCol !== c && cov.startCol + cov.len - 1 !== c);
+      // Velocity als Helligkeit, s. #renderCell -- dieselbe Formel, damit
+      // Grid- und Roll-Ansicht optisch konsistent bleiben.
+      cell.style.opacity = cov ? String(0.4 + 0.6 * cov.vel) : '';
+    }
   }
 
   #renderRollAll() {
     if (!this.rollEnabled) return;
-    for (let row = 0; row < ROLL_ROWS; row++) {
-      for (let c = 0; c < ROLL_STEPS_PER_PAGE; c++) this.#renderRollCell(row, c);
-    }
+    for (let row = 0; row < ROLL_ROWS; row++) this.#renderRollRow(row);
     for (let row = 0; row < ROLL_ROWS; row++) {
       this.rollLabels[row].textContent = noteLabel(this.rollBase + (ROLL_ROWS - 1 - row));
     }
@@ -16163,10 +16347,11 @@ class StepSeq {
    */
   refreshStep(patternIdx) {
     if (Math.floor(patternIdx / BAR_STEPS) === this.page) this.#renderCell(patternIdx % BAR_STEPS);
-    if (this.rollEnabled && Math.floor(patternIdx / ROLL_STEPS_PER_PAGE) === this.rollPage) {
-      const c = patternIdx % ROLL_STEPS_PER_PAGE;
-      for (let row = 0; row < ROLL_ROWS; row++) this.#renderRollCell(row, c);
-    }
+    // Voller Roll-Redraw statt nur der einen Spalte: eine Notenlänge kann
+    // mehrere Spalten überdecken, ein externer Einzel-Step-Schreibzugriff
+    // (Live-Aufnahme) kennt diese Überdeckung nicht -- bei nur 13×8 Zellen
+    // ist der volle Redraw trotzdem billig.
+    if (this.rollEnabled && Math.floor(patternIdx / ROLL_STEPS_PER_PAGE) === this.rollPage) this.#renderRollAll();
   }
 
   /* ---------- Playhead ---------- */
@@ -16227,28 +16412,72 @@ class StepSeq {
     }
   }
 
-  /** Antippen setzt/löscht die Note direkt an dieser Tonhöhe+Zeit -- kein
-   *  Ziehen nötig (die Zeile IST schon die Tonhöhe), deshalb reicht ein
-   *  einfacher Klick wie bei den Accent-/Slide-Zonen oben. */
+  /** Antippen setzt/löscht die Note direkt an dieser Tonhöhe+Zeit (Kopf
+   *  ODER Körper einer bestehenden Note löscht sie komplett) -- kein
+   *  Ziehen nötig für die Grundfunktion, die Zeile IST schon die Tonhöhe.
+   *  NEU: Ziehen ausgehend von der rechten Kante (TAIL) einer bestehenden
+   *  Note verlängert/verkürzt sie stattdessen (klassischer Piano-Roll-
+   *  Anfasser) -- deshalb pointerdown/-move/-up statt eines einfachen
+   *  'click', um Tap und Zieh-Geste sauber zu unterscheiden (gleiches
+   *  Muster wie #wirePointer() fürs Grid). v1-Grenze (Nutzer akzeptiert,
+   *  s. Proposal): Ziehen bleibt auf die aktuell sichtbare Roll-Seite
+   *  geklemmt, kein Auto-Scroll über die Seitengrenze hinaus -- Ziehen auf
+   *  eine andere ZEILE (Tonhöhe) wird schlicht ignoriert (Resize ist eine
+   *  reine Zeit-Geste, kein Tonhöhe-Wechsel mitten im Ziehen). */
   #wireRollPointer() {
-    this.rollEl.addEventListener('click', (e) => {
+    const active = new Map();
+
+    this.rollEl.addEventListener('pointerdown', (e) => {
       const cell = e.target.closest('.roll-cell');
       if (!cell) return;
+      e.preventDefault();
+      this.rollEl.setPointerCapture?.(e.pointerId);
       const row = parseInt(cell.dataset.row, 10);
       const c = parseInt(cell.dataset.col, 10);
-      const idx = this.#rollPatIdx(c);
-      const pitch = this.rollBase + (ROLL_ROWS - 1 - row);
-      const st = this.pattern[idx];
-      if (!st) return;
-      if (st.on && st.midi === pitch) {
-        st.on = false;
+      const cov = this.#rollCoverage(row)[c];
+      const isTailGrab = !!cov && cov.startCol + cov.len - 1 === c;
+      active.set(e.pointerId, { row, col: c, cov, isTailGrab, resizeLen: cov?.len, moved: false });
+    });
+
+    this.rollEl.addEventListener('pointermove', (e) => {
+      const drag = active.get(e.pointerId);
+      if (!drag?.isTailGrab) return;
+      const overCell = document.elementFromPoint(e.clientX, e.clientY)?.closest('.roll-cell');
+      if (!overCell || parseInt(overCell.dataset.row, 10) !== drag.row) return;
+      const c = parseInt(overCell.dataset.col, 10);
+      const newLen = Math.max(1, Math.min(ROLL_STEPS_PER_PAGE - drag.cov.startCol, c - drag.cov.startCol + 1));
+      if (newLen === drag.resizeLen) return;
+      drag.resizeLen = newLen;
+      drag.moved = true;
+      this.pattern[drag.cov.idx].len = newLen;
+      this.#renderRollRow(drag.row);
+    });
+
+    const finish = (e) => {
+      const drag = active.get(e.pointerId);
+      if (!drag) return;
+      this.rollEl.releasePointerCapture?.(e.pointerId);
+      active.delete(e.pointerId);
+      if (drag.moved) { this.onChange?.(); return; } // Resize abgeschlossen
+      // Kein Ziehen -> normaler Tap: bestehende Note (Kopf oder Körper)
+      // löschen, sonst eine neue 1-Step-Note an dieser Stelle anlegen.
+      const pitch = this.rollBase + (ROLL_ROWS - 1 - drag.row);
+      if (drag.cov) {
+        const startSt = this.pattern[drag.cov.idx];
+        startSt.on = false;
+        startSt.len = 1;
       } else {
+        const st = this.pattern[this.#rollPatIdx(drag.col)];
+        if (!st) return;
         st.on = true;
         st.midi = pitch;
+        st.len = 1;
       }
-      for (let r = 0; r < ROLL_ROWS; r++) this.#renderRollCell(r, c);
+      this.#renderRollRow(drag.row);
       this.onChange?.();
-    });
+    };
+    this.rollEl.addEventListener('pointerup', finish);
+    this.rollEl.addEventListener('pointercancel', finish);
   }
 
   /** Multi-Touch: pointerId → { idx, startY, startX, moved, holdFired,
@@ -16272,28 +16501,54 @@ class StepSeq {
       const drag = { idx, startY: e.clientY, startX: e.clientX, moved: false, holdFired: false, holdTimer: null };
       active.set(e.pointerId, drag);
 
-      // Halten auf einem BEREITS AKTIVEN Step (nur pitchMode) öffnet den
-      // Pitch-Picker (s. Dateikopf-Kommentar/openPitchPopup()) -- ersetzt
-      // das frühere vertikale Ziehen. Ein ausgeschalteter Step hat keine
-      // Tonhöhe zu bearbeiten, dafür bleibt der normale kurze Tipp
-      // (schaltet ihn mit der zuletzt genutzten Tonhöhe ein).
-      if (this.pitchMode && this.pattern[idx]?.on) {
+      // Halten auf einem BEREITS AKTIVEN Step öffnet ein Popup -- ersetzt
+      // im Pitch-Modus das frühere vertikale Ziehen (Tonhöhe + Velocity),
+      // im Drum-Modus gibt es jetzt (analog) ein schlankeres Popup, das
+      // nur Velocity anbietet (s. openVelocityPopup, kein Tonhöhe-Konzept
+      // bei Drums). Ein ausgeschalteter Step hat nichts zu bearbeiten,
+      // dafür bleibt der normale kurze Tipp (schaltet ihn ein).
+      if (this.pattern[idx]?.on) {
         drag.holdTimer = setTimeout(() => {
           if (drag.moved) return;
           drag.holdFired = true;
-          openPitchPopup(
-            this.pattern[idx].midi, e.clientX, e.clientY,
-            (pitch) => {
-              this.pattern[idx].midi = pitch;
-              this.#renderCell(idx % BAR_STEPS);
-              this.onChange?.();
-            },
-            () => {
-              this.pattern[idx].on = false;
-              this.#renderCell(idx % BAR_STEPS);
-              this.onChange?.();
-            },
-          );
+          if (this.pitchMode) {
+            openPitchPopup(
+              this.pattern[idx].midi, this.pattern[idx].vel ?? 1, e.clientX, e.clientY,
+              (pitch) => {
+                this.pattern[idx].midi = pitch;
+                this.#renderCell(idx % BAR_STEPS);
+                this.onChange?.();
+              },
+              // Velocity-Balken bewusst NICHT beim AcidBass (accentSlide) --
+              // der hat mit Accent/Slide bereits ein eigenes Dynamik-
+              // Konzept, zwei parallele Dynamik-Regler pro Step wären
+              // widersprüchlich (s. Chat/Proposal).
+              this.accentSlide ? undefined : (vel) => {
+                this.pattern[idx].vel = vel;
+                this.#renderCell(idx % BAR_STEPS);
+                this.onChange?.();
+              },
+              () => {
+                this.pattern[idx].on = false;
+                this.#renderCell(idx % BAR_STEPS);
+                this.onChange?.();
+              },
+            );
+          } else {
+            openVelocityPopup(
+              this.pattern[idx].vel ?? 1, e.clientX, e.clientY,
+              (vel) => {
+                this.pattern[idx].vel = vel;
+                this.#renderCell(idx % BAR_STEPS);
+                this.onChange?.();
+              },
+              () => {
+                this.pattern[idx].on = false;
+                this.#renderCell(idx % BAR_STEPS);
+                this.onChange?.();
+              },
+            );
+          }
         }, HOLD_MS);
       }
     });
@@ -27572,7 +27827,7 @@ class TrackedDrumMachine extends Machine {
    *  Ein #privates emptySlot() wirft an der Stelle "Receiver must be an
    *  instance of class TrackedDrumMachine" (real reproduziert). */
   emptySlot() {
-    return this.constructor.TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
+    return this.constructor.TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false, vel: 1 })));
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -27596,7 +27851,7 @@ class TrackedDrumMachine extends Machine {
     this.onPatternChange?.();
   }
   #cloneSlot(i) {
-    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
+    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on, vel: s.vel ?? 1 })));
   }
 
   /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
@@ -27644,7 +27899,7 @@ class TrackedDrumMachine extends Machine {
     for (let i = 0; i < this.tracks.length; i++) {
       if (this.soloTrack != null && i !== this.soloTrack) continue;
       const tr = this.tracks[i];
-      if (tr.steps[idx].on) this.#trigger(tr, t);
+      if (tr.steps[idx].on) this.#trigger(tr, t, tr.steps[idx].vel ?? 1);
     }
   }
 
@@ -27659,7 +27914,7 @@ class TrackedDrumMachine extends Machine {
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
-      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
+      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on, vel: s.vel ?? 1 })))),
       patternIndex: this.patternIndex,
       pan: this.pan,
     };
@@ -27690,11 +27945,11 @@ class TrackedDrumMachine extends Machine {
       tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
     });
     if (state.patterns) {
-      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
+      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on, vel: s.vel ?? 1 }))));
       this.patternIndex = state.patternIndex ?? 0;
     } else if (state.tracks?.some((t) => t.steps)) {
       // Altes Format: Steps lagen in tracks[].steps → Slot A, B–D leer
-      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
+      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on, vel: s.vel ?? 1 })));
       this.patterns = [slotA, this.emptySlot(), this.emptySlot(), this.emptySlot()];
       this.patternIndex = 0;
     }
@@ -27757,13 +28012,20 @@ class TrackedDrumMachine extends Machine {
     return tr.meterAnalyser;
   }
 
-  #trigger(tr, time) {
+  /** vel (0..1, Default 1) skaliert den Trigger-Pegel, OHNE die Klang-
+   *  erzeuger-Funktionen (kick/snare/… in beatbox.js/analogkit.js) selbst
+   *  anzufassen: die lesen `level` nur (nie schreibend), ein flach kopiertes
+   *  Params-Objekt mit vorskaliertem level reicht deshalb völlig -- ein
+   *  Vielfaches günstiger als jede Synth-Funktion einzeln um ein vel-
+   *  Argument zu erweitern. */
+  #trigger(tr, time, vel = 1) {
     this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
     // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
     // damit jede Drum-Spur ihre eigene Stereo-Position hat.
-    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, tr);
+    const p = vel === 1 ? tr : { ...tr, level: tr.level * vel };
+    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, p);
   }
 
   /* ---------- Mixer: Pegel & Panorama pro Spur ---------- */
@@ -27941,7 +28203,7 @@ class TrackedDrumMachine extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.#cloneSlot(i),
       putSlot: (i, data) => {
-        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
+        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on, vel: s.vel ?? 1 })));
         this.setPatternIndex(i);
       },
       onAddClip: (i) => this.addClipFromPattern(i),
@@ -28057,7 +28319,7 @@ class StepSequencedSynth extends Machine {
    *  emptySlot, real reproduziert: "Receiver must be an instance of
    *  class ..."). */
   emptyPattern(len = 16) {
-    return Array.from({ length: len }, () => ({ on: false, midi: this.constructor.DEFAULT_MIDI }));
+    return Array.from({ length: len }, () => ({ on: false, midi: this.constructor.DEFAULT_MIDI, vel: 1, len: 1 }));
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -28122,8 +28384,13 @@ class StepSequencedSynth extends Machine {
     const st = this.pattern[idx];
     // dur-Argument wird von playNote()-Implementierungen ohne Halte-Dauer
     // (z. B. PercSynth, deren Hüllkurve rein aus params.decay kommt) einfach
-    // ignoriert — kein Sonderfall pro Unterklasse nötig.
-    if (st.on) this.playNote(st.midi, t, transport.stepDuration * 0.8);
+    // ignoriert — kein Sonderfall pro Unterklasse nötig. dur skaliert jetzt
+    // mit st.len (Piano-Roll-Notenlänge in Steps, Default 1 -- alte
+    // Projekte ohne dieses Feld verhalten sich unverändert wie zuvor).
+    // vel (0..1, Default 1) reicht die Anschlagsstärke durch; playNote()-
+    // Implementierungen ohne eigenes vel-Argument ignorieren das zusätzliche
+    // Argument einfach (z. B. Modular, s. dortiger Kommentar).
+    if (st.on) this.playNote(st.midi, t, transport.stepDuration * ((st.len ?? 1) - 0.2), st.vel ?? 1);
   }
 
   onTransport(event) {
@@ -28291,7 +28558,7 @@ class SubSynth extends StepSequencedSynth {
    * Fire-and-forget-Stimme für den Sequenzer — sample-genau bei `time`
    * geplant, unabhängig von den gehaltenen Keybed-Stimmen.
    */
-  playNote(midi, time, dur) {
+  playNote(midi, time, dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -28316,7 +28583,7 @@ class SubSynth extends StepSequencedSynth {
     // bei kurzen Sequenzer-Schritten nur wirkungslos (Chat: "kann es sein
     // das der attack wert der envelope mit bis max. 1s zu tief ist").
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filter).connect(env).connect(this.output);
@@ -28725,7 +28992,7 @@ class PercSynth extends StepSequencedSynth {
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
-  playNote(midi, time) {
+  playNote(midi, time, _dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -28754,7 +29021,7 @@ class PercSynth extends StepSequencedSynth {
     // spränge dann abrupt auf 0 (hörbares Klicken, s. dsp.js#env).
     const TAIL = 0.05;
     const amp = ctx.createGain();
-    amp.gain.setValueAtTime(0.9, time);
+    amp.gain.setValueAtTime(0.9 * vel, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
     amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
     car.connect(amp).connect(this.output);
@@ -28772,7 +29039,7 @@ class PercSynth extends StepSequencedSynth {
       bp.Q.value = 2;
       const ng = ctx.createGain();
       const nDur = Math.min(dur, 0.12);
-      ng.gain.setValueAtTime(0.8 * p.noiseMix, time);
+      ng.gain.setValueAtTime(0.8 * p.noiseMix * vel, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + nDur);
       ng.gain.linearRampToValueAtTime(0, time + nDur + TAIL);
       n.connect(bp).connect(ng).connect(this.output);
@@ -28926,7 +29193,7 @@ class PolySynth extends StepSequencedSynth {
    * Fire-and-forget-Voicing für den Sequenzer — eine Stimme pro Chord-Ton,
    * alle sample-genau bei `time` geplant.
    */
-  playNote(rootMidi, time, dur) {
+  playNote(rootMidi, time, dur, vel = 1) {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const offsets = CHORDS[this.chordType].offsets;
@@ -28941,7 +29208,7 @@ class PolySynth extends StepSequencedSynth {
       // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
       // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
       env.gain.setValueAtTime(0, time);
-      env.gain.linearRampToValueAtTime(headroom, time + p.attack);
+      env.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
       env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
       osc.connect(filter).connect(env).connect(this.output);
@@ -31307,7 +31574,7 @@ class FMSynth extends StepSequencedSynth {
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
-  playNote(midi, time, dur) {
+  playNote(midi, time, dur, vel = 1) {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const p = this.params;
@@ -31318,7 +31585,7 @@ class FMSynth extends StepSequencedSynth {
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     filter.connect(ampEnv).connect(this.output);
 
@@ -32289,7 +32556,7 @@ class KickSynth extends StepSequencedSynth {
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
-  playNote(midi, time) {
+  playNote(midi, time, _dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -32317,7 +32584,7 @@ class KickSynth extends StepSequencedSynth {
     // zum harten stop() bei 0.001 hängen und spränge dann abrupt auf 0
     // (hörbares Klicken, s. dsp.js#env/PercSynth).
     const amp = ctx.createGain();
-    amp.gain.setValueAtTime(1, time);
+    amp.gain.setValueAtTime(vel, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
     amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
 
@@ -32335,7 +32602,7 @@ class KickSynth extends StepSequencedSynth {
       hp.frequency.value = 1200;
       const ng = ctx.createGain();
       const clickDur = 0.006;
-      ng.gain.setValueAtTime(p.click, time);
+      ng.gain.setValueAtTime(p.click * vel, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + clickDur);
       ng.gain.linearRampToValueAtTime(0, time + clickDur + TAIL);
       n.connect(hp).connect(ng).connect(this.output);
@@ -32665,7 +32932,7 @@ class PsySynth extends StepSequencedSynth {
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
-  playNote(midi, time, dur) {
+  playNote(midi, time, dur, vel = 1) {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const p = this.params;
@@ -32678,7 +32945,7 @@ class PsySynth extends StepSequencedSynth {
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(headroom, time + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     note.filter.connect(ampEnv).connect(this.output);
 
@@ -32938,7 +33205,14 @@ class Modular extends StepSequencedSynth {
   /** Vom Sequenzer aufgerufen (s. StepSequencedSynth#onStep) -- ein
    *  Anschlag betrifft den GESAMTEN Patch (s. ModularPatch#triggerAll),
    *  nicht ein einzelnes Modul: der Oszillator setzt seine Tonhöhe, jede
-   *  Hüllkurve rampt ihre Kurve, beides gleichzeitig für denselben Ton. */
+   *  Hüllkurve rampt ihre Kurve, beides gleichzeitig für denselben Ton.
+   *  Bewusst OHNE vel-Argument (anders als die übrigen Synths): ein
+   *  Envelope-Modul ist hier frei verkabelbar (kann genauso gut Filter-
+   *  Cutoff oder LFO-Tiefe statt Lautstärke modulieren, s. envelope.trigger
+   *  in core/modular.js) -- ein pauschales Skalieren träfe je nach Patch
+   *  den falschen Zielparameter. Note-Länge (dur, aus dem neuen Piano-
+   *  Roll-Feld st.len) funktioniert trotzdem unverändert, da dur bereits
+   *  vorher durchgereicht wurde. */
   playNote(midi, time, dur) {
     time = engine.quantizeTime(time);
     this.pulse(time);

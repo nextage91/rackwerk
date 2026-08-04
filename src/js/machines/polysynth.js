@@ -104,7 +104,7 @@ export class PolySynth extends StepSequencedSynth {
    * Fire-and-forget-Voicing für den Sequenzer — eine Stimme pro Chord-Ton,
    * alle sample-genau bei `time` geplant.
    */
-  playNote(rootMidi, time, dur) {
+  playNote(rootMidi, time, dur, vel = 1) {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const offsets = CHORDS[this.chordType].offsets;
@@ -119,7 +119,7 @@ export class PolySynth extends StepSequencedSynth {
       // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
       // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
       env.gain.setValueAtTime(0, time);
-      env.gain.linearRampToValueAtTime(headroom, time + p.attack);
+      env.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
       env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
       osc.connect(filter).connect(env).connect(this.output);

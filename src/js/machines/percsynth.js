@@ -53,7 +53,7 @@ export class PercSynth extends StepSequencedSynth {
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
-  playNote(midi, time) {
+  playNote(midi, time, _dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -82,7 +82,7 @@ export class PercSynth extends StepSequencedSynth {
     // spränge dann abrupt auf 0 (hörbares Klicken, s. dsp.js#env).
     const TAIL = 0.05;
     const amp = ctx.createGain();
-    amp.gain.setValueAtTime(0.9, time);
+    amp.gain.setValueAtTime(0.9 * vel, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
     amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
     car.connect(amp).connect(this.output);
@@ -100,7 +100,7 @@ export class PercSynth extends StepSequencedSynth {
       bp.Q.value = 2;
       const ng = ctx.createGain();
       const nDur = Math.min(dur, 0.12);
-      ng.gain.setValueAtTime(0.8 * p.noiseMix, time);
+      ng.gain.setValueAtTime(0.8 * p.noiseMix * vel, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + nDur);
       ng.gain.linearRampToValueAtTime(0, time + nDur + TAIL);
       n.connect(bp).connect(ng).connect(this.output);

@@ -76,7 +76,7 @@ export class KickSynth extends StepSequencedSynth {
   }
 
   /* ---------- Stimme (fire-and-forget) ---------- */
-  playNote(midi, time) {
+  playNote(midi, time, _dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -104,7 +104,7 @@ export class KickSynth extends StepSequencedSynth {
     // zum harten stop() bei 0.001 hängen und spränge dann abrupt auf 0
     // (hörbares Klicken, s. dsp.js#env/PercSynth).
     const amp = ctx.createGain();
-    amp.gain.setValueAtTime(1, time);
+    amp.gain.setValueAtTime(vel, time);
     amp.gain.exponentialRampToValueAtTime(0.001, time + dur);
     amp.gain.linearRampToValueAtTime(0, time + dur + TAIL);
 
@@ -122,7 +122,7 @@ export class KickSynth extends StepSequencedSynth {
       hp.frequency.value = 1200;
       const ng = ctx.createGain();
       const clickDur = 0.006;
-      ng.gain.setValueAtTime(p.click, time);
+      ng.gain.setValueAtTime(p.click * vel, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + clickDur);
       ng.gain.linearRampToValueAtTime(0, time + clickDur + TAIL);
       n.connect(hp).connect(ng).connect(this.output);

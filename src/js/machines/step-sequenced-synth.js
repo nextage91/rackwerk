@@ -34,7 +34,7 @@ export class StepSequencedSynth extends Machine {
    *  emptySlot, real reproduziert: "Receiver must be an instance of
    *  class ..."). */
   emptyPattern(len = 16) {
-    return Array.from({ length: len }, () => ({ on: false, midi: this.constructor.DEFAULT_MIDI }));
+    return Array.from({ length: len }, () => ({ on: false, midi: this.constructor.DEFAULT_MIDI, vel: 1, len: 1 }));
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -99,8 +99,13 @@ export class StepSequencedSynth extends Machine {
     const st = this.pattern[idx];
     // dur-Argument wird von playNote()-Implementierungen ohne Halte-Dauer
     // (z. B. PercSynth, deren Hüllkurve rein aus params.decay kommt) einfach
-    // ignoriert — kein Sonderfall pro Unterklasse nötig.
-    if (st.on) this.playNote(st.midi, t, transport.stepDuration * 0.8);
+    // ignoriert — kein Sonderfall pro Unterklasse nötig. dur skaliert jetzt
+    // mit st.len (Piano-Roll-Notenlänge in Steps, Default 1 -- alte
+    // Projekte ohne dieses Feld verhalten sich unverändert wie zuvor).
+    // vel (0..1, Default 1) reicht die Anschlagsstärke durch; playNote()-
+    // Implementierungen ohne eigenes vel-Argument ignorieren das zusätzliche
+    // Argument einfach (z. B. Modular, s. dortiger Kommentar).
+    if (st.on) this.playNote(st.midi, t, transport.stepDuration * ((st.len ?? 1) - 0.2), st.vel ?? 1);
   }
 
   onTransport(event) {

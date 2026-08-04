@@ -83,7 +83,7 @@ export class SubSynth extends StepSequencedSynth {
    * Fire-and-forget-Stimme für den Sequenzer — sample-genau bei `time`
    * geplant, unabhängig von den gehaltenen Keybed-Stimmen.
    */
-  playNote(midi, time, dur) {
+  playNote(midi, time, dur, vel = 1) {
     time = engine.quantizeTime(time); // konsistente Block-Ausrichtung
     this.pulse(time);
     const ctx = engine.ctx;
@@ -108,7 +108,7 @@ export class SubSynth extends StepSequencedSynth {
     // bei kurzen Sequenzer-Schritten nur wirkungslos (Chat: "kann es sein
     // das der attack wert der envelope mit bis max. 1s zu tief ist").
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM, time + p.attack);
+    env.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filter).connect(env).connect(this.output);
