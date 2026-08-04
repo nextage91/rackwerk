@@ -15,7 +15,7 @@
  */
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
-import { noise } from './dsp.js';
+import { noise, ensureSimpleWorklet, simpleWorkletReady } from './dsp.js';
 import { ONEPOLE_WORKLET_SRC } from './onepole-worklet.js';
 import { SVF_WORKLET_SRC } from './svf-worklet.js';
 import { RESONATOR_PROCESSOR_NAME, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, RESONATOR_WORKLET_SRC } from './resonator-worklet.js';
@@ -24,6 +24,7 @@ import { FREQSHIFT_WORKLET_SRC } from './freqshift-worklet.js';
 import { BEATREPEAT_WORKLET_SRC } from './beatrepeat-worklet.js';
 import { BITCRUSH_WORKLET_SRC } from './bitcrush-worklet.js';
 import { PITCHTRACK_WORKLET_SRC } from './pitchtrack-worklet.js';
+import { TRUEPEAK_LIMITER_WORKLET_SRC } from './truepeak-limiter-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -133,6 +134,12 @@ const dbToLin = (db) => Math.pow(10, db / 20);
  *  kompensierter Wert ist immer näher an richtig als gar keiner. */
 const DYNAMICS_COMPRESSOR_LATENCY_SEC = 0.006;
 const WAVESHAPER_4X_LATENCY_SEC = 0.004;
+// Exakter (nicht gemessener, sondern selbst gewählter) Lookahead des neuen
+// True-Peak-Limiters, s. truepeak-limiter-worklet.js#LOOKAHEAD_MS -- anders
+// als die beiden Werte oben (die tatsächlich BEOBACHTETES, "implementation-
+// defined" Browser-Verhalten sind) ist das hier eine reine DESIGN-Grösse,
+// die wir selbst festlegen, deshalb hier exakt statt gemessen.
+const TRUEPEAK_LIMITER_LATENCY_SEC = 0.003;
 
 /** Grundverzögerung des Tape-Machine-Wow/Flutter-Delays (s. DEFS.tape) --
  *  liegt konstant im Wet-Pfad an, unabhängig vom wowFlutter-Reglerstand
@@ -317,37 +324,6 @@ function createResonatorNode(ctx) {
   });
 }
 
-/** Generisches Lazy-Ladeschema für die drei einfachen Hand-geschriebenen
- *  Worklets unten (Gate/Frequenzschieber/Beat-Repeat) -- dasselbe Muster
- *  wie ensureOnePoleWorklet, aber ohne WASM-Kompilierschritt (reines JS,
- *  kein Faust-Build nötig). EIN gemeinsamer Cache (Map von Prozessorname
- *  auf Promise) statt drei fast identischer Funktionen. */
-const simpleWorkletPromises = new Map();
-const simpleWorkletReadyFlags = new Map();
-function ensureSimpleWorklet(ctx, processorName, src) {
-  if (!simpleWorkletPromises.has(processorName)) {
-    let promise;
-    if (!ctx.audioWorklet) {
-      promise = Promise.resolve(false);
-    } else {
-      const blob = new Blob([src], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      promise = ctx.audioWorklet.addModule(url)
-        .then(() => { URL.revokeObjectURL(url); simpleWorkletReadyFlags.set(processorName, true); return true; })
-        .catch((err) => {
-          URL.revokeObjectURL(url);
-          console.error(`Worklet-Modul "${processorName}" konnte nicht geladen werden -- betroffener Effekt bleibt transparent.`, err);
-          return false;
-        });
-    }
-    simpleWorkletPromises.set(processorName, promise);
-  }
-  return simpleWorkletPromises.get(processorName);
-}
-function simpleWorkletReady(processorName) {
-  return simpleWorkletReadyFlags.get(processorName) === true;
-}
-
 /** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
  *  für den Reverb-Tank und die Resonator-Delaylines -- bewusst NICHT der
  *  naheliegende ctx.createBiquadFilter(): ein 2-poliger Biquad-Tiefpass
@@ -492,6 +468,68 @@ export function makeSweepFilter(ctx, { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz })
     },
     dispose() {
       disposed = true;
+      input.disconnect();
+      output.disconnect();
+      node?.disconnect();
+    },
+  };
+}
+
+/** Lookahead-Limiter mit echter Inter-Sample-Peak-Erkennung (s.
+ *  truepeak-limiter-worklet.js für die vollständige Begründung/Architektur)
+ *  -- ersetzt die alte reine DynamicsCompressorNode-Fassung von DEFS.limiter.
+ *  Gleiches "transparenter Passthrough, bis der Worklet geladen ist"-Muster
+ *  wie makeSweepFilter oben. getReductionDb() liefert NICHT live vom Audio-
+ *  Thread (kein synchroner Zugriff möglich), sondern den zuletzt per
+ *  port.postMessage() gemeldeten Wert (Worklet meldet alle 512 Samples,
+ *  s. dort) -- für eine Anzeige-Meter-Aktualisierung (typischerweise per
+ *  requestAnimationFrame, ~60fps) mehr als ausreichend fein aufgelöst. */
+export function makeTruePeakLimiter(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let node = null;
+  let disposed = false;
+  let ceiling = -0.5;
+  let release = 0.05;
+  let lastReductionDb = 0;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-truepeak-limiter', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+    });
+    node.parameters.get('ceiling').value = ceiling;
+    node.parameters.get('release').value = release;
+    node.port.onmessage = (e) => { lastReductionDb = e.data.reductionDb; };
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-truepeak-limiter')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-truepeak-limiter', TRUEPEAK_LIMITER_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    setCeiling(v, t, timeConstant) {
+      ceiling = v;
+      node?.parameters.get('ceiling').setTargetAtTime(v, t, timeConstant);
+    },
+    setRelease(v, t, timeConstant) {
+      release = v;
+      node?.parameters.get('release').setTargetAtTime(v, t, timeConstant);
+    },
+    getReductionDb() { return lastReductionDb; },
+    dispose() {
+      disposed = true;
+      if (node) node.port.onmessage = null;
       input.disconnect();
       output.disconnect();
       node?.disconnect();
@@ -2526,16 +2564,18 @@ const DEFS = {
   },
   limiter: {
     name: 'Limiter',
-    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
-    // Kommentar bei DEFS.comp.latencySec.
-    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
+    // Fester, selbst gewählter Lookahead des True-Peak-Limiters (s.
+    // TRUEPEAK_LIMITER_LATENCY_SEC oben) statt des vorherigen
+    // DynamicsCompressorNode-Lookaheads.
+    latencySec: TRUEPEAK_LIMITER_LATENCY_SEC,
     // Bewusst NICHT dieselbe Rolle wie engine.limiter (audio-engine.js) --
     // jener ist ein unsichtbares App-weites Sicherheitsnetz direkt vor
     // ctx.destination, nie eingestellt/gesehen. Dieser Insert ist ein
     // bewusst eingesetztes, sichtbares Mastering-Werkzeug (klassischer
-    // "Brickwall"-Loudness-Limiter): schnellerer, fester Attack und härterer,
-    // fester Knee als der 1176-Style-Compressor oben (der stattdessen
-    // Ratio-MODI statt eines Ceilings anbietet).
+    // "Brickwall"-Loudness-Limiter mit ECHTER Inter-Sample-Peak-Erkennung,
+    // s. truepeak-limiter-worklet.js -- ein reiner Sample-Peak-Limiter kann
+    // hart geclipptes/hochfrequenzreiches Material unangetastet durchlassen,
+    // obwohl dessen rekonstruierter Peak beim Playback über 0dBFS liegt).
     defaults: { inputGain: 0, ceiling: -0.5, release: 0.05, mix: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -2546,25 +2586,18 @@ const DEFS = {
 
       const inputGain = ctx.createGain();
       inputGain.gain.value = dbToLin(p.inputGain);
-      const ATTACK = 0.001;
-      const RATIO = 20;
-      const KNEE = 0;
-      const node = ctx.createDynamicsCompressor();
-      node.attack.value = ATTACK;
-      node.ratio.value = RATIO;
-      node.knee.value = KNEE;
-      node.release.value = p.release;
-      node.threshold.value = p.ceiling;
+      const limiter = makeTruePeakLimiter(ctx);
+      limiter.setCeiling(p.ceiling, ctx.currentTime, 0);
+      limiter.setRelease(p.release, ctx.currentTime, 0);
 
-      // Kompensiert den Lookahead von node oben (s.
-      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- sonst käme die trockene Kopie
-      // ~6ms VOR der limitierten an, beim Mischen (mix<1) ein hörbares
-      // Kammfilter-"Phasing", am stärksten um mix=0.5.
-      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      // Kompensiert den Lookahead des Limiters (s. TRUEPEAK_LIMITER_LATENCY_SEC)
+      // -- sonst käme die trockene Kopie VOR der limitierten an, beim Mischen
+      // (mix<1) ein hörbares Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, TRUEPEAK_LIMITER_LATENCY_SEC);
       input.connect(dryDelay).connect(dry);
       input.connect(inputGain);
-      inputGain.connect(node);
-      node.connect(wet);
+      inputGain.connect(limiter.input);
+      limiter.output.connect(wet);
       const outSum = ctx.createGain();
       dry.connect(outSum);
       wet.connect(outSum);
@@ -2574,17 +2607,17 @@ const DEFS = {
         setParam(key, v) {
           const t = engine.now;
           if (key === 'inputGain') inputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
-          else if (key === 'ceiling') node.threshold.setTargetAtTime(v, t, 0.01);
-          else if (key === 'release') node.release.setTargetAtTime(v, t, 0.01);
+          else if (key === 'ceiling') limiter.setCeiling(v, t, 0.01);
+          else if (key === 'release') limiter.setRelease(v, t, 0.01);
           else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
-        getReductionDb() { return node.reduction ?? 0; },
+        getReductionDb() { return limiter.getReductionDb(); },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          dryDelay.disconnect(); inputGain.disconnect(); node.disconnect();
+          dryDelay.disconnect(); inputGain.disconnect(); limiter.dispose();
         },
       };
     },
