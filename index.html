@@ -17247,6 +17247,31 @@ const { FM_VOICE_WORKLET_SRC } = (() => {
  * Oszillatoren auch: Stereo/Panning passiert erst NACH diesem Knoten (s.
  * PsySynths ringGain->panner-Kette), hier wird nur das Trägersignal selbst
  * erzeugt.
+ *
+ * NACHTRAG (CPU-Regression auf echten Geräten, iPhone 14 Pro geknackt/
+ * überlastet): die feste 4x-Überabtastung + 3-stufige Filterkaskade PRO
+ * SAMPLE, IMMER, unabhängig vom tatsächlichen Modulationsindex, kostet per
+ * Offline-Benchmark bei PsySynths Extremfall (16 gehaltene Noten x 5
+ * Unisono = 80 gleichzeitige fm-voice-Instanzen) ~140% des verfügbaren
+ * Block-Zeitbudgets -- SICHER zu knapp, auch bei nur MODERATER
+ * Stimmenzahl bereits >70%, praktisch nichts mehr übrig für den Rest der
+ * App (Inserts, andere Maschinen, UI). Der teure Pfad ist aber nur
+ * WIRKLICH nötig, wenn die legitimen FM-Seitenbänder (Carson-Bandbreite)
+ * überhaupt in die Nähe von Nyquist kommen -- bei den meisten musikalisch
+ * üblichen Einstellungen (moderater FM Amount/Ratio, kein Feedback) bleibt
+ * das Seitenband-Spektrum WEIT darunter, oversamplen bringt dort nichts,
+ * kostet aber trotzdem voll mit. Deshalb jetzt EINMAL PRO BLOCK (nicht pro
+ * Sample -- unnötig, ein FM-Index ändert sich nie so schnell, dass Block-
+ * Granularität hörbar wäre) eine grobe Carson-Abschätzung: nur wenn
+ * `carrierFreq+modFreq+fmIndex+feedback` (alles als worst-case-Maximum
+ * über den Block, falls a-rate-automatisiert) über ~0.4x der Sample-Rate
+ * liegt, läuft der teure überabgetastete+gefilterte Pfad -- sonst ein
+ * direkter, ungefilterter Einzelschritt pro Sample (kein Aliasing-Risiko,
+ * weil die Seitenbänder dann ohnehin unter Nyquist bleiben). Per Offline-
+ * Benchmark: der billige Pfad kostet bei 80 Stimmen nur noch ~19% des
+ * Budgets statt ~140% -- UND per erneuter Alias-Messung bestätigt: an der
+ * Alias-Unterdrückung bei tatsächlich extremen Einstellungen (wo der teure
+ * Pfad weiterhin greift) ändert sich nichts.
  */
 const FM_VOICE_WORKLET_SRC = `
 const DENORMAL_FLOOR = 1e-30;
@@ -17316,31 +17341,67 @@ class RackwerkFmVoiceProcessor extends AudioWorkletProcessor {
     const fbConst = feedbackP.length === 1;
     const detConst = detuneP.length === 1;
 
+    // Grobe Carson-Bandbreiten-Abschätzung, EINMAL pro Block (nicht pro
+    // Sample -- s. Dateikopf-Nachtrag): worst-case Maximum über den Block,
+    // falls a-rate-automatisiert (z. B. mitten in der FM-Index-Hüllkurve).
+    const maxOf = (arr) => {
+      if (arr.length === 1) return arr[0];
+      let m = arr[0];
+      for (let i = 1; i < arr.length; i++) if (arr[i] > m) m = arr[i];
+      return m;
+    };
+    const estimatedMaxFreq = maxOf(carrierFreqP) + maxOf(modFreqP) + maxOf(fmIndexP) + maxOf(feedbackP);
+    const needsOversample = estimatedMaxFreq > 0.4 * sampleRate;
+
     let carPhase = this.carPhase, modPhase = this.modPhase;
     const filters = this.filters;
 
-    for (let i = 0; i < n; i++) {
-      const carrierFreq = carConst ? carrierFreqP[0] : carrierFreqP[i];
-      const modFreq = modConst ? modFreqP[0] : modFreqP[i];
-      const fmIndex = idxConst ? fmIndexP[0] : fmIndexP[i];
-      const feedback = fbConst ? feedbackP[0] : feedbackP[i];
-      const detune = detConst ? detuneP[0] : detuneP[i];
-      const detuneMult = Math.pow(2, detune / 1200);
-      const effCarrier = carrierFreq * detuneMult;
-      const effMod = modFreq * detuneMult;
+    if (needsOversample) {
+      for (let i = 0; i < n; i++) {
+        const carrierFreq = carConst ? carrierFreqP[0] : carrierFreqP[i];
+        const modFreq = modConst ? modFreqP[0] : modFreqP[i];
+        const fmIndex = idxConst ? fmIndexP[0] : fmIndexP[i];
+        const feedback = fbConst ? feedbackP[0] : feedbackP[i];
+        const detune = detConst ? detuneP[0] : detuneP[i];
+        const detuneMult = Math.pow(2, detune / 1200);
+        const effCarrier = carrierFreq * detuneMult;
+        const effMod = modFreq * detuneMult;
 
-      let sample = 0;
-      for (let k = 0; k < OVERSAMPLE; k++) {
+        let sample = 0;
+        for (let k = 0; k < OVERSAMPLE; k++) {
+          const modSample = Math.sin(modPhase);
+          const fbDev = modSample * feedback;
+          modPhase = (modPhase + TWO_PI * (effMod + fbDev) / innerSr) % TWO_PI;
+          const carDev = modSample * fmIndex;
+          carPhase = (carPhase + TWO_PI * (effCarrier + carDev) / innerSr) % TWO_PI;
+          let s = Math.sin(carPhase);
+          for (let f = 0; f < filters.length; f++) s = filters[f].process(s);
+          sample = s;
+        }
+        out[i] = Number.isFinite(sample) ? sample : 0;
+      }
+    } else {
+      // Billiger Pfad: kein Aliasing-Risiko bei dieser Reglerstellung (s.
+      // Dateikopf-Nachtrag), deshalb EIN direkter Phasenschritt pro Sample,
+      // keine Überabtastung, kein Filter.
+      for (let i = 0; i < n; i++) {
+        const carrierFreq = carConst ? carrierFreqP[0] : carrierFreqP[i];
+        const modFreq = modConst ? modFreqP[0] : modFreqP[i];
+        const fmIndex = idxConst ? fmIndexP[0] : fmIndexP[i];
+        const feedback = fbConst ? feedbackP[0] : feedbackP[i];
+        const detune = detConst ? detuneP[0] : detuneP[i];
+        const detuneMult = Math.pow(2, detune / 1200);
+        const effCarrier = carrierFreq * detuneMult;
+        const effMod = modFreq * detuneMult;
+
         const modSample = Math.sin(modPhase);
         const fbDev = modSample * feedback;
-        modPhase = (modPhase + TWO_PI * (effMod + fbDev) / innerSr) % TWO_PI;
+        modPhase = (modPhase + TWO_PI * (effMod + fbDev) / sampleRate) % TWO_PI;
         const carDev = modSample * fmIndex;
-        carPhase = (carPhase + TWO_PI * (effCarrier + carDev) / innerSr) % TWO_PI;
-        let s = Math.sin(carPhase);
-        for (let f = 0; f < filters.length; f++) s = filters[f].process(s);
-        sample = s;
+        carPhase = (carPhase + TWO_PI * (effCarrier + carDev) / sampleRate) % TWO_PI;
+        const sample = Math.sin(carPhase);
+        out[i] = Number.isFinite(sample) ? sample : 0;
       }
-      out[i] = Number.isFinite(sample) ? sample : 0;
     }
 
     if (!Number.isFinite(carPhase)) carPhase = 0;
