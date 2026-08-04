@@ -31,7 +31,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz } from '../core/dsp.js';
+import { midiToHz, makeFmVoice } from '../core/dsp.js';
 
 /** Headroom pro Unisono-Einzelstimme, zusätzlich durch Wurzel(Stimmenzahl)
  *  geteilt (s. PolySynth für dieselbe Konvention) -- niedriger als
@@ -135,32 +135,27 @@ export class PsySynth extends StepSequencedSynth {
     this.pattern = this.patterns[0];
   }
 
-  /** Eine einzelne Unisono-Kopie (Carrier+Modulator+Ring, alle drei mit
-   *  demselben statischen Detune-Versatz, s. Dateikopf-Kommentar) -- baut
-   *  den Knoten-Graphen OHNE die zeitabhängige FM-/Amp-Automation zu planen
-   *  (dieselbe Aufteilung wie FMSynths #buildVoice). `pan` ist die feste
-   *  Unisono-Stereoposition, NICHT die Swirl-Pan-Modulation (die kommt on
-   *  top über panDepthGain, s. #connectSwirl). */
+  /** Eine einzelne Unisono-Kopie (Carrier+Modulator als EIN überabgetastetes
+   *  fm-voice-Worklet, s. core/dsp.js#makeFmVoice/core/fm-voice-worklet.js --
+   *  vermeidet das per Messung bestätigte Aliasing der früheren zwei
+   *  nativen Carrier/Modulator-OscillatorNodes, s. tools/dsp-tests/
+   *  fm-aliasing-measurement.mjs -- plus Ring, weiterhin nativ (Ring-
+   *  Modulation zeigte in derselben Messung KEIN relevantes Aliasing).
+   *  Carrier UND Modulator teilen sich EIN gemeinsames `detune`-Param (statt
+   *  vorher zwei separat verbundener), baut den Knoten-Graphen OHNE die
+   *  zeitabhängige FM-/Amp-Automation zu planen (dieselbe Aufteilung wie
+   *  FMSynths #buildVoice). `pan` ist die feste Unisono-Stereoposition,
+   *  NICHT die Swirl-Pan-Modulation (die kommt on top über panDepthGain,
+   *  s. #connectSwirl). */
   #buildSubVoice(carrierFreq, detuneCents, pan) {
     const ctx = engine.ctx;
     const p = this.params;
 
-    const car = ctx.createOscillator();
-    car.type = 'sine';
-    car.frequency.value = carrierFreq;
-    car.detune.value = detuneCents;
-
-    const mod = ctx.createOscillator();
-    mod.type = 'sine';
-    mod.frequency.value = Math.max(0.01, carrierFreq * p.ratio);
-    mod.detune.value = detuneCents;
-
-    const modGain = ctx.createGain();
-    mod.connect(modGain).connect(car.frequency);
-
-    const fbGain = ctx.createGain();
-    fbGain.gain.value = p.feedback * FEEDBACK_SCALE;
-    mod.connect(fbGain).connect(mod.frequency);
+    const fm = makeFmVoice(ctx);
+    fm.carrierFreq.value = carrierFreq;
+    fm.modFreq.value = Math.max(0.01, carrierFreq * p.ratio);
+    fm.feedback.value = p.feedback * FEEDBACK_SCALE;
+    fm.detune.value = detuneCents;
 
     // Ringmodulation: `ring` treibt NICHT den Eingang von ringGain, sondern
     // dessen gain-Param -- eine GainNode multipliziert ihren Eingang pro
@@ -179,13 +174,13 @@ export class PsySynth extends StepSequencedSynth {
     const ringDepthGain = ctx.createGain();
     ringDepthGain.gain.value = p.ringAmount;
     ring.connect(ringDepthGain).connect(ringGain.gain);
-    car.connect(ringGain);
+    fm.output.connect(ringGain);
 
     const panner = ctx.createStereoPanner();
     panner.pan.value = pan;
     ringGain.connect(panner);
 
-    return { car, mod, modGain, fbGain, ring, ringGain, ringDepthGain, panner };
+    return { fm, ring, ringGain, ringDepthGain, panner };
   }
 
   /** FM-Index-Hüllkurve -- identisch zu FMSynth#applyFmEnv (s. dortigen
@@ -196,20 +191,19 @@ export class PsySynth extends StepSequencedSynth {
     const modFreq = Math.max(0.01, carrierFreq * p.ratio);
     const peak = (p.fmAmount + p.fmEnv) * FM_INDEX_SCALE * modFreq;
     const sustain = p.fmAmount * FM_INDEX_SCALE * modFreq;
-    subVoice.modGain.gain.setValueAtTime(peak, t);
-    subVoice.modGain.gain.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
+    subVoice.fm.fmIndex.setValueAtTime(peak, t);
+    subVoice.fm.fmIndex.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
   }
 
   /** Verbindet die drei Swirl-LFOs mit einer neu gebauten Note -- Pitch auf
-   *  Carrier/Modulator/Ring JEDER Unisono-Kopie (FM-Verhältnis bleibt beim
-   *  Vibrato-Schweben erhalten), Pan auf JEDE Kopie einzeln (addiert sich
-   *  auf deren feste Unisono-Position), Filter EINMAL auf den gemeinsamen
-   *  Bus-Filter (s. Dateikopf-Kommentar: der Filter ist geteilt, nicht pro
-   *  Unisono-Kopie). */
+   *  Carrier+Modulator (EIN gemeinsames fm.detune, s. #buildSubVoice) UND
+   *  Ring JEDER Unisono-Kopie (FM-Verhältnis bleibt beim Vibrato-Schweben
+   *  erhalten), Pan auf JEDE Kopie einzeln (addiert sich auf deren feste
+   *  Unisono-Position), Filter EINMAL auf den gemeinsamen Bus-Filter (s.
+   *  Dateikopf-Kommentar: der Filter ist geteilt, nicht pro Unisono-Kopie). */
   #connectSwirl(note) {
     for (const sv of note.subVoices) {
-      this.pitchDepthGain.connect(sv.car.detune);
-      this.pitchDepthGain.connect(sv.mod.detune);
+      this.pitchDepthGain.connect(sv.fm.detune);
       this.pitchDepthGain.connect(sv.ring.detune);
       this.panDepthGain.connect(sv.panner.pan);
     }
@@ -218,14 +212,13 @@ export class PsySynth extends StepSequencedSynth {
 
   /** Gegenstück zu #connectSwirl -- MUSS vorm endgültigen Verwerfen einer
    *  Note laufen: die geteilten Depth-Gains sind die QUELLE dieser
-   *  Verbindungen, `sv.car.disconnect()` (Ziel-seitig) räumt sie NICHT mit
-   *  auf (Web-Audio-Verbindungen trennt man von der Quelle aus). Ohne das
-   *  blieben pro Note vier verwaiste Verbindungen an den geteilten,
-   *  dauerhaft laufenden LFO-Gains hängen. */
+   *  Verbindungen, `sv.fm.dispose()` (Ziel-seitig) räumt sie NICHT mit auf
+   *  (Web-Audio-Verbindungen trennt man von der Quelle aus). Ohne das
+   *  blieben pro Note verwaiste Verbindungen an den geteilten, dauerhaft
+   *  laufenden LFO-Gains hängen. */
   #disconnectSwirl(note) {
     for (const sv of note.subVoices) {
-      this.pitchDepthGain.disconnect(sv.car.detune);
-      this.pitchDepthGain.disconnect(sv.mod.detune);
+      this.pitchDepthGain.disconnect(sv.fm.detune);
       this.pitchDepthGain.disconnect(sv.ring.detune);
       this.panDepthGain.disconnect(sv.panner.pan);
     }
@@ -276,8 +269,7 @@ export class PsySynth extends StepSequencedSynth {
   #teardownNote(note) {
     this.#disconnectSwirl(note);
     for (const sv of note.subVoices) {
-      sv.car.disconnect(); sv.mod.disconnect(); sv.ring.disconnect();
-      sv.modGain.disconnect(); sv.fbGain.disconnect();
+      sv.fm.dispose(); sv.ring.disconnect();
       sv.ringGain.disconnect(); sv.ringDepthGain.disconnect(); sv.panner.disconnect();
     }
     note.noteBus.disconnect();
@@ -305,10 +297,10 @@ export class PsySynth extends StepSequencedSynth {
 
     const stopAt = time + dur + p.release + 0.1;
     for (const sv of note.subVoices) {
-      sv.car.start(time); sv.mod.start(time); sv.ring.start(time);
-      sv.car.stop(stopAt); sv.mod.stop(stopAt); sv.ring.stop(stopAt);
+      sv.ring.start(time);
+      sv.fm.stop(stopAt); sv.ring.stop(stopAt);
     }
-    note.subVoices[0].car.onended = () => this.#teardownNote(note);
+    note.subVoices[0].fm.onended = () => this.#teardownNote(note);
   }
 
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
@@ -334,7 +326,7 @@ export class PsySynth extends StepSequencedSynth {
     ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM / Math.sqrt(n), t + p.attack);
     note.filter.connect(ampEnv).connect(this.output);
 
-    for (const sv of note.subVoices) { sv.car.start(t); sv.mod.start(t); sv.ring.start(t); }
+    for (const sv of note.subVoices) { sv.ring.start(t); }
     this.voices.set(midi, note);
   }
 
@@ -349,8 +341,8 @@ export class PsySynth extends StepSequencedSynth {
     note.ampEnv.gain.cancelScheduledValues(t);
     note.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;
-    for (const sv of note.subVoices) { sv.car.stop(stopAt); sv.mod.stop(stopAt); sv.ring.stop(stopAt); }
-    note.subVoices[0].car.onended = () => this.#teardownNote(note);
+    for (const sv of note.subVoices) { sv.fm.stop(stopAt); sv.ring.stop(stopAt); }
+    note.subVoices[0].fm.onended = () => this.#teardownNote(note);
   }
 
   allNotesOff() {
@@ -427,7 +419,7 @@ export class PsySynth extends StepSequencedSynth {
       // Bezug zu einzelnen Notenanschlägen) ziehen live nach.
       if (key === 'feedback') {
         for (const note of this.voices.values()) {
-          for (const sv of note.subVoices) sv.fbGain.gain.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
+          for (const sv of note.subVoices) sv.fm.feedback.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
         }
       } else if (key === 'cutoff') {
         for (const note of this.voices.values()) note.filter.frequency.setTargetAtTime(val, t, 0.01);

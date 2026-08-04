@@ -41,7 +41,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz } from '../core/dsp.js';
+import { midiToHz, makeFmVoice } from '../core/dsp.js';
 
 /** Headroom pro Stimme -- wie SubSynth/PolySynth (dort ausführlich gegen
  *  den Rest des Kits austariert): eine gehaltene Note braucht Kopfraum,
@@ -95,7 +95,7 @@ export class FMSynth extends StepSequencedSynth {
       release: 0.4,
       volume: 0.7,
     };
-    /** aktive Stimmen: midi → {car, mod, modGain, fbGain, filter, ampEnv} */
+    /** aktive Stimmen: midi → {fm, filter, ampEnv} */
     this.voices = new Map();
     this.output.gain.value = this.params.volume;
 
@@ -124,47 +124,38 @@ export class FMSynth extends StepSequencedSynth {
     const carrierFreq = midiToHz(midi);
     const modFreq = this.#modFreqFor(carrierFreq);
 
-    const car = ctx.createOscillator();
-    car.type = 'sine';
-    car.frequency.value = carrierFreq;
-
-    const mod = ctx.createOscillator();
-    mod.type = 'sine';
-    mod.frequency.value = Math.max(0.01, modFreq);
-
-    // FM-Index-Gain: der Modulator-Ausgang (Amplitude ±1) wird auf einen
-    // Frequenzhub skaliert und direkt auf car.frequency addiert -- die
-    // Gain-AUTOMATION (Peak->Sustain-Hüllkurve) übernimmt applyFmEnv() bei
-    // jedem Aufrufer separat, hier nur die Verkabelung.
-    const modGain = ctx.createGain();
-    mod.connect(modGain).connect(car.frequency);
-
+    // Überabgetastete FM-Stimme (Carrier+Modulator+Feedback in EINEM
+    // Worklet-Knoten, s. core/dsp.js#makeFmVoice) statt der früheren zwei
+    // nativen OscillatorNodes -- vermeidet das per Messung bestätigte
+    // Aliasing bei hohem Modulationsindex (s. tools/dsp-tests/
+    // fm-aliasing-measurement.mjs).
+    const fm = makeFmVoice(ctx);
+    fm.carrierFreq.value = carrierFreq;
+    fm.modFreq.value = Math.max(0.01, modFreq);
     // Feedback: der Modulator wirkt zusätzlich auf SEINE EIGENE Frequenz
-    // zurück (fester Gain, keine eigene Hüllkurve -- Feedback ist ein
+    // zurück (fester Wert, keine eigene Hüllkurve -- Feedback ist ein
     // Klangfarbe-Regler, kein Anschlags-Element).
-    const fbGain = ctx.createGain();
-    fbGain.gain.value = p.feedback * FEEDBACK_SCALE;
-    mod.connect(fbGain).connect(mod.frequency);
+    fm.feedback.value = p.feedback * FEEDBACK_SCALE;
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = p.cutoff;
     filter.Q.value = p.resonance;
-    car.connect(filter);
+    fm.output.connect(filter);
 
-    return { car, mod, modGain, fbGain, filter, carrierFreq, modFreq };
+    return { fm, filter, carrierFreq, modFreq };
   }
 
   /** FM-Index-Hüllkurve: startet bei (fmAmount+fmEnv), fällt exponentiell
    *  auf den Sustain-Wert fmAmount zurück -- derselbe Peak->Sustain-Ansatz
    *  wie dsp.js#applyFilterEnv, nur auf den Modulationsindex statt eine
    *  Filterfrequenz angewandt (s. Dateikopf-Kommentar fürs "Warum"). */
-  #applyFmEnv(modGain, modFreq, t) {
+  #applyFmEnv(fm, modFreq, t) {
     const p = this.params;
     const peak = (p.fmAmount + p.fmEnv) * FM_INDEX_SCALE * modFreq;
     const sustain = p.fmAmount * FM_INDEX_SCALE * modFreq;
-    modGain.gain.setValueAtTime(peak, t);
-    modGain.gain.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
+    fm.fmIndex.setValueAtTime(peak, t);
+    fm.fmIndex.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
@@ -172,8 +163,8 @@ export class FMSynth extends StepSequencedSynth {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const p = this.params;
-    const { car, mod, modGain, fbGain, filter, modFreq } = this.#buildVoice(midi, time);
-    this.#applyFmEnv(modGain, modFreq, time);
+    const { fm, filter, modFreq } = this.#buildVoice(midi, time);
+    this.#applyFmEnv(fm, modFreq, time);
 
     const ampEnv = engine.ctx.createGain();
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
@@ -184,9 +175,8 @@ export class FMSynth extends StepSequencedSynth {
     filter.connect(ampEnv).connect(this.output);
 
     const stopAt = time + dur + p.release + 0.1;
-    car.start(time); mod.start(time);
-    car.stop(stopAt); mod.stop(stopAt);
-    car.onended = () => { car.disconnect(); mod.disconnect(); modGain.disconnect(); fbGain.disconnect(); filter.disconnect(); ampEnv.disconnect(); };
+    fm.stop(stopAt);
+    fm.onended = () => { fm.dispose(); filter.disconnect(); ampEnv.disconnect(); };
   }
 
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
@@ -203,16 +193,15 @@ export class FMSynth extends StepSequencedSynth {
     }
     const t = engine.ctx.currentTime;
     const p = this.params;
-    const { car, mod, modGain, fbGain, filter, modFreq } = this.#buildVoice(midi, t);
-    this.#applyFmEnv(modGain, modFreq, t);
+    const { fm, filter, modFreq } = this.#buildVoice(midi, t);
+    this.#applyFmEnv(fm, modFreq, t);
 
     const ampEnv = engine.ctx.createGain();
     ampEnv.gain.setValueAtTime(0, t);
     ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
     filter.connect(ampEnv).connect(this.output);
 
-    car.start(t); mod.start(t);
-    this.voices.set(midi, { car, mod, modGain, fbGain, filter, ampEnv, modFreq });
+    this.voices.set(midi, { fm, filter, ampEnv, modFreq });
   }
 
   /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
@@ -226,8 +215,8 @@ export class FMSynth extends StepSequencedSynth {
     v.ampEnv.gain.cancelScheduledValues(t);
     v.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;
-    v.car.stop(stopAt); v.mod.stop(stopAt);
-    v.car.onended = () => { v.car.disconnect(); v.mod.disconnect(); v.modGain.disconnect(); v.fbGain.disconnect(); v.filter.disconnect(); v.ampEnv.disconnect(); };
+    v.fm.stop(stopAt);
+    v.fm.onended = () => { v.fm.dispose(); v.filter.disconnect(); v.ampEnv.disconnect(); };
   }
 
   allNotesOff() {
@@ -286,7 +275,7 @@ export class FMSynth extends StepSequencedSynth {
       // deshalb ohne Widerspruch live nachziehen.
       if (key === 'feedback') {
         const t = engine.ctx.currentTime;
-        for (const v of this.voices.values()) v.fbGain.gain.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
+        for (const v of this.voices.values()) v.fm.feedback.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
       }
     });
     container.appendChild(opRow);
