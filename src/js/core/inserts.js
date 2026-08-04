@@ -25,6 +25,7 @@ import { BEATREPEAT_WORKLET_SRC } from './beatrepeat-worklet.js';
 import { BITCRUSH_WORKLET_SRC } from './bitcrush-worklet.js';
 import { PITCHTRACK_WORKLET_SRC } from './pitchtrack-worklet.js';
 import { TRUEPEAK_LIMITER_WORKLET_SRC } from './truepeak-limiter-worklet.js';
+import { OPTO_WORKLET_SRC } from './opto-worklet.js';
 
 /** Linear-zu-Tanh-Blend statt eines reinen Tanh-Shapers: bei amount=0 ist
  *  die Kurve exakte Identität (Drive komplett zugedreht → 0 zusätzliche
@@ -525,6 +526,64 @@ export function makeTruePeakLimiter(ctx) {
     setRelease(v, t, timeConstant) {
       release = v;
       node?.parameters.get('release').setTargetAtTime(v, t, timeConstant);
+    },
+    getReductionDb() { return lastReductionDb; },
+    dispose() {
+      disposed = true;
+      if (node) node.port.onmessage = null;
+      input.disconnect();
+      output.disconnect();
+      node?.disconnect();
+    },
+  };
+}
+
+/** Optischer Kompressor mit programmabhängigem ("T4-Memory") Release, s.
+ *  opto-worklet.js für die vollständige Herleitung -- Ersatz für die
+ *  vorherige DynamicsCompressorNode-Fassung von DEFS.opto, die nur eine
+ *  einzige, feste Release-Zeit kannte. Gleiches "transparenter Passthrough,
+ *  bis der Worklet geladen ist"-Muster wie makeSweepFilter/
+ *  makeTruePeakLimiter oben. KEIN Lookahead (reiner Feedforward-Gain-
+ *  Computer, anders als der Limiter oben) -- braucht deshalb auch keine
+ *  Dry-Verzögerungs-Kompensation im aufrufenden DEFS.opto. */
+export function makeOptoCompressor(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let node = null;
+  let disposed = false;
+  let threshold = -4;
+  let ratio = 3;
+  let lastReductionDb = 0;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-opto', { numberOfInputs: 1, numberOfOutputs: 1 });
+    node.parameters.get('threshold').value = threshold;
+    node.parameters.get('ratio').value = ratio;
+    node.port.onmessage = (e) => { lastReductionDb = e.data.reductionDb; };
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-opto')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-opto', OPTO_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    setThreshold(v, t, timeConstant) {
+      threshold = v;
+      node?.parameters.get('threshold').setTargetAtTime(v, t, timeConstant);
+    },
+    setRatio(v, t, timeConstant) {
+      ratio = v;
+      node?.parameters.get('ratio').setTargetAtTime(v, t, timeConstant);
     },
     getReductionDb() { return lastReductionDb; },
     dispose() {
@@ -1752,18 +1811,18 @@ const DEFS = {
   },
   opto: {
     name: 'Opto Compressor',
-    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
-    // Kommentar bei DEFS.comp.latencySec.
-    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
+    // KEINE Zusatzlatenz mehr -- der neue Worklet-Gain-Computer (s.
+    // opto-worklet.js) ist reiner Feedforward ohne Lookahead, anders als
+    // die vorherige DynamicsCompressorNode-Fassung.
     // LA-2A-Tribut: EIN Hauptregler ("Peak Reduction", wie am echten Gerät)
-    // statt eines Attack/Release/Knee-Vierersatzes -- Attack/Release/Knee
-    // stehen FEST auf für optische Kompressoren typische, deutlich trägere/
-    // weichere Werte als beim FET-Style-Compressor oben (echte T4-
-    // Elektrolumineszenzzelle: ~10ms Attack, mehrstufiger Release mit langem
-    // "Sag"-Schwanz -- hier als EIN repräsentativer Kompromisswert, kein
-    // bit-genaues Bauteil-Modell, ehrlich als Tribut statt Emulation
-    // gedacht). Limit/Compress ist der echte Zweistufen-Schalter des
-    // Originals (Ratio ~20:1 vs. ~3:1, s. OPTO_MODES oben).
+    // statt eines Attack/Release/Knee-Vierersatzes -- Attack/Knee stehen
+    // FEST auf für optische Kompressoren typische Werte, Release ist NICHT
+    // mehr fest, sondern programmabhängig (s. opto-worklet.js "T4-Memory"-
+    // Mechanismus -- ein kurzer Ausreisser klingt schnell ab, nach
+    // anhaltend starker Kompression braucht die Erholung spürbar länger,
+    // wie bei der echten T4-Elektrolumineszenzzelle). Limit/Compress ist
+    // der echte Zweistufen-Schalter des Originals (Ratio ~20:1 vs. ~3:1,
+    // s. OPTO_MODES oben).
     defaults: { reduction: 0.4, gain: 0, mode: 'compress', mix: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -1772,30 +1831,19 @@ const DEFS = {
       dry.gain.value = 1 - p.mix;
       wet.gain.value = p.mix;
 
-      const ATTACK = 0.01;
-      const RELEASE = 0.5;
-      const KNEE = 18;
-      const node = ctx.createDynamicsCompressor();
-      node.attack.value = ATTACK;
-      node.release.value = RELEASE;
-      node.knee.value = KNEE;
-      node.ratio.value = (OPTO_MODES[p.mode] ?? OPTO_MODES.compress).ratio;
+      const comp = makeOptoCompressor(ctx);
       // reduction (0..1) -> Threshold: verschiebt die Ansprechschwelle nach
       // unten, wie das Peak-Reduction-Poti am Original -- 0 = kaum Wirkung
       // (-4dB), 1 = tief in die Zelle getrieben (-40dB).
-      node.threshold.value = -4 - p.reduction * 36;
+      comp.setThreshold(-4 - p.reduction * 36, ctx.currentTime, 0);
+      comp.setRatio((OPTO_MODES[p.mode] ?? OPTO_MODES.compress).ratio, ctx.currentTime, 0);
 
       const makeup = ctx.createGain();
       makeup.gain.value = dbToLin(p.gain);
 
-      // Kompensiert den Lookahead von node oben (s.
-      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- sonst käme die trockene Kopie
-      // ~6ms VOR der komprimierten an, beim Mischen (mix<1) ein hörbares
-      // Kammfilter-"Phasing", am stärksten um mix=0.5.
-      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
-      input.connect(dryDelay).connect(dry);
-      input.connect(node);
-      node.connect(makeup);
+      input.connect(dry);
+      input.connect(comp.input);
+      comp.output.connect(makeup);
       makeup.connect(wet);
       const outSum = ctx.createGain();
       dry.connect(outSum);
@@ -1805,21 +1853,18 @@ const DEFS = {
         input, output: outSum,
         setParam(key, v) {
           const t = engine.now;
-          if (key === 'reduction') node.threshold.setTargetAtTime(-4 - v * 36, t, 0.01);
+          if (key === 'reduction') comp.setThreshold(-4 - v * 36, t, 0.01);
           else if (key === 'gain') makeup.gain.setTargetAtTime(dbToLin(v), t, 0.01);
-          else if (key === 'mode') node.ratio.setTargetAtTime((OPTO_MODES[v] ?? OPTO_MODES.compress).ratio, t, 0.01);
+          else if (key === 'mode') comp.setRatio((OPTO_MODES[v] ?? OPTO_MODES.compress).ratio, t, 0.01);
           else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
-        // Gleiches GR-Meter wie beim FET-Compressor -- derselbe generische
-        // Abgriff des nativen reduction-Werts, UI erkennt die Methode statt
-        // des Typs (s. machine.js/insert-chain.js#startCompMeter).
-        getReductionDb() { return node.reduction ?? 0; },
+        getReductionDb() { return comp.getReductionDb(); },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          dryDelay.disconnect(); node.disconnect(); makeup.disconnect();
+          comp.dispose(); makeup.disconnect();
         },
       };
     },
