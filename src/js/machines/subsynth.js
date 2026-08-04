@@ -29,6 +29,20 @@ import { midiToHz, applyFilterEnv } from '../core/dsp.js';
  */
 const VOICE_HEADROOM = 0.6;
 
+/** Deckel für gleichzeitig GEHALTENE Keybed-Stimmen (this.voices, s. unten)
+ *  -- ohne den würde jede neue, andere Tonhöhe unbegrenzt neue native
+ *  Audio-Nodes anhäufen (Arp/viele gehaltene Tasten über eine lange Jam-
+ *  Session, besonders auf dem Handy ein reales Ressourcenrisiko). Beim
+ *  Erreichen wird die ÄLTESTE Stimme "gestohlen" (s. noteOn/noteOff unten)
+ *  -- ausreichend hoch für jedes reale Spielen mit zwei Händen plus Arp,
+ *  ohne spürbar zu limitieren. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- deutlich kürzer
+ *  als der reguläre, vom Nutzer eingestellte Release (der oft viel länger
+ *  ist), aber lang genug, um den harten Cutoff hörbar zu entschärfen
+ *  (Fast-Fade-Out statt Klick). */
+const STEAL_RELEASE_S = 0.015;
+
 export class SubSynth extends StepSequencedSynth {
   static meta = {
     type: 'subsynth',
@@ -120,6 +134,10 @@ export class SubSynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    // Deckel erreicht -- älteste Stimme (erster Map-Eintrag, Maps behalten
+    // Einfügereihenfolge) mit kurzem Fade-Out abräumen statt unbegrenzt
+    // weitere Nodes anzuhäufen, s. MAX_VOICES oben.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -152,13 +170,15 @@ export class SubSynth extends StepSequencedSynth {
     this.voices.set(midi, { osc, filter, env });
   }
 
-  noteOff(midi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben) --
+   *  fester, sehr kurzer Release statt des vom Nutzer eingestellten. */
+  noteOff(midi, steal = false) {
     const v = this.voices.get(midi);
     if (!v) return;
     this.voices.delete(midi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     v.env.gain.cancelScheduledValues(t);
     v.env.gain.setTargetAtTime(0, t, rel / 4);
     v.osc.stop(t + rel + 0.1);
