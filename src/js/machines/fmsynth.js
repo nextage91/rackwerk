@@ -97,6 +97,18 @@ export class FMSynth extends StepSequencedSynth {
     };
     /** aktive Stimmen: midi → {fm, filter, ampEnv} */
     this.voices = new Map();
+    // Wiederverwendungs-Pool für fm-voice-Instanzen (s. #acquireFmVoice/
+    // #releaseFmVoice unten) -- vermeidet, für JEDE Note einen neuen
+    // AudioWorkletNode+5 ConstantSourceNodes zu bauen. Das war der
+    // eigentliche Grund für hörbares Knacksen speziell bei Sequenzer-
+    // Triggerung (playNote()): der Lookahead-Planer (s. transport.js,
+    // SCHEDULE_AHEAD=0.1s) kann bei Timer-Nachzüglern mehrere Steps in
+    // EINEM synchronen JS-Tick nachholen, was mehrere Worklet-Knoten-
+    // Konstruktionen bündelt -- beim Tastenspiel (von Hand, ein Anschlag
+    // nach dem anderen) kommt das nie in dieser Dichte vor. Ein
+    // wiederverwendeter Worklet-Knoten kostet dagegen nur ein günstiges
+    // .connect()/.disconnect(), keine neue Konstruktion.
+    this.fmPool = [];
     this.output.gain.value = this.params.volume;
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
@@ -104,6 +116,30 @@ export class FMSynth extends StepSequencedSynth {
     this.patterns = [this.emptyPattern(), this.emptyPattern(), this.emptyPattern(), this.emptyPattern()];
     this.patternIndex = 0;
     this.pattern = this.patterns[0];
+  }
+
+  /** Holt eine wiederverwendbare fm-voice aus dem Pool oder baut eine neue,
+   *  falls keine frei ist (z. B. beim allerersten Anschlag) -- s.
+   *  Kommentar bei `this.fmPool` in buildAudio() fürs "Warum". Die
+   *  zurückgegebene Instanz läuft bereits (nie gestoppt, s.
+   *  #releaseFmVoice), ihre Parameter tragen aber noch Werte/laufende
+   *  Automation der VORHERIGEN Note -- `cancelScheduledValues` + frische
+   *  `.value`-Zuweisungen räumen das in #buildVoice/#applyFmEnv auf. */
+  #acquireFmVoice(ctx) {
+    return this.fmPool.pop() ?? makeFmVoice(ctx);
+  }
+
+  /** Gegenstück zu #acquireFmVoice -- trennt die fm-voice vom alten
+   *  Filter/Hüllkurven-Pfad der zu Ende gegangenen Note und legt sie für
+   *  die nächste Note zurück in den Pool. BEWUSST kein `fm.stop()`: ein
+   *  einmal gestopptes ConstantSourceNode (die AudioParam-Träger hinter
+   *  `.carrierFreq`/`.modFreq`/... , s. core/dsp.js#makeFmVoice) lässt sich
+   *  nicht neu starten -- die Stimme muss für Wiederverwendung dauerhaft
+   *  weiterlaufen, exakt lautlos ist sie ohnehin nur durch die AUSSEN
+   *  liegende Amp-Hüllkurve, nicht durch eigenes Schweigen. */
+  #releaseFmVoice(fm) {
+    fm.output.disconnect();
+    this.fmPool.push(fm);
   }
 
   /** Modulatorfrequenz für `midi` nach dem aktuellen Modus -- Ratio folgt
@@ -128,14 +164,21 @@ export class FMSynth extends StepSequencedSynth {
     // Worklet-Knoten, s. core/dsp.js#makeFmVoice) statt der früheren zwei
     // nativen OscillatorNodes -- vermeidet das per Messung bestätigte
     // Aliasing bei hohem Modulationsindex (s. tools/dsp-tests/
-    // fm-aliasing-measurement.mjs).
-    const fm = makeFmVoice(ctx);
+    // fm-aliasing-measurement.mjs). Aus dem Pool statt frisch gebaut, s.
+    // #acquireFmVoice -- kann noch Automation/Werte der vorherigen Note
+    // tragen, deshalb cancelScheduledValues VOR den neuen Werten.
+    const fm = this.#acquireFmVoice(ctx);
+    fm.carrierFreq.cancelScheduledValues(t);
     fm.carrierFreq.value = carrierFreq;
+    fm.modFreq.cancelScheduledValues(t);
     fm.modFreq.value = Math.max(0.01, modFreq);
     // Feedback: der Modulator wirkt zusätzlich auf SEINE EIGENE Frequenz
     // zurück (fester Wert, keine eigene Hüllkurve -- Feedback ist ein
     // Klangfarbe-Regler, kein Anschlags-Element).
+    fm.feedback.cancelScheduledValues(t);
     fm.feedback.value = p.feedback * FEEDBACK_SCALE;
+    fm.detune.cancelScheduledValues(t);
+    fm.detune.value = 0; // FMSynth nutzt kein Detune, aber defensiv zurücksetzen (Pool-Wiederverwendung)
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
@@ -154,8 +197,33 @@ export class FMSynth extends StepSequencedSynth {
     const p = this.params;
     const peak = (p.fmAmount + p.fmEnv) * FM_INDEX_SCALE * modFreq;
     const sustain = p.fmAmount * FM_INDEX_SCALE * modFreq;
+    // cancelScheduledValues: eine aus dem Pool wiederverwendete Stimme (s.
+    // #acquireFmVoice) kann noch eine laufende Abkling-Automation der
+    // VORHERIGEN Note tragen -- ohne das würde die alte Kurve mit der
+    // neuen verschmelzen statt sauber beim neuen Anschlag neu zu beginnen.
+    fm.fmIndex.cancelScheduledValues(t);
     fm.fmIndex.setValueAtTime(peak, t);
     fm.fmIndex.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
+  }
+
+  /** Setzt die fm-voice der zu Ende gehenden Note nach `stopAt` zurück in
+   *  den Pool statt sie zu stoppen/verwerfen (s. #releaseFmVoice). Ein
+   *  `setTimeout` statt eines sample-genauen `onended`-Callbacks reicht
+   *  hier völlig: die Amp-Hüllkurve hat das Signal zu diesem Zeitpunkt
+   *  längst unhörbar gemacht, es geht nur noch darum, WANN der Knoten
+   *  gefahrlos für die nächste Note wiederverwendet werden darf -- ein
+   *  paar Millisekunden Ungenauigkeit dabei sind unhörbar. Prüft
+   *  `this.#disposed`, falls die ganze Maschine inzwischen abgebaut wurde
+   *  (s. disposeAudio) -- dann landet die Stimme NICHT mehr im (dann
+   *  schon geleerten) Pool, sondern wird selbst sauber entsorgt. */
+  #scheduleRelease(fm, filter, ampEnv, stopAt) {
+    const delayMs = Math.max(0, (stopAt - engine.ctx.currentTime) * 1000);
+    setTimeout(() => {
+      filter.disconnect();
+      ampEnv.disconnect();
+      if (this.#disposed) fm.dispose();
+      else this.#releaseFmVoice(fm);
+    }, delayMs);
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
@@ -175,8 +243,7 @@ export class FMSynth extends StepSequencedSynth {
     filter.connect(ampEnv).connect(this.output);
 
     const stopAt = time + dur + p.release + 0.1;
-    fm.stop(stopAt);
-    fm.onended = () => { fm.dispose(); filter.disconnect(); ampEnv.disconnect(); };
+    this.#scheduleRelease(fm, filter, ampEnv, stopAt);
   }
 
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
@@ -215,16 +282,23 @@ export class FMSynth extends StepSequencedSynth {
     v.ampEnv.gain.cancelScheduledValues(t);
     v.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;
-    v.fm.stop(stopAt);
-    v.fm.onended = () => { v.fm.dispose(); v.filter.disconnect(); v.ampEnv.disconnect(); };
+    this.#scheduleRelease(v.fm, v.filter, v.ampEnv, stopAt);
   }
 
   allNotesOff() {
     for (const midi of [...this.voices.keys()]) this.noteOff(midi);
   }
 
+  /** true nach disposeAudio() -- s. #scheduleRelease: eine bereits
+   *  geplante Rückgabe an den Pool muss davon wissen, dass der Pool selbst
+   *  inzwischen geleert/entsorgt wurde. */
+  #disposed = false;
+
   disposeAudio() {
     this.allNotesOff();
+    this.#disposed = true;
+    for (const fm of this.fmPool) fm.dispose();
+    this.fmPool = [];
   }
 
   /* ---------- UI ---------- */
