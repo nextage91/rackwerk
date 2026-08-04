@@ -2,6 +2,7 @@
  * dsp.js — kleine, gemeinsam genutzte Audio-Helfer.
  * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
  */
+import { LADDER_FILTER_WORKLET_SRC } from './ladder-filter-worklet.js';
 
 let _noiseBuffer = null;
 
@@ -106,4 +107,110 @@ export function applyFilterEnv(filter, t, params) {
   const peak = Math.min(16000, params.cutoff * Math.pow(2, params.envAmt * 4));
   filter.frequency.setValueAtTime(peak, t);
   filter.frequency.setTargetAtTime(params.cutoff, t, Math.max(0.01, params.fDecay) / 3);
+}
+
+/** Generisches Lazy-Ladeschema für die per Blob-URL geladenen, hand-
+ *  geschriebenen Worklets in diesem Projekt -- EIN gemeinsamer Cache (Map
+ *  von Prozessorname auf Promise) statt einer eigenen Ladefunktion pro
+ *  Worklet. Lebt hier (statt z. B. in core/inserts.js) als abhängigkeits-
+ *  freier Basis-Helfer, den sowohl Insert-Effekte als auch Maschinen (s.
+ *  makeLadderFilter unten) nutzen können, ohne dass eine der beiden Seiten
+ *  von der anderen importieren müsste. */
+const simpleWorkletPromises = new Map();
+const simpleWorkletReadyFlags = new Map();
+export function ensureSimpleWorklet(ctx, processorName, src) {
+  if (!simpleWorkletPromises.has(processorName)) {
+    let promise;
+    if (!ctx.audioWorklet) {
+      promise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([src], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      promise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); simpleWorkletReadyFlags.set(processorName, true); return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error(`Worklet-Modul "${processorName}" konnte nicht geladen werden -- betroffener Effekt bleibt transparent.`, err);
+          return false;
+        });
+    }
+    simpleWorkletPromises.set(processorName, promise);
+  }
+  return simpleWorkletPromises.get(processorName);
+}
+export function simpleWorkletReady(processorName) {
+  return simpleWorkletReadyFlags.get(processorName) === true;
+}
+
+/** Selbstschwingungsfähiger 4-poliger Ladder-Tiefpass (s.
+ *  ladder-filter-worklet.js für die vollständige Herleitung -- die von
+ *  AcidBass' TB-303-Filterkern losgelöste, generische Fassung) als
+ *  Drop-in-Ersatz für `ctx.createBiquadFilter()` in polyphonen Maschinen
+ *  wie SubSynth.
+ *
+ *  `.frequency`/`.Q` sind ECHTE, von der Worklet-Lade-Race UNABHÄNGIGE
+ *  AudioParams -- absichtlich über je einen eigenen `ConstantSourceNode`
+ *  realisiert statt direkt `node.parameters.get(...)` zurückzugeben: der
+ *  Worklet-Knoten selbst existiert (wie bei jedem Blob-URL-Worklet dieses
+ *  Projekts) erst NACH einem asynchronen `audioWorklet.addModule()`, aber
+ *  Aufrufer wie core/dsp.js#applyFilterEnv rufen `filter.frequency
+ *  .setValueAtTime()/.setTargetAtTime()` SOFORT nach dem Anlegen auf --
+ *  ein `ConstantSourceNode.offset` ist von Anfang an ein vollwertiges
+ *  AudioParam (unabhängig vom Worklet-Ladezustand), automatisiert also
+ *  bereits korrekt VOR dem eigentlichen `attach()`, und wird dort einfach
+ *  in den (auf 0 gesetzten) intrinsischen Wert des echten Worklet-Parameters
+ *  eingespeist -- exakt derselbe zeitliche Verlauf, als hätte von Anfang an
+ *  eine Verbindung bestanden. */
+export function makeLadderFilter(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const freqSource = ctx.createConstantSource();
+  freqSource.offset.value = 1000;
+  freqSource.start();
+  const qSource = ctx.createConstantSource();
+  qSource.offset.value = 4;
+  qSource.start();
+  let node = null;
+  let disposed = false;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-ladder', { numberOfInputs: 1, numberOfOutputs: 1 });
+    node.parameters.get('frequency').value = 0;
+    node.parameters.get('Q').value = 0;
+    freqSource.connect(node.parameters.get('frequency'));
+    qSource.connect(node.parameters.get('Q'));
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-ladder')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-ladder', LADDER_FILTER_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    frequency: freqSource.offset,
+    Q: qSource.offset,
+    // Reines Anzeige-/Kompatibilitätsfeld -- ein Ladder-Filter ist immer
+    // Tiefpass (wie ein echtes Moog-/TB-303-Filter), anders als
+    // BiquadFilterNode kennt er kein umschaltbares `.type`. Wird von
+    // aufrufendem Code (s. machines/subsynth.js) trotzdem beschrieben,
+    // damit derselbe Codepfad für beide Filterarten funktioniert.
+    type: 'lowpass',
+    dispose() {
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      freqSource.stop(); freqSource.disconnect();
+      qSource.stop(); qSource.disconnect();
+      node?.disconnect();
+    },
+  };
 }

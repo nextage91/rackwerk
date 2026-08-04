@@ -14,7 +14,34 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, applyFilterEnv } from '../core/dsp.js';
+import { midiToHz, applyFilterEnv, makeLadderFilter } from '../core/dsp.js';
+
+/** Baut den Filterknoten für eine Stimme -- entweder ein natives
+ *  BiquadFilterNode (LP/HP/BP, wie bisher) oder den selbstschwingungs-
+ *  fähigen Ladder-Tiefpass (s. core/dsp.js#makeLadderFilter, generalisiert
+ *  aus AcidBass' TB-303-Filterkern). Ein Ladder-Filter ist strukturell ein
+ *  anderer Knotentyp (ein `.input`/`.output`-Wrapper um einen Worklet-Knoten,
+ *  kein einzelnes natives AudioNode) -- deshalb hier eine gemeinsame Stelle
+ *  statt an jeder Anschlussstelle einzeln zu unterscheiden. Ein Wechsel des
+ *  Filtertyps WÄHREND eine Note klingt (s. buildControls unten) baut
+ *  bestehende Stimmen bewusst NICHT um (bräuchte ein komplettes Rewiring
+ *  mitten im Klingen) -- er gilt erst für die nächste neu angeschlagene Note,
+ *  identisch zu Devil-Fish-artigen Hardware-Filtern, die auch nicht mitten
+ *  im Ton die Topologie wechseln. */
+function createFilterNode(ctx, p) {
+  const filter = p.filterType === 'ladder' ? makeLadderFilter(ctx) : ctx.createBiquadFilter();
+  filter.type = p.filterType;
+  filter.Q.value = p.resonance;
+  return filter;
+}
+/** Der Ladder-Wrapper hat `.input`/`.output` (zwei stabile GainNodes), ein
+ *  natives BiquadFilterNode ist selbst schon Ein- UND Ausgang zugleich. */
+const filterIn = (f) => f.input ?? f;
+const filterOut = (f) => f.output ?? f;
+/** BiquadFilterNode kennt nur `.disconnect()`; der Ladder-Wrapper braucht
+ *  `.dispose()` (stoppt zusätzlich die beiden ConstantSourceNodes hinter
+ *  `.frequency`/`.Q`, s. core/dsp.js) -- sonst liefen die für immer weiter. */
+const disposeFilterNode = (f) => (f.dispose ? f.dispose() : f.disconnect());
 
 /**
  * Headroom für die Amp-Hüllkurve: Ohne diese Skalierung ramp(t) immer bis
@@ -107,9 +134,7 @@ export class SubSynth extends StepSequencedSynth {
     osc.type = 'sawtooth';
     osc.frequency.value = midiToHz(midi + p.transpose);
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
+    const filter = createFilterNode(ctx, p);
     applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
@@ -125,10 +150,11 @@ export class SubSynth extends StepSequencedSynth {
     env.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
-    osc.connect(filter).connect(env).connect(this.output);
+    osc.connect(filterIn(filter));
+    filterOut(filter).connect(env).connect(this.output);
     osc.start(time);
     osc.stop(time + dur + p.release + 0.1);
-    osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
+    osc.onended = () => { osc.disconnect(); disposeFilterNode(filter); env.disconnect(); };
   }
 
   /* ---------- Stimmenverwaltung ---------- */
@@ -152,16 +178,15 @@ export class SubSynth extends StepSequencedSynth {
     osc.type = 'sawtooth';
     osc.frequency.value = midiToHz(midi + p.transpose);
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
+    const filter = createFilterNode(ctx, p);
     applyFilterEnv(filter, t, p);
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(0, t);
     env.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
 
-    osc.connect(filter).connect(env).connect(this.output);
+    osc.connect(filterIn(filter));
+    filterOut(filter).connect(env).connect(this.output);
     osc.start(t);
 
     // Map-Schlüssel bleibt die ROHE (nicht transponierte) MIDI-Note -- so
@@ -182,7 +207,7 @@ export class SubSynth extends StepSequencedSynth {
     v.env.gain.cancelScheduledValues(t);
     v.env.gain.setTargetAtTime(0, t, rel / 4);
     v.osc.stop(t + rel + 0.1);
-    v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
+    v.osc.onended = () => { v.osc.disconnect(); disposeFilterNode(v.filter); v.env.disconnect(); };
   }
 
   allNotesOff() {
@@ -195,7 +220,12 @@ export class SubSynth extends StepSequencedSynth {
 
   /* ---------- UI ---------- */
   buildControls(container) {
-    // Filtertyp: LP / HP / BP — wirkt sofort auch auf klingende Stimmen
+    // Filtertyp: LP / HP / BP wirken sofort auch auf klingende Stimmen
+    // (natives BiquadFilterNode, reiner Typ-Umschalter). Ladder ist
+    // strukturell ein anderer Knoten (s. createFilterNode oben) -- ein
+    // Wechsel zu/von Ladder gilt deshalb erst für die NÄCHSTE neu
+    // angeschlagene Note, bereits klingende Stimmen behalten ihren
+    // bisherigen Filtertyp bis sie enden.
     const seg = document.createElement('div');
     seg.className = 'seg';
     seg.innerHTML = `
@@ -203,6 +233,7 @@ export class SubSynth extends StepSequencedSynth {
       <button class="seg__btn" data-ft="lowpass">LP</button>
       <button class="seg__btn" data-ft="highpass">HP</button>
       <button class="seg__btn" data-ft="bandpass">BP</button>
+      <button class="seg__btn" data-ft="ladder">Ladder</button>
     `;
     seg.querySelectorAll('.seg__btn').forEach((b) =>
       b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));

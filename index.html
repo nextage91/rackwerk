@@ -17065,8 +17065,147 @@ const engine = new AudioEngine();
 return { engine };
 })();
 
+/* ===== js/core/ladder-filter-worklet.js ===== */
+const { LADDER_FILTER_WORKLET_SRC } = (() => {
+/**
+ * Selbstschwingungsfähiger 4-poliger "Ladder"-Tiefpass als
+ * AudioWorkletProcessor -- die generalisierte, von AcidBass losgelöste
+ * Fassung der TB-303-Filter-Rekursion aus machines/acidbass-worklet.js
+ * (dort im Detail hergeleitet/dokumentiert, s. dortiger Dateikopf für die
+ * Open303/rosic_TeeBeeFilter-Quellenlage), jetzt als generischer Filtertyp
+ * für SubSynth (s. machines/subsynth.js) nutzbar.
+ *
+ * Bewusst NICHT 1:1 übernommen (das bleibt AcidBass' Alleinstellungsmerkmal,
+ * s. dortige Kommentare): die festen Vor-/Nachfilter (44.486Hz/24.167Hz
+ * Fixhighpass fürs spezifische TB-303-Tonspektrum), Filter-FM vom
+ * Oszillator, Overdrive-Vorstufe, Devil-Fish-Hi-Res-Skew. Was ÜBERNOMMEN
+ * wird, ist der eigentliche Filterkern: die "Leapfrog"-4-Pol-Rekursion
+ * (y1..y4) samt Sättigungsglied (tanh) IM Rückkopplungspfad -- genau DAS
+ * unterscheidet einen echten Ladder-Filter von einer Biquad-Kaskade: die
+ * Resonanz kann bis zur Selbstschwingung getrieben werden, OHNE unbegrenzt
+ * aufzuschwingen, weil die Rückkopplungsschleife sich selbst sättigt
+ * (Dioden-/Transistor-Verhalten der echten Schaltung) statt linear zu
+ * bleiben wie bei einer Biquad-Q-Erhöhung.
+ *
+ * `frequency`/`Q` bewusst SO benannt (statt z. B. `cutoff`/`resonance`) und
+ * mit demselben Wertebereich wie SubSynths bisheriger BiquadFilterNode
+ * (Q: 0.5..20, s. UI-Knob in subsynth.js) -- macht diesen Worklet-Knoten
+ * für SubSynths bestehenden Code (inkl. core/dsp.js#applyFilterEnv, das nur
+ * `.frequency.setValueAtTime()/.setTargetAtTime()` braucht, kein
+ * BiquadFilterNode-spezifisches Feature) praktisch ein Drop-in für den
+ * bisherigen `ctx.createBiquadFilter()`-Aufruf, s. machines/subsynth.js.
+ * `frequency` ist A-RATE (nicht k-rate wie beim SVF-Sweep-Filter oben) --
+ * SubSynths Filterhüllkurve fährt `frequency` über einen kurzen, oft sehr
+ * schnellen exponentiellen Abfall (der klassische "Acid-Squelch"), eine
+ * Quantisierung auf Block-Rate (~2.9ms-Stufen) wäre bei kurzem fDecay
+ * hörbar gestuft/zippernd. `Q` bleibt k-rate (in SubSynth ein reiner
+ * Pro-Note-Konstantwert, keine Hüllkurve).
+ *
+ * Innen wird `Q` per einfacher linearer Abbildung auf den internen
+ * Selbstschwingungs-Parameter `r` (0..1.2, s. AcidBass-Pendant
+ * `resonanceSkewed`) umgerechnet -- kein Anspruch auf die exakte Devil-
+ * Fish-Skew-Kurve, aber dieselbe grundlegende Charakteristik: bei Q nahe
+ * dem Maximum (20) schwingt der Filter frei (r>1), bei niedrigem Q bleibt
+ * er eine milde Resonanzspitze.
+ */
+const LADDER_FILTER_WORKLET_SRC = `
+const DENORMAL_FLOOR = 1e-30;
+const flushDenormal = (v) => (v > -DENORMAL_FLOOR && v < DENORMAL_FLOOR ? 0 : v);
+const ONE_OVER_SQRT2 = 0.70710678118654752440;
+const STATE_LIMIT = 8;
+const MAX_CHANNELS = 8;
+// Feste Rückkopplungs-Hochpass-Grenzfrequenz -- wie AcidBass' feedbackHp
+// (s. Dateikopf dort): verhindert, dass sich tieffrequente Gleichanteile in
+// der Rückkopplungsschleife aufbauen.
+const FEEDBACK_HP_HZ = 150;
+
+class RackwerkLadderProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'frequency', defaultValue: 1000, minValue: 20, maxValue: 18000, automationRate: 'a-rate' },
+      { name: 'Q', defaultValue: 4, minValue: 0.5, maxValue: 20, automationRate: 'k-rate' },
+    ];
+  }
+
+  constructor() {
+    super();
+    const sr = sampleRate;
+    this.y1 = new Float64Array(MAX_CHANNELS);
+    this.y2 = new Float64Array(MAX_CHANNELS);
+    this.y3 = new Float64Array(MAX_CHANNELS);
+    this.y4 = new Float64Array(MAX_CHANNELS);
+    // Ein-poliger Rückkopplungs-Hochpass pro Kanal (Zustand x1/y1 je Kanal,
+    // Koeffizienten fest -- feste Grenzfrequenz, s. FEEDBACK_HP_HZ oben).
+    this.hpX1 = new Float64Array(MAX_CHANNELS);
+    this.hpY1 = new Float64Array(MAX_CHANNELS);
+    const hpX = Math.exp(-2 * Math.PI * FEEDBACK_HP_HZ / sr);
+    this.hpB0 = 0.5 * (1 + hpX);
+    this.hpB1 = -0.5 * (1 + hpX);
+    this.hpA1 = hpX;
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length || !output[0].length) return true;
+    const numCh = Math.min(output.length, MAX_CHANNELS);
+    const n = output[0].length;
+    const freqParam = parameters.frequency;
+    const freqConst = freqParam.length === 1;
+    const q = parameters.Q[0];
+    // Lineare Abbildung UI-Q (0.5..20) -> internes Selbstschwingungsmass r
+    // (0..1.2) -- s. Dateikopf.
+    const r = Math.max(0, Math.min(1.2, ((q - 0.5) / 19.5) * 1.2));
+
+    for (let i = 0; i < n; i++) {
+      const freq = Math.max(20, Math.min(18000, freqConst ? freqParam[0] : freqParam[i]));
+      const wc = 2 * Math.PI * freq / sampleRate;
+      const fx = wc * ONE_OVER_SQRT2 / (2 * Math.PI);
+      const b0 = (0.00045522346 + 6.1922189 * fx) / (1 + 12.358354 * fx + 4.4156345 * fx * fx);
+      let k = fx * (fx * (fx * (fx * (fx * (fx + 7198.6997) - 5837.7917) - 476.47308) + 614.95611) + 213.87126) + 16.998792;
+      let g = k * 0.058823529411764705882352941176471; // 1/17
+      g = (g - 1) * r + 1;
+      g = g * (1 + r);
+      k = k * r;
+
+      for (let ch = 0; ch < numCh; ch++) {
+        const inCh = input && input[ch] ? input[ch] : (input && input[0] ? input[0] : null);
+        const x = inCh ? inCh[i] : 0;
+
+        const fbRaw = Math.tanh(k * this.y4[ch]);
+        const hpOut = this.hpB0 * fbRaw + this.hpB1 * this.hpX1[ch] + this.hpA1 * this.hpY1[ch];
+        this.hpX1[ch] = fbRaw;
+        this.hpY1[ch] = flushDenormal(hpOut);
+
+        const y0 = x - hpOut;
+        let y1 = this.y1[ch] + 2 * b0 * (y0 - this.y1[ch] + this.y2[ch]);
+        let y2 = this.y2[ch] + b0 * (this.y1[ch] - 2 * this.y2[ch] + this.y3[ch]);
+        let y3 = this.y3[ch] + b0 * (this.y2[ch] - 2 * this.y3[ch] + this.y4[ch]);
+        let y4 = this.y4[ch] + b0 * (this.y3[ch] - 2 * this.y4[ch]);
+
+        y1 = STATE_LIMIT * Math.tanh(y1 / STATE_LIMIT);
+        y2 = STATE_LIMIT * Math.tanh(y2 / STATE_LIMIT);
+        y3 = STATE_LIMIT * Math.tanh(y3 / STATE_LIMIT);
+        y4 = STATE_LIMIT * Math.tanh(y4 / STATE_LIMIT);
+        if (!Number.isFinite(y1) || !Number.isFinite(y2) || !Number.isFinite(y3) || !Number.isFinite(y4)) {
+          y1 = 0; y2 = 0; y3 = 0; y4 = 0;
+        }
+        this.y1[ch] = y1; this.y2[ch] = y2; this.y3[ch] = y3; this.y4[ch] = y4;
+
+        output[ch][i] = 2 * g * y4;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('rackwerk-ladder', RackwerkLadderProcessor);
+`;
+
+return { LADDER_FILTER_WORKLET_SRC };
+})();
+
 /* ===== js/core/dsp.js ===== */
-const { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv } = (() => {
+const { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv, ensureSimpleWorklet, simpleWorkletReady, makeLadderFilter } = (() => {
 /**
  * dsp.js — kleine, gemeinsam genutzte Audio-Helfer.
  * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
@@ -17177,7 +17316,113 @@ function applyFilterEnv(filter, t, params) {
   filter.frequency.setTargetAtTime(params.cutoff, t, Math.max(0.01, params.fDecay) / 3);
 }
 
-return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv };
+/** Generisches Lazy-Ladeschema für die per Blob-URL geladenen, hand-
+ *  geschriebenen Worklets in diesem Projekt -- EIN gemeinsamer Cache (Map
+ *  von Prozessorname auf Promise) statt einer eigenen Ladefunktion pro
+ *  Worklet. Lebt hier (statt z. B. in core/inserts.js) als abhängigkeits-
+ *  freier Basis-Helfer, den sowohl Insert-Effekte als auch Maschinen (s.
+ *  makeLadderFilter unten) nutzen können, ohne dass eine der beiden Seiten
+ *  von der anderen importieren müsste. */
+const simpleWorkletPromises = new Map();
+const simpleWorkletReadyFlags = new Map();
+function ensureSimpleWorklet(ctx, processorName, src) {
+  if (!simpleWorkletPromises.has(processorName)) {
+    let promise;
+    if (!ctx.audioWorklet) {
+      promise = Promise.resolve(false);
+    } else {
+      const blob = new Blob([src], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      promise = ctx.audioWorklet.addModule(url)
+        .then(() => { URL.revokeObjectURL(url); simpleWorkletReadyFlags.set(processorName, true); return true; })
+        .catch((err) => {
+          URL.revokeObjectURL(url);
+          console.error(`Worklet-Modul "${processorName}" konnte nicht geladen werden -- betroffener Effekt bleibt transparent.`, err);
+          return false;
+        });
+    }
+    simpleWorkletPromises.set(processorName, promise);
+  }
+  return simpleWorkletPromises.get(processorName);
+}
+function simpleWorkletReady(processorName) {
+  return simpleWorkletReadyFlags.get(processorName) === true;
+}
+
+/** Selbstschwingungsfähiger 4-poliger Ladder-Tiefpass (s.
+ *  ladder-filter-worklet.js für die vollständige Herleitung -- die von
+ *  AcidBass' TB-303-Filterkern losgelöste, generische Fassung) als
+ *  Drop-in-Ersatz für `ctx.createBiquadFilter()` in polyphonen Maschinen
+ *  wie SubSynth.
+ *
+ *  `.frequency`/`.Q` sind ECHTE, von der Worklet-Lade-Race UNABHÄNGIGE
+ *  AudioParams -- absichtlich über je einen eigenen `ConstantSourceNode`
+ *  realisiert statt direkt `node.parameters.get(...)` zurückzugeben: der
+ *  Worklet-Knoten selbst existiert (wie bei jedem Blob-URL-Worklet dieses
+ *  Projekts) erst NACH einem asynchronen `audioWorklet.addModule()`, aber
+ *  Aufrufer wie core/dsp.js#applyFilterEnv rufen `filter.frequency
+ *  .setValueAtTime()/.setTargetAtTime()` SOFORT nach dem Anlegen auf --
+ *  ein `ConstantSourceNode.offset` ist von Anfang an ein vollwertiges
+ *  AudioParam (unabhängig vom Worklet-Ladezustand), automatisiert also
+ *  bereits korrekt VOR dem eigentlichen `attach()`, und wird dort einfach
+ *  in den (auf 0 gesetzten) intrinsischen Wert des echten Worklet-Parameters
+ *  eingespeist -- exakt derselbe zeitliche Verlauf, als hätte von Anfang an
+ *  eine Verbindung bestanden. */
+function makeLadderFilter(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const freqSource = ctx.createConstantSource();
+  freqSource.offset.value = 1000;
+  freqSource.start();
+  const qSource = ctx.createConstantSource();
+  qSource.offset.value = 4;
+  qSource.start();
+  let node = null;
+  let disposed = false;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-ladder', { numberOfInputs: 1, numberOfOutputs: 1 });
+    node.parameters.get('frequency').value = 0;
+    node.parameters.get('Q').value = 0;
+    freqSource.connect(node.parameters.get('frequency'));
+    qSource.connect(node.parameters.get('Q'));
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-ladder')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-ladder', LADDER_FILTER_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    frequency: freqSource.offset,
+    Q: qSource.offset,
+    // Reines Anzeige-/Kompatibilitätsfeld -- ein Ladder-Filter ist immer
+    // Tiefpass (wie ein echtes Moog-/TB-303-Filter), anders als
+    // BiquadFilterNode kennt er kein umschaltbares `.type`. Wird von
+    // aufrufendem Code (s. machines/subsynth.js) trotzdem beschrieben,
+    // damit derselbe Codepfad für beide Filterarten funktioniert.
+    type: 'lowpass',
+    dispose() {
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      freqSource.stop(); freqSource.disconnect();
+      qSource.stop(); qSource.disconnect();
+      node?.disconnect();
+    },
+  };
+}
+
+return { noise, lfsrNoise, env, autoStop, midiToHz, applyFilterEnv, ensureSimpleWorklet, simpleWorkletReady, makeLadderFilter };
 })();
 
 /* ===== js/core/onepole-worklet.js ===== */
@@ -18087,8 +18332,191 @@ registerProcessor('rackwerk-pitchtrack', RackwerkPitchTrackProcessor);
 return { PITCHTRACK_WORKLET_SRC };
 })();
 
+/* ===== js/core/truepeak-limiter-worklet.js ===== */
+const { TRUEPEAK_LIMITER_WORKLET_SRC } = (() => {
+/**
+ * Brickwall-Limiter mit echter Inter-Sample-Peak-(True-Peak-)Erkennung, als
+ * AudioWorkletProcessor -- Ersatz für die bisherige DynamicsCompressorNode-
+ * Fassung von DEFS.limiter (core/inserts.js), die NUR die diskreten Sample-
+ * Werte selbst gegen die Schwelle prüft.
+ *
+ * Warum das ein echtes Loch ist: ein DAC rekonstruiert zwischen zwei Samples
+ * ein durchgehendes (bandbegrenztes) Signal -- bei scharfkantigem Programm-
+ * material (übersteuerte/geclippte Quellen, harte Transienten, hochfrequenz-
+ * reiche Wellenformen) kann dieses rekonstruierte Signal ZWISCHEN zwei
+ * Samples höher ausschlagen als jeder einzelne Sample-Wert selbst (siehe
+ * ITU-R BS.1770/EBU R128 "True Peak"). Ein reiner Sample-Peak-Limiter lässt
+ * so ein Signal unangetastet durch, obwohl es beim Playback/erneuten
+ * Wandeln/verlustbehafteten Kodieren echte Clipping-Artefakte erzeugen kann
+ * (nachgemessen mit einem hart geclippten 8kHz-Ton: Sample-Peak 0.9, echter
+ * rekonstruierter Peak ~1.01 -- über 0dBFS, obwohl scheinbar sicher).
+ *
+ * Ansatz: kubische Catmull-Rom-Interpolation (4 Stützstellen, 3 zusätzliche
+ * Zwischenwerte bei 4x-Überabtastung) statt einer vollen Sinc-/FIR-
+ * Überabtastung wie im Broadcast-Standard -- deutlich billiger, für ein
+ * Echtzeit-Mastering-Werkzeug im Browser aber immer noch klar empfindlicher
+ * als reine Sample-Peaks (bestätigt an geclipptem/Sägezahn-Testmaterial,
+ * s. tools/dsp-tests/limiter-truepeak.mjs) und OHNE die grosse feste
+ * Latenz eines langen FIR-Filters.
+ *
+ * Architektur: Lookahead-Limiter mit einem "Minimum-Hold"-Fenster --
+ *  1. Für jedes eintreffende Sample wird (kanalübergreifend, stereo-
+ *     verkoppelt -- ein Mastering-Limiter darf das Stereobild nicht durch
+ *     unabhängige Gain-Reduktion pro Kanal verschieben) der interpolierte
+ *     True-Peak geschätzt und daraus ein GEWÜNSCHTES Ziel-Gain (<=1)
+ *     berechnet: wie stark müsste man DIESES eine Sample dämpfen, damit es
+ *     die Ceiling nicht reisst.
+ *  2. Der tatsächlich verwendete Gain für ein Sample ist das Minimum all
+ *     dieser Ziel-Gains über die kommenden LOOKAHEAD Samples (ein "Minimum-
+ *     Hold"-Fenster) -- dadurch beginnt die Dämpfung schon VOR dem
+ *     eigentlichen Peak zu greifen (kein hörbarer Attack nötig, obwohl die
+ *     Reaktion pro Sample technisch sofort ist), das Audio selbst wird
+ *     exakt um LOOKAHEAD Samples verzögert ausgegeben, damit beides zeitlich
+ *     zusammenpasst.
+ *  3. Das Gain darf jederzeit SOFORT fallen (die Vorausschau hat es ja
+ *     schon "kommen sehen"), aber nur mit der Release-Zeitkonstante wieder
+ *     steigen -- klassisches Feedforward-Limiter-Verhalten, ohne die
+ *     Pumpen-Artefakte eines reinen Attack/Release-Hüllkurvenfolgers.
+ *
+ * Der naive Scan über das Minimum-Hold-Fenster (ein simples "finde das
+ * Minimum der letzten LOOKAHEAD Werte" ohne cleveren Monotonic-Deque-Trick)
+ * kostet pro Sample O(LOOKAHEAD) -- bei ~150 Samples Fenstergrösse und 128
+ * Samples/Block sind das ~19200 einfache Vergleiche pro Block, weit
+ * innerhalb des Zeitbudgets (Block ist bei 48kHz ~2.7ms) und deutlich
+ * weniger fehleranfällig als eine inkrementelle Datenstruktur.
+ *
+ * Wie bei allen Worklets hier: exportiert nur den Quelltext als String, per
+ * Blob-URL zur Laufzeit geladen (s. core/inserts.js#ensureSimpleWorklet).
+ */
+const TRUEPEAK_LIMITER_WORKLET_SRC = `
+const LOOKAHEAD_MS = 3;
+const OVERSAMPLE = 4;
+const MAX_CHANNELS = 8;
+
+class RackwerkTruePeakLimiterProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'ceiling', defaultValue: -0.5, minValue: -20, maxValue: 0, automationRate: 'k-rate' },
+      { name: 'release', defaultValue: 0.05, minValue: 0.01, maxValue: 0.5, automationRate: 'k-rate' },
+    ];
+  }
+
+  constructor() {
+    super();
+    this.lookahead = Math.max(16, Math.round(sampleRate * LOOKAHEAD_MS / 1000));
+    // +8 Puffer: 2 Samples Vorlauf, bis eine Zielposition mit ihren vollen
+    // 4 Interpolations-Stützstellen "final" ist (s. finalizeGainTarget unten),
+    // plus etwas Sicherheitsabstand gegen Off-by-one an den Rändern.
+    this.bufLen = this.lookahead + 8;
+    this.delayBuf = [];
+    for (let ch = 0; ch < MAX_CHANNELS; ch++) this.delayBuf.push(new Float64Array(this.bufLen));
+    // EIN gemeinsamer Ziel-Gain-Ring -- Stereo-Kopplung: die stärkste
+    // Dämpfungsanforderung irgendeines Kanals gilt für ALLE Kanäle.
+    this.gainTarget = new Float64Array(this.bufLen).fill(1);
+    this.writePos = 0;
+    this.currentGain = 1;
+    this.lastCeilingDb = NaN;
+    this.ceilingLin = 1;
+    this.lastReleaseS = NaN;
+    this.releaseCoef = 0;
+    // Für die Meter-Anzeige im Haupt-Thread (s. core/inserts.js#DEFS.limiter) --
+    // dort kann kein Audio-Thread-Zustand direkt gelesen werden, deshalb
+    // periodisch per Message zurückmelden (wie core/pitchtrack-worklet.js).
+    this.samplesSinceReport = 0;
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length || !output[0].length) return true;
+
+    const ceilingDb = parameters.ceiling[0];
+    if (ceilingDb !== this.lastCeilingDb) {
+      this.lastCeilingDb = ceilingDb;
+      this.ceilingLin = Math.pow(10, ceilingDb / 20);
+    }
+    const releaseS = parameters.release[0];
+    if (releaseS !== this.lastReleaseS) {
+      this.lastReleaseS = releaseS;
+      this.releaseCoef = Math.exp(-1 / (sampleRate * Math.max(0.001, releaseS)));
+    }
+
+    const numCh = Math.min(output.length, MAX_CHANNELS);
+    const n = output[0].length;
+    const bufLen = this.bufLen;
+    const lookahead = this.lookahead;
+
+    for (let i = 0; i < n; i++) {
+      const wp = this.writePos;
+      for (let ch = 0; ch < numCh; ch++) {
+        const inCh = input && input[ch] ? input[ch] : (input && input[0] ? input[0] : null);
+        this.delayBuf[ch][wp] = inCh ? inCh[i] : 0;
+      }
+
+      // Ziel-Gain für p = wp-2 finalisieren -- braucht s(p-1)..s(p+2), die
+      // jetzt (nach dem Schreiben von wp=p+2) alle vorliegen.
+      const p = (wp - 2 + bufLen) % bufLen;
+      let maxPeak = 0;
+      for (let ch = 0; ch < numCh; ch++) {
+        const buf = this.delayBuf[ch];
+        const s0 = buf[(p - 1 + bufLen) % bufLen];
+        const s1 = buf[p];
+        const s2 = buf[(p + 1) % bufLen];
+        const s3 = buf[(p + 2) % bufLen];
+        const a0 = -0.5 * s0 + 1.5 * s1 - 1.5 * s2 + 0.5 * s3;
+        const a1 = s0 - 2.5 * s1 + 2 * s2 - 0.5 * s3;
+        const a2 = -0.5 * s0 + 0.5 * s2;
+        const a3 = s1;
+        let peak = Math.abs(s1);
+        for (let k = 1; k < OVERSAMPLE; k++) {
+          const t = k / OVERSAMPLE;
+          const v = ((a0 * t + a1) * t + a2) * t + a3;
+          const av = v < 0 ? -v : v;
+          if (av > peak) peak = av;
+        }
+        if (peak > maxPeak) maxPeak = peak;
+      }
+      this.gainTarget[p] = maxPeak > this.ceilingLin ? this.ceilingLin / maxPeak : 1;
+
+      this.writePos = (wp + 1) % bufLen;
+
+      // Minimum-Hold über das Lookahead-Fenster [readPos .. writePos-2]
+      // (bis writePos-2, NICHT weiter -- nur bis dahin sind Ziel-Gains
+      // bereits finalisiert, s. oben).
+      const readPos = (this.writePos - lookahead + bufLen) % bufLen;
+      const windowEnd = (this.writePos - 2 + bufLen) % bufLen;
+      const winLen = (windowEnd - readPos + bufLen) % bufLen + 1;
+      let windowMin = 1;
+      for (let k = 0; k < winLen; k++) {
+        const v = this.gainTarget[(readPos + k) % bufLen];
+        if (v < windowMin) windowMin = v;
+      }
+
+      const releaseCandidate = 1 - (1 - this.currentGain) * this.releaseCoef;
+      this.currentGain = windowMin < releaseCandidate ? windowMin : releaseCandidate;
+
+      for (let ch = 0; ch < numCh; ch++) {
+        output[ch][i] = this.delayBuf[ch][readPos] * this.currentGain;
+      }
+    }
+
+    this.samplesSinceReport += n;
+    if (this.samplesSinceReport >= 512) {
+      this.samplesSinceReport = 0;
+      const reductionDb = 20 * Math.log10(Math.max(1e-6, this.currentGain));
+      this.port.postMessage({ reductionDb });
+    }
+    return true;
+  }
+}
+registerProcessor('rackwerk-truepeak-limiter', RackwerkTruePeakLimiterProcessor);
+`;
+
+return { TRUEPEAK_LIMITER_WORKLET_SRC };
+})();
+
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter } = (() => {
+const { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter, makeTruePeakLimiter } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -18213,6 +18641,12 @@ const dbToLin = (db) => Math.pow(10, db / 20);
  *  kompensierter Wert ist immer näher an richtig als gar keiner. */
 const DYNAMICS_COMPRESSOR_LATENCY_SEC = 0.006;
 const WAVESHAPER_4X_LATENCY_SEC = 0.004;
+// Exakter (nicht gemessener, sondern selbst gewählter) Lookahead des neuen
+// True-Peak-Limiters, s. truepeak-limiter-worklet.js#LOOKAHEAD_MS -- anders
+// als die beiden Werte oben (die tatsächlich BEOBACHTETES, "implementation-
+// defined" Browser-Verhalten sind) ist das hier eine reine DESIGN-Grösse,
+// die wir selbst festlegen, deshalb hier exakt statt gemessen.
+const TRUEPEAK_LIMITER_LATENCY_SEC = 0.003;
 
 /** Grundverzögerung des Tape-Machine-Wow/Flutter-Delays (s. DEFS.tape) --
  *  liegt konstant im Wet-Pfad an, unabhängig vom wowFlutter-Reglerstand
@@ -18397,37 +18831,6 @@ function createResonatorNode(ctx) {
   });
 }
 
-/** Generisches Lazy-Ladeschema für die drei einfachen Hand-geschriebenen
- *  Worklets unten (Gate/Frequenzschieber/Beat-Repeat) -- dasselbe Muster
- *  wie ensureOnePoleWorklet, aber ohne WASM-Kompilierschritt (reines JS,
- *  kein Faust-Build nötig). EIN gemeinsamer Cache (Map von Prozessorname
- *  auf Promise) statt drei fast identischer Funktionen. */
-const simpleWorkletPromises = new Map();
-const simpleWorkletReadyFlags = new Map();
-function ensureSimpleWorklet(ctx, processorName, src) {
-  if (!simpleWorkletPromises.has(processorName)) {
-    let promise;
-    if (!ctx.audioWorklet) {
-      promise = Promise.resolve(false);
-    } else {
-      const blob = new Blob([src], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      promise = ctx.audioWorklet.addModule(url)
-        .then(() => { URL.revokeObjectURL(url); simpleWorkletReadyFlags.set(processorName, true); return true; })
-        .catch((err) => {
-          URL.revokeObjectURL(url);
-          console.error(`Worklet-Modul "${processorName}" konnte nicht geladen werden -- betroffener Effekt bleibt transparent.`, err);
-          return false;
-        });
-    }
-    simpleWorkletPromises.set(processorName, promise);
-  }
-  return simpleWorkletPromises.get(processorName);
-}
-function simpleWorkletReady(processorName) {
-  return simpleWorkletReadyFlags.get(processorName) === true;
-}
-
 /** Einpoliger Tiefpass (y[n] = (1-a)*x[n] + a*y[n-1]) als Damping-Filter
  *  für den Reverb-Tank und die Resonator-Delaylines -- bewusst NICHT der
  *  naheliegende ctx.createBiquadFilter(): ein 2-poliger Biquad-Tiefpass
@@ -18572,6 +18975,68 @@ function makeSweepFilter(ctx, { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz }) {
     },
     dispose() {
       disposed = true;
+      input.disconnect();
+      output.disconnect();
+      node?.disconnect();
+    },
+  };
+}
+
+/** Lookahead-Limiter mit echter Inter-Sample-Peak-Erkennung (s.
+ *  truepeak-limiter-worklet.js für die vollständige Begründung/Architektur)
+ *  -- ersetzt die alte reine DynamicsCompressorNode-Fassung von DEFS.limiter.
+ *  Gleiches "transparenter Passthrough, bis der Worklet geladen ist"-Muster
+ *  wie makeSweepFilter oben. getReductionDb() liefert NICHT live vom Audio-
+ *  Thread (kein synchroner Zugriff möglich), sondern den zuletzt per
+ *  port.postMessage() gemeldeten Wert (Worklet meldet alle 512 Samples,
+ *  s. dort) -- für eine Anzeige-Meter-Aktualisierung (typischerweise per
+ *  requestAnimationFrame, ~60fps) mehr als ausreichend fein aufgelöst. */
+function makeTruePeakLimiter(ctx) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let node = null;
+  let disposed = false;
+  let ceiling = -0.5;
+  let release = 0.05;
+  let lastReductionDb = 0;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-truepeak-limiter', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+    });
+    node.parameters.get('ceiling').value = ceiling;
+    node.parameters.get('release').value = release;
+    node.port.onmessage = (e) => { lastReductionDb = e.data.reductionDb; };
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-truepeak-limiter')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-truepeak-limiter', TRUEPEAK_LIMITER_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    setCeiling(v, t, timeConstant) {
+      ceiling = v;
+      node?.parameters.get('ceiling').setTargetAtTime(v, t, timeConstant);
+    },
+    setRelease(v, t, timeConstant) {
+      release = v;
+      node?.parameters.get('release').setTargetAtTime(v, t, timeConstant);
+    },
+    getReductionDb() { return lastReductionDb; },
+    dispose() {
+      disposed = true;
+      if (node) node.port.onmessage = null;
       input.disconnect();
       output.disconnect();
       node?.disconnect();
@@ -20606,16 +21071,18 @@ const DEFS = {
   },
   limiter: {
     name: 'Limiter',
-    // Feste Zusatzlatenz des DynamicsCompressorNode-Lookaheads -- s.
-    // Kommentar bei DEFS.comp.latencySec.
-    latencySec: DYNAMICS_COMPRESSOR_LATENCY_SEC,
+    // Fester, selbst gewählter Lookahead des True-Peak-Limiters (s.
+    // TRUEPEAK_LIMITER_LATENCY_SEC oben) statt des vorherigen
+    // DynamicsCompressorNode-Lookaheads.
+    latencySec: TRUEPEAK_LIMITER_LATENCY_SEC,
     // Bewusst NICHT dieselbe Rolle wie engine.limiter (audio-engine.js) --
     // jener ist ein unsichtbares App-weites Sicherheitsnetz direkt vor
     // ctx.destination, nie eingestellt/gesehen. Dieser Insert ist ein
     // bewusst eingesetztes, sichtbares Mastering-Werkzeug (klassischer
-    // "Brickwall"-Loudness-Limiter): schnellerer, fester Attack und härterer,
-    // fester Knee als der 1176-Style-Compressor oben (der stattdessen
-    // Ratio-MODI statt eines Ceilings anbietet).
+    // "Brickwall"-Loudness-Limiter mit ECHTER Inter-Sample-Peak-Erkennung,
+    // s. truepeak-limiter-worklet.js -- ein reiner Sample-Peak-Limiter kann
+    // hart geclipptes/hochfrequenzreiches Material unangetastet durchlassen,
+    // obwohl dessen rekonstruierter Peak beim Playback über 0dBFS liegt).
     defaults: { inputGain: 0, ceiling: -0.5, release: 0.05, mix: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
@@ -20626,25 +21093,18 @@ const DEFS = {
 
       const inputGain = ctx.createGain();
       inputGain.gain.value = dbToLin(p.inputGain);
-      const ATTACK = 0.001;
-      const RATIO = 20;
-      const KNEE = 0;
-      const node = ctx.createDynamicsCompressor();
-      node.attack.value = ATTACK;
-      node.ratio.value = RATIO;
-      node.knee.value = KNEE;
-      node.release.value = p.release;
-      node.threshold.value = p.ceiling;
+      const limiter = makeTruePeakLimiter(ctx);
+      limiter.setCeiling(p.ceiling, ctx.currentTime, 0);
+      limiter.setRelease(p.release, ctx.currentTime, 0);
 
-      // Kompensiert den Lookahead von node oben (s.
-      // DYNAMICS_COMPRESSOR_LATENCY_SEC) -- sonst käme die trockene Kopie
-      // ~6ms VOR der limitierten an, beim Mischen (mix<1) ein hörbares
-      // Kammfilter-"Phasing", am stärksten um mix=0.5.
-      const dryDelay = makeDryCompensationDelay(ctx, DYNAMICS_COMPRESSOR_LATENCY_SEC);
+      // Kompensiert den Lookahead des Limiters (s. TRUEPEAK_LIMITER_LATENCY_SEC)
+      // -- sonst käme die trockene Kopie VOR der limitierten an, beim Mischen
+      // (mix<1) ein hörbares Kammfilter-"Phasing", am stärksten um mix=0.5.
+      const dryDelay = makeDryCompensationDelay(ctx, TRUEPEAK_LIMITER_LATENCY_SEC);
       input.connect(dryDelay).connect(dry);
       input.connect(inputGain);
-      inputGain.connect(node);
-      node.connect(wet);
+      inputGain.connect(limiter.input);
+      limiter.output.connect(wet);
       const outSum = ctx.createGain();
       dry.connect(outSum);
       wet.connect(outSum);
@@ -20654,17 +21114,17 @@ const DEFS = {
         setParam(key, v) {
           const t = engine.now;
           if (key === 'inputGain') inputGain.gain.setTargetAtTime(dbToLin(v), t, 0.01);
-          else if (key === 'ceiling') node.threshold.setTargetAtTime(v, t, 0.01);
-          else if (key === 'release') node.release.setTargetAtTime(v, t, 0.01);
+          else if (key === 'ceiling') limiter.setCeiling(v, t, 0.01);
+          else if (key === 'release') limiter.setRelease(v, t, 0.01);
           else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
-        getReductionDb() { return node.reduction ?? 0; },
+        getReductionDb() { return limiter.getReductionDb(); },
         dispose() {
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          dryDelay.disconnect(); inputGain.disconnect(); node.disconnect();
+          dryDelay.disconnect(); inputGain.disconnect(); limiter.dispose();
         },
       };
     },
@@ -21062,7 +21522,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter };
+return { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter, makeTruePeakLimiter };
 })();
 
 /* ===== js/core/modular.js ===== */
@@ -28736,6 +29196,33 @@ const { SubSynth } = (() => {
  * Keybed-Stimmen ausmacht.
  */
 
+/** Baut den Filterknoten für eine Stimme -- entweder ein natives
+ *  BiquadFilterNode (LP/HP/BP, wie bisher) oder den selbstschwingungs-
+ *  fähigen Ladder-Tiefpass (s. core/dsp.js#makeLadderFilter, generalisiert
+ *  aus AcidBass' TB-303-Filterkern). Ein Ladder-Filter ist strukturell ein
+ *  anderer Knotentyp (ein `.input`/`.output`-Wrapper um einen Worklet-Knoten,
+ *  kein einzelnes natives AudioNode) -- deshalb hier eine gemeinsame Stelle
+ *  statt an jeder Anschlussstelle einzeln zu unterscheiden. Ein Wechsel des
+ *  Filtertyps WÄHREND eine Note klingt (s. buildControls unten) baut
+ *  bestehende Stimmen bewusst NICHT um (bräuchte ein komplettes Rewiring
+ *  mitten im Klingen) -- er gilt erst für die nächste neu angeschlagene Note,
+ *  identisch zu Devil-Fish-artigen Hardware-Filtern, die auch nicht mitten
+ *  im Ton die Topologie wechseln. */
+function createFilterNode(ctx, p) {
+  const filter = p.filterType === 'ladder' ? makeLadderFilter(ctx) : ctx.createBiquadFilter();
+  filter.type = p.filterType;
+  filter.Q.value = p.resonance;
+  return filter;
+}
+/** Der Ladder-Wrapper hat `.input`/`.output` (zwei stabile GainNodes), ein
+ *  natives BiquadFilterNode ist selbst schon Ein- UND Ausgang zugleich. */
+const filterIn = (f) => f.input ?? f;
+const filterOut = (f) => f.output ?? f;
+/** BiquadFilterNode kennt nur `.disconnect()`; der Ladder-Wrapper braucht
+ *  `.dispose()` (stoppt zusätzlich die beiden ConstantSourceNodes hinter
+ *  `.frequency`/`.Q`, s. core/dsp.js) -- sonst liefen die für immer weiter. */
+const disposeFilterNode = (f) => (f.dispose ? f.dispose() : f.disconnect());
+
 /**
  * Headroom für die Amp-Hüllkurve: Ohne diese Skalierung ramp(t) immer bis
  * 1 (volle Aussteuerung) — anders als bei der BeatBox, wo jeder Drum-Klang
@@ -28827,9 +29314,7 @@ class SubSynth extends StepSequencedSynth {
     osc.type = 'sawtooth';
     osc.frequency.value = midiToHz(midi + p.transpose);
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
+    const filter = createFilterNode(ctx, p);
     applyFilterEnv(filter, time, p);
 
     const env = ctx.createGain();
@@ -28845,10 +29330,11 @@ class SubSynth extends StepSequencedSynth {
     env.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
-    osc.connect(filter).connect(env).connect(this.output);
+    osc.connect(filterIn(filter));
+    filterOut(filter).connect(env).connect(this.output);
     osc.start(time);
     osc.stop(time + dur + p.release + 0.1);
-    osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
+    osc.onended = () => { osc.disconnect(); disposeFilterNode(filter); env.disconnect(); };
   }
 
   /* ---------- Stimmenverwaltung ---------- */
@@ -28872,16 +29358,15 @@ class SubSynth extends StepSequencedSynth {
     osc.type = 'sawtooth';
     osc.frequency.value = midiToHz(midi + p.transpose);
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = p.filterType;
-    filter.Q.value = p.resonance;
+    const filter = createFilterNode(ctx, p);
     applyFilterEnv(filter, t, p);
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(0, t);
     env.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
 
-    osc.connect(filter).connect(env).connect(this.output);
+    osc.connect(filterIn(filter));
+    filterOut(filter).connect(env).connect(this.output);
     osc.start(t);
 
     // Map-Schlüssel bleibt die ROHE (nicht transponierte) MIDI-Note -- so
@@ -28902,7 +29387,7 @@ class SubSynth extends StepSequencedSynth {
     v.env.gain.cancelScheduledValues(t);
     v.env.gain.setTargetAtTime(0, t, rel / 4);
     v.osc.stop(t + rel + 0.1);
-    v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
+    v.osc.onended = () => { v.osc.disconnect(); disposeFilterNode(v.filter); v.env.disconnect(); };
   }
 
   allNotesOff() {
@@ -28915,7 +29400,12 @@ class SubSynth extends StepSequencedSynth {
 
   /* ---------- UI ---------- */
   buildControls(container) {
-    // Filtertyp: LP / HP / BP — wirkt sofort auch auf klingende Stimmen
+    // Filtertyp: LP / HP / BP wirken sofort auch auf klingende Stimmen
+    // (natives BiquadFilterNode, reiner Typ-Umschalter). Ladder ist
+    // strukturell ein anderer Knoten (s. createFilterNode oben) -- ein
+    // Wechsel zu/von Ladder gilt deshalb erst für die NÄCHSTE neu
+    // angeschlagene Note, bereits klingende Stimmen behalten ihren
+    // bisherigen Filtertyp bis sie enden.
     const seg = document.createElement('div');
     seg.className = 'seg';
     seg.innerHTML = `
@@ -28923,6 +29413,7 @@ class SubSynth extends StepSequencedSynth {
       <button class="seg__btn" data-ft="lowpass">LP</button>
       <button class="seg__btn" data-ft="highpass">HP</button>
       <button class="seg__btn" data-ft="bandpass">BP</button>
+      <button class="seg__btn" data-ft="ladder">Ladder</button>
     `;
     seg.querySelectorAll('.seg__btn').forEach((b) =>
       b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
