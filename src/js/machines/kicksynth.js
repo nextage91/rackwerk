@@ -154,7 +154,11 @@ export class KickSynth extends StepSequencedSynth {
     });
     container.appendChild(row);
 
-    this.buildPatternControls(container);
+    // Kein Roll-Modus: die Hüllkurve hängt rein am eigenen Decay-Regler
+    // (dur aus der Sequenzer-Notenlänge wird in playNote() ignoriert, s.
+    // dort) -- eine im Roll gezeichnete Notenlänge hätte keine hörbare
+    // Wirkung.
+    this.buildPatternControls(container, { roll: false });
 
     // Keybed tief angesetzt -- Kicks leben in den unteren Oktaven, anders
     // als PercSynths eine Oktave höher gesetztes Keybed.

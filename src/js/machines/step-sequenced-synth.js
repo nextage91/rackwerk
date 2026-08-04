@@ -145,8 +145,14 @@ export class StepSequencedSynth extends Machine {
    *  eigenen Reglern/Keybed, je nach gewünschter Panel-Reihenfolge.
    *  `accentSlide` reicht die beiden zusätzlichen Tippzonen des Grids
    *  durch (s. step-seq.js) -- bislang nur vom AcidBass genutzt, Default
-   *  false lässt alle anderen Unterklassen unverändert. */
-  buildPatternControls(container, { accentSlide = false } = {}) {
+   *  false lässt alle anderen Unterklassen unverändert.
+   *  `roll = false` blendet den Roll-Modus komplett aus -- für PercSynth/
+   *  KickSynth (s. dortige buildControls()): deren Hüllkurve hängt rein an
+   *  ihrem eigenen Decay-Regler, `dur` aus der Notenlänge wird bewusst
+   *  ignoriert (perkussive One-Shots, kein Sustain-Konzept) -- eine
+   *  Notenlänge zu ZEICHNEN, die hörbar nichts bewirkt, wäre irreführender
+   *  als die Möglichkeit gar nicht erst anzubieten. */
+  buildPatternControls(container, { accentSlide = false, roll = true } = {}) {
     // Shuffle/Groove -- pro Maschine (s. transport.js#shuffleTime/Chat),
     // deshalb hier im Pattern-Teil statt im Transport verankert. Lazy-
     // Default direkt hier statt in jeder Unterklassen-buildAudio(): diese
@@ -173,6 +179,7 @@ export class StepSequencedSynth extends Machine {
 
     this.seq = new StepSeq(this.pattern, {
       accentSlide,
+      roll,
       defaultMidi: this.constructor.DEFAULT_MIDI,
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);

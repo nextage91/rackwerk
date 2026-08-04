@@ -16,6 +16,11 @@
  *    (länger als der alte feste 0.8*stepDuration-Wert für 1 Step) UND
  *    ruft playNote nur für den START-Step auf, nicht für die vom #len
  *    überdeckten Folge-Steps (kein Doppel-Trigger).
+ * 3) UI: PercSynth/KickSynth bekommen GAR KEINEN Roll-Modus (Nutzer-
+ *    Entscheidung: deren Hüllkurve hängt rein am eigenen Decay-Regler,
+ *    dur aus der Notenlänge wird ignoriert -- ein Resize-Anfasser, der
+ *    hörbar nichts bewirkt, wäre irreführender als gar keiner). PolySynth
+ *    (Kontrollgruppe) behält ihn wie gehabt.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -155,6 +160,23 @@ check('Ein 4-Step-Note-dur ist deutlich länger als ein 1-Step-Note-dur',
 const expectedLen4Dur = dsp.stepDuration * (4 - 0.2);
 check('Die 4-Step-Note-Dauer entspricht ungefähr stepDuration*(4-0.2)',
   dsp.calls.length === 2 && Math.abs(dsp.calls[1].dur - expectedLen4Dur) < 0.001);
+
+// ---------- 3) UI: PercSynth/KickSynth haben keinen Roll-Modus ----------
+async function checkRollButton(name, expectPresent) {
+  await openApp(page, baseUrlFromArgv());
+  await page.click('.rack__add');
+  await page.waitForSelector('.sheet__item');
+  await page.locator('.sheet__item', { hasText: name }).first().click();
+  await page.waitForTimeout(300);
+  await page.waitForSelector('.machine-focus:not([hidden])');
+  await page.waitForTimeout(200);
+  const count = await page.locator('.machine-focus:not([hidden]) [data-mode="roll"]').count();
+  check(`${name} ${expectPresent ? 'zeigt' : 'zeigt KEINEN'} Roll-Modus-Knopf`,
+    expectPresent ? count === 1 : count === 0);
+}
+await checkRollButton('PercSynth', false);
+await checkRollButton('KickSynth', false);
+await checkRollButton('PolySynth', true); // Kontrollgruppe -- unverändert
 
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);
