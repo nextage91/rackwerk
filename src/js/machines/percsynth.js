@@ -131,7 +131,11 @@ export class PercSynth extends StepSequencedSynth {
     });
     container.appendChild(row);
 
-    this.buildPatternControls(container);
+    // Kein Roll-Modus: die Hüllkurve hängt rein am eigenen Decay-Regler
+    // (dur aus der Sequenzer-Notenlänge wird in playNote() ignoriert, s.
+    // dort) -- eine im Roll gezeichnete Notenlänge hätte keine hörbare
+    // Wirkung.
+    this.buildPatternControls(container, { roll: false });
 
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({

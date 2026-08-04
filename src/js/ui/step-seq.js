@@ -226,7 +226,7 @@ function openVelocityPopup(currentVel, clientX, clientY, onVelChange, onTurnOff)
 export class StepSeq {
   /**
    * @param {{on:boolean, midi?:number, accent?:boolean, slide?:boolean}[]} pattern  Daten der Maschine (Referenz)
-   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean, defaultMidi?:number}} [opts]
+   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean, defaultMidi?:number, roll?:boolean}} [opts]
    */
   constructor(pattern, opts = {}) {
     this.pattern = pattern;
@@ -244,8 +244,13 @@ export class StepSeq {
     // sinnvoll (der AcidBass bräuchte eigene Accent/Slide-Zonen PRO Zeile,
     // das ist bewusst nicht Teil dieser ersten Version). 'grid' bleibt der
     // Standard, damit sich am Verhalten aller bisherigen Aufrufer nichts
-    // ändert, die den neuen Modus nicht kennen.
-    this.rollEnabled = this.pitchMode && !this.accentSlide;
+    // ändert, die den neuen Modus nicht kennen. opts.roll=false (PercSynth/
+    // KickSynth, s. step-sequenced-synth.js#buildPatternControls) blendet
+    // ihn zusätzlich aus: deren Hüllkurve hängt rein am eigenen Decay-
+    // Regler, die per Roll gezeichnete Notenlänge hätte dort keine hörbare
+    // Wirkung -- ein Anfasser, der sichtbar nichts bewirkt, ist irreführender
+    // als die Möglichkeit gar nicht erst anzubieten.
+    this.rollEnabled = this.pitchMode && !this.accentSlide && (opts.roll ?? true);
     this.mode = 'grid';
     this.rollPage = 0;
     // Unterste sichtbare Tonhöhe im Roll-Raster -- startet so, dass der

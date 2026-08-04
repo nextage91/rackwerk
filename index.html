@@ -16084,7 +16084,7 @@ function openVelocityPopup(currentVel, clientX, clientY, onVelChange, onTurnOff)
 class StepSeq {
   /**
    * @param {{on:boolean, midi?:number, accent?:boolean, slide?:boolean}[]} pattern  Daten der Maschine (Referenz)
-   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean, defaultMidi?:number}} [opts]
+   * @param {{onChange?:Function, pitch?:boolean, onLengthChange?:Function, accentSlide?:boolean, defaultMidi?:number, roll?:boolean}} [opts]
    */
   constructor(pattern, opts = {}) {
     this.pattern = pattern;
@@ -16102,8 +16102,13 @@ class StepSeq {
     // sinnvoll (der AcidBass bräuchte eigene Accent/Slide-Zonen PRO Zeile,
     // das ist bewusst nicht Teil dieser ersten Version). 'grid' bleibt der
     // Standard, damit sich am Verhalten aller bisherigen Aufrufer nichts
-    // ändert, die den neuen Modus nicht kennen.
-    this.rollEnabled = this.pitchMode && !this.accentSlide;
+    // ändert, die den neuen Modus nicht kennen. opts.roll=false (PercSynth/
+    // KickSynth, s. step-sequenced-synth.js#buildPatternControls) blendet
+    // ihn zusätzlich aus: deren Hüllkurve hängt rein am eigenen Decay-
+    // Regler, die per Roll gezeichnete Notenlänge hätte dort keine hörbare
+    // Wirkung -- ein Anfasser, der sichtbar nichts bewirkt, ist irreführender
+    // als die Möglichkeit gar nicht erst anzubieten.
+    this.rollEnabled = this.pitchMode && !this.accentSlide && (opts.roll ?? true);
     this.mode = 'grid';
     this.rollPage = 0;
     // Unterste sichtbare Tonhöhe im Roll-Raster -- startet so, dass der
@@ -28430,8 +28435,14 @@ class StepSequencedSynth extends Machine {
    *  eigenen Reglern/Keybed, je nach gewünschter Panel-Reihenfolge.
    *  `accentSlide` reicht die beiden zusätzlichen Tippzonen des Grids
    *  durch (s. step-seq.js) -- bislang nur vom AcidBass genutzt, Default
-   *  false lässt alle anderen Unterklassen unverändert. */
-  buildPatternControls(container, { accentSlide = false } = {}) {
+   *  false lässt alle anderen Unterklassen unverändert.
+   *  `roll = false` blendet den Roll-Modus komplett aus -- für PercSynth/
+   *  KickSynth (s. dortige buildControls()): deren Hüllkurve hängt rein an
+   *  ihrem eigenen Decay-Regler, `dur` aus der Notenlänge wird bewusst
+   *  ignoriert (perkussive One-Shots, kein Sustain-Konzept) -- eine
+   *  Notenlänge zu ZEICHNEN, die hörbar nichts bewirkt, wäre irreführender
+   *  als die Möglichkeit gar nicht erst anzubieten. */
+  buildPatternControls(container, { accentSlide = false, roll = true } = {}) {
     // Shuffle/Groove -- pro Maschine (s. transport.js#shuffleTime/Chat),
     // deshalb hier im Pattern-Teil statt im Transport verankert. Lazy-
     // Default direkt hier statt in jeder Unterklassen-buildAudio(): diese
@@ -28458,6 +28469,7 @@ class StepSequencedSynth extends Machine {
 
     this.seq = new StepSeq(this.pattern, {
       accentSlide,
+      roll,
       defaultMidi: this.constructor.DEFAULT_MIDI,
       onLengthChange: (bars) => {
         resizePattern(this.pattern, bars);
@@ -29070,7 +29082,11 @@ class PercSynth extends StepSequencedSynth {
     });
     container.appendChild(row);
 
-    this.buildPatternControls(container);
+    // Kein Roll-Modus: die Hüllkurve hängt rein am eigenen Decay-Regler
+    // (dur aus der Sequenzer-Notenlänge wird in playNote() ignoriert, s.
+    // dort) -- eine im Roll gezeichnete Notenlänge hätte keine hörbare
+    // Wirkung.
+    this.buildPatternControls(container, { roll: false });
 
     // Keybed eine Oktave höher als der Synth — Perc lebt weiter oben
     container.appendChild(createKeybed({
@@ -32634,7 +32650,11 @@ class KickSynth extends StepSequencedSynth {
     });
     container.appendChild(row);
 
-    this.buildPatternControls(container);
+    // Kein Roll-Modus: die Hüllkurve hängt rein am eigenen Decay-Regler
+    // (dur aus der Sequenzer-Notenlänge wird in playNote() ignoriert, s.
+    // dort) -- eine im Roll gezeichnete Notenlänge hätte keine hörbare
+    // Wirkung.
+    this.buildPatternControls(container, { roll: false });
 
     // Keybed tief angesetzt -- Kicks leben in den unteren Oktaven, anders
     // als PercSynths eine Oktave höher gesetztes Keybed.
