@@ -3,6 +3,7 @@
  * (Aus der BeatBox extrahiert, seit mehrere Maschinen sie brauchen.)
  */
 import { LADDER_FILTER_WORKLET_SRC } from './ladder-filter-worklet.js';
+import { FM_VOICE_WORKLET_SRC } from './fm-voice-worklet.js';
 
 let _noiseBuffer = null;
 
@@ -210,6 +211,76 @@ export function makeLadderFilter(ctx) {
       output.disconnect();
       freqSource.stop(); freqSource.disconnect();
       qSource.stop(); qSource.disconnect();
+      node?.disconnect();
+    },
+  };
+}
+
+/** Überabgetastete, alias-arme Zwei-Operatoren-FM-Stimme (s.
+ *  fm-voice-worklet.js für die vollständige Herleitung) -- Drop-in-Ersatz
+ *  für das bisherige Paar aus zwei nativen `OscillatorNode`s (Carrier +
+ *  Modulator) in machines/fmsynth.js/psysynth.js.
+ *
+ *  Reiner Klang-ERZEUGER (kein `.input` -- der Worklet hat `numberOfInputs:
+ *  0`, wie ein OscillatorNode). Alle fünf Parameter (carrierFreq/modFreq/
+ *  fmIndex/feedback/detune) sind ECHTE AudioParams, jeweils über einen
+ *  eigenen `ConstantSourceNode` realisiert -- derselbe Grund wie bei
+ *  makeLadderFilter oben: Aufrufer (s. FMSynth#applyFmEnv) planen
+ *  SOFORT nach dem Anlegen Automation (`setValueAtTime`/
+ *  `setTargetAtTime`) bzw. verbinden (PsySynths Pitch-Swirl-LFO) ein
+ *  Audio-Rate-Signal in `.detune` -- das braucht ein von der asynchronen
+ *  Worklet-Lade-Race UNABHÄNGIGES, von Anfang an vollwertiges AudioParam.
+ *
+ *  Lebenszyklus wie ein OscillatorNode: `start()` sofort beim Anlegen
+ *  (unhörbar, bis die AUSSEN liegende Amp-Hüllkurve öffnet -- exakt wie
+ *  bisher), `stop(t)` sample-genau planbar (nutzt intern EINEN der
+ *  ConstantSourceNodes als Uhr, weil AudioWorkletNode selbst kein
+ *  `.stop()`/`onended` kennt), `onended`-Setter für den Aufräum-Callback --
+ *  ruft am Ende der geplanten Stopp-Zeit, genau wie `osc.onended` bisher. */
+export function makeFmVoice(ctx) {
+  const output = ctx.createGain();
+  const PARAM_NAMES = ['carrierFreq', 'modFreq', 'fmIndex', 'feedback', 'detune'];
+  const sources = {};
+  for (const name of PARAM_NAMES) {
+    const src = ctx.createConstantSource();
+    src.offset.value = 0;
+    src.start();
+    sources[name] = src;
+  }
+  let node = null;
+  let disposed = false;
+
+  const attach = () => {
+    if (disposed) return;
+    node = new AudioWorkletNode(ctx, 'rackwerk-fm-voice', { numberOfInputs: 0, numberOfOutputs: 1 });
+    for (const name of PARAM_NAMES) {
+      node.parameters.get(name).value = 0;
+      sources[name].connect(node.parameters.get(name));
+    }
+    node.connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-fm-voice')) {
+    attach();
+  } else {
+    ensureSimpleWorklet(ctx, 'rackwerk-fm-voice', FM_VOICE_WORKLET_SRC).then((ok) => {
+      if (ok) attach();
+    });
+  }
+
+  return {
+    output,
+    carrierFreq: sources.carrierFreq.offset,
+    modFreq: sources.modFreq.offset,
+    fmIndex: sources.fmIndex.offset,
+    feedback: sources.feedback.offset,
+    detune: sources.detune.offset,
+    stop(t) { for (const name of PARAM_NAMES) sources[name].stop(t); },
+    set onended(fn) { sources.carrierFreq.onended = fn; },
+    dispose() {
+      disposed = true;
+      for (const name of PARAM_NAMES) { sources[name].disconnect(); }
+      output.disconnect();
       node?.disconnect();
     },
   };
