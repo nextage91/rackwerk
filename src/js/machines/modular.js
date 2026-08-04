@@ -93,7 +93,14 @@ export class Modular extends StepSequencedSynth {
   /** Vom Sequenzer aufgerufen (s. StepSequencedSynth#onStep) -- ein
    *  Anschlag betrifft den GESAMTEN Patch (s. ModularPatch#triggerAll),
    *  nicht ein einzelnes Modul: der Oszillator setzt seine Tonhöhe, jede
-   *  Hüllkurve rampt ihre Kurve, beides gleichzeitig für denselben Ton. */
+   *  Hüllkurve rampt ihre Kurve, beides gleichzeitig für denselben Ton.
+   *  Bewusst OHNE vel-Argument (anders als die übrigen Synths): ein
+   *  Envelope-Modul ist hier frei verkabelbar (kann genauso gut Filter-
+   *  Cutoff oder LFO-Tiefe statt Lautstärke modulieren, s. envelope.trigger
+   *  in core/modular.js) -- ein pauschales Skalieren träfe je nach Patch
+   *  den falschen Zielparameter. Note-Länge (dur, aus dem neuen Piano-
+   *  Roll-Feld st.len) funktioniert trotzdem unverändert, da dur bereits
+   *  vorher durchgereicht wurde. */
   playNote(midi, time, dur) {
     time = engine.quantizeTime(time);
     this.pulse(time);

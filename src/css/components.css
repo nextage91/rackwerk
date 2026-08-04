@@ -607,6 +607,43 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
 }
 .pitch-picker__note { min-height: 34px; padding: 0 2px; font-size: 12px; }
 
+/* Velocity-Ziehbalken (Pitch-Picker + reines Velocity-Popup bei Drum-Grids,
+   s. ui/step-seq.js#wireVelBar) -- kein <input type="range">, gleiche
+   Zieh-Technik wie die übrigen Touch-Regler dieses Projekts. */
+.pitch-picker__vel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pitch-picker__vel-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+  width: 24px;
+}
+.pitch-picker__vel-bar {
+  position: relative;
+  flex: 1;
+  height: 32px;
+  border-radius: 16px;
+  background: rgba(0,0,0,.35);
+  box-shadow: 0 2px 6px rgba(0,0,0,.5) inset;
+  touch-action: none; /* Ziehen gehört dem Balken, nicht dem Scroll */
+  overflow: hidden;
+}
+.pitch-picker__vel-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--m-color-dim, rgba(255,184,77,.4));
+  box-shadow: 0 0 8px var(--m-color-glow, rgba(255,184,77,.45)) inset;
+}
+.pitch-picker__vel-pct {
+  width: 34px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
 /* Umbenennen-Popup (Halten auf Rack-Zeile / Antippen des Namens im Editor) --
    gleiche Chrome/Position wie .pat-chip, aber mit Textfeld statt Buttons. */
 .rename-pop {
@@ -690,7 +727,7 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   border-radius: 8px;
   background: rgba(0,0,0,.3);
   box-shadow: 0 3px 8px rgba(0,0,0,.55) inset;
-  touch-action: manipulation;
+  touch-action: none;                    /* Resize-Drag statt Scroll (s. #wireRollPointer) */
 }
 /* [hidden] hat dieselbe Spezifität wie die Klassen oben und käme im
    Stylesheet NACH der UA-Regel [hidden]{display:none} -- ohne diese
@@ -716,6 +753,38 @@ x-fader.is-linear .fader__value { grid-column: 1; grid-row: 3; }
   background: var(--m-color-dim, rgba(77,195,255,.22));
   box-shadow: 0 0 8px var(--m-color-glow, rgba(77,195,255,.45)) inset,
               0 0 0 1px var(--m-color-glow, rgba(77,195,255,.45)) inset;
+}
+/* Mehrspaltige Notenlänge (s. ui/step-seq.js#renderRollRow): Kopf/Körper/
+   Ende einer Note wachsen visuell zu EINEM durchgehenden Balken zusammen
+   (kein Spalt an den inneren Grenzen) statt wie einzelne Zellen zu wirken
+   -- klassischer Piano-Roll-Look. Nur die Kopf-Seite (links) bzw. Ende-
+   Seite (rechts) behalten eine Rundung, wenn sie tatsächlich ein Rand der
+   Note sind (bei 1-Step-Noten ist eine Zelle beides zugleich). */
+.roll-cell.roll-cell--head { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+.roll-cell.roll-cell--tail { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+.roll-cell.roll-cell--body,
+.roll-cell.roll-cell--head:not(.roll-cell--tail) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.roll-cell.roll-cell--body,
+.roll-cell.roll-cell--tail:not(.roll-cell--head) { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+/* Anfasser an der rechten Kante jeder Note (auch 1-Step-Noten) -- zieht man
+   von hier, verlängert/verkürzt sich die Note (s. #wireRollPointer). Bewusst
+   dezent (schmaler heller Strich) statt eines auffälligen Extra-Knopfs --
+   das Raster ist auf dem Handy schon dicht genug. */
+.roll-cell.roll-cell--tail {
+  position: relative; /* Anker fürs ::after unten (absolut, sonst wären
+    Prozent-Vertikalränder fälschlich relativ zur BREITE der Zelle, nicht
+    zur Höhe -- CSS-Eigenheit bei Block-Margins) */
+}
+.roll-cell.roll-cell--tail::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  right: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--m-color, rgba(255,255,255,.55));
+  opacity: .6;
 }
 .roll-cell.is-play {
   background: var(--lcd-ink);

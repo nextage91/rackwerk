@@ -277,7 +277,7 @@ export class PsySynth extends StepSequencedSynth {
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
-  playNote(midi, time, dur) {
+  playNote(midi, time, dur, vel = 1) {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const p = this.params;
@@ -290,7 +290,7 @@ export class PsySynth extends StepSequencedSynth {
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(headroom, time + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     note.filter.connect(ampEnv).connect(this.output);
 

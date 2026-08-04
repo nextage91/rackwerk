@@ -91,7 +91,7 @@ export class TrackedDrumMachine extends Machine {
    *  Ein #privates emptySlot() wirft an der Stelle "Receiver must be an
    *  instance of class TrackedDrumMachine" (real reproduziert). */
   emptySlot() {
-    return this.constructor.TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false })));
+    return this.constructor.TRACK_DEFS.map(() => Array.from({ length: 16 }, () => ({ on: false, vel: 1 })));
   }
 
   /* ---------- Pattern-Bank (A/B/C/D) ---------- */
@@ -115,7 +115,7 @@ export class TrackedDrumMachine extends Machine {
     this.onPatternChange?.();
   }
   #cloneSlot(i) {
-    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on })));
+    return this.patterns[i].map((steps) => steps.map((s) => ({ on: s.on, vel: s.vel ?? 1 })));
   }
 
   /** Für Jam-Clip-Wiedergabe: Live-Sequenzer-Zustand direkt auf beliebige
@@ -163,7 +163,7 @@ export class TrackedDrumMachine extends Machine {
     for (let i = 0; i < this.tracks.length; i++) {
       if (this.soloTrack != null && i !== this.soloTrack) continue;
       const tr = this.tracks[i];
-      if (tr.steps[idx].on) this.#trigger(tr, t);
+      if (tr.steps[idx].on) this.#trigger(tr, t, tr.steps[idx].vel ?? 1);
     }
   }
 
@@ -178,7 +178,7 @@ export class TrackedDrumMachine extends Machine {
         sendDelay: tr.sendDelay, sendReverb: tr.sendReverb,
       })),
       // 4 Pattern-Slots (nur Steps)
-      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on })))),
+      patterns: this.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: s.on, vel: s.vel ?? 1 })))),
       patternIndex: this.patternIndex,
       pan: this.pan,
     };
@@ -209,11 +209,11 @@ export class TrackedDrumMachine extends Machine {
       tr.sendReverbNode.gain.setTargetAtTime(tr.sendReverb, engine.now, 0.01);
     });
     if (state.patterns) {
-      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on }))));
+      this.patterns = state.patterns.map((slot) => slot.map((steps) => steps.map((s) => ({ on: !!s.on, vel: s.vel ?? 1 }))));
       this.patternIndex = state.patternIndex ?? 0;
     } else if (state.tracks?.some((t) => t.steps)) {
       // Altes Format: Steps lagen in tracks[].steps → Slot A, B–D leer
-      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on })));
+      const slotA = state.tracks.map((saved) => (saved.steps ?? []).map((s) => ({ on: !!s.on, vel: s.vel ?? 1 })));
       this.patterns = [slotA, this.emptySlot(), this.emptySlot(), this.emptySlot()];
       this.patternIndex = 0;
     }
@@ -276,13 +276,20 @@ export class TrackedDrumMachine extends Machine {
     return tr.meterAnalyser;
   }
 
-  #trigger(tr, time) {
+  /** vel (0..1, Default 1) skaliert den Trigger-Pegel, OHNE die Klang-
+   *  erzeuger-Funktionen (kick/snare/… in beatbox.js/analogkit.js) selbst
+   *  anzufassen: die lesen `level` nur (nie schreibend), ein flach kopiertes
+   *  Params-Objekt mit vorskaliertem level reicht deshalb völlig -- ein
+   *  Vielfaches günstiger als jede Synth-Funktion einzeln um ein vel-
+   *  Argument zu erweitern. */
+  #trigger(tr, time, vel = 1) {
     this.pulse(time);
     // Auf die Render-Quantum-Grenze ausrichten → jeder Anschlag ist
     // identisch im Audio-Block positioniert (siehe engine.quantizeTime).
     // Ziel ist die Spur-eigene Panner-Node (nicht direkt this.output),
     // damit jede Drum-Spur ihre eigene Stereo-Position hat.
-    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, tr);
+    const p = vel === 1 ? tr : { ...tr, level: tr.level * vel };
+    tr.synth(engine.ctx, engine.quantizeTime(time), tr.panner, p);
   }
 
   /* ---------- Mixer: Pegel & Panorama pro Spur ---------- */
@@ -460,7 +467,7 @@ export class TrackedDrumMachine extends Machine {
       onSwitch: (i) => { this.setPatternIndex(i); song.recordPattern(this.id, i); },
       getSlot: (i) => this.#cloneSlot(i),
       putSlot: (i, data) => {
-        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on })));
+        this.patterns[i] = data.map((steps) => steps.map((s) => ({ on: !!s.on, vel: s.vel ?? 1 })));
         this.setPatternIndex(i);
       },
       onAddClip: (i) => this.addClipFromPattern(i),
