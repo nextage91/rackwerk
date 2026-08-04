@@ -40,6 +40,14 @@ const CHORD_KEYS = Object.keys(CHORDS);
  *  wie bei SubSynth (dort ausführlich gegen den Rest des Kits austariert). */
 const VOICE_HEADROOM = 0.6;
 
+/** Deckel für gleichzeitig gehaltene Akkorde (this.voices ist hier pro
+ *  ROOT-Note ein ganzes Voicing) -- s. subsynth.js#MAX_VOICES für die
+ *  ausführliche Begründung, hier identisch übernommen. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- s.
+ *  subsynth.js#STEAL_RELEASE_S. */
+const STEAL_RELEASE_S = 0.015;
+
 export class PolySynth extends StepSequencedSynth {
   static meta = {
     type: 'polysynth',
@@ -132,6 +140,9 @@ export class PolySynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Voicings) ---------- */
   noteOn(rootMidi) {
     if (this.voices.has(rootMidi)) return;
+    // s. subsynth.js#noteOn -- ältesten gehaltenen Akkord verdrängen statt
+    // unbegrenzt weitere Voicings anzuhäufen.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -160,13 +171,14 @@ export class PolySynth extends StepSequencedSynth {
     this.voices.set(rootMidi, voiceList);
   }
 
-  noteOff(rootMidi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
+  noteOff(rootMidi, steal = false) {
     const voiceList = this.voices.get(rootMidi);
     if (!voiceList) return;
     this.voices.delete(rootMidi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     for (const v of voiceList) {
       v.env.gain.cancelScheduledValues(t);
       v.env.gain.setTargetAtTime(0, t, rel / 4);

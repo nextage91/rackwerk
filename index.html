@@ -17335,6 +17335,178 @@ registerProcessor('rackwerk-onepole', RackwerkOnePoleProcessor);
 return { ONEPOLE_WORKLET_SRC };
 })();
 
+/* ===== js/core/svf-worklet.js ===== */
+const { SVF_WORKLET_SRC } = (() => {
+/**
+ * TPT (Topology-Preserving Transform) State-Variable-Filter als
+ * AudioWorkletProcessor -- Ersatz für die bisherige Dry/Highpass/Lowpass-
+ * Kreuzblende aus zwei `BiquadFilterNode`s im Master-Sweep-Filter (s.
+ * core/fx.js#buildFilterChain).
+ *
+ * Warum nicht weiter BiquadFilterNode: das Sweep-Pad in der Jam-Ansicht
+ * (jam-view.js) ist der EINZIGE Regler im ganzen Rack, der per Touch-Drag
+ * kontinuierlich in Echtzeit gezogen wird statt nur angetippt -- bei sehr
+ * schnellen `frequency`/`Q`-Änderungen kann ein Biquad hörbar knacksen,
+ * weil seine internen Verzögerungsglieder (z^-1/z^-2) noch den Zustand der
+ * ALTEN Koeffizienten tragen, wenn die neuen greifen (Koeffizienten- und
+ * Zustandssprung fallen zeitlich auseinander). Die "Topology-Preserving"-
+ * Struktur (Andy Simper/Cytomic, Standardliteratur für digitale State-
+ * Variable-Filter) baut die Integratoren so, dass genau dieser Sprung
+ * ausbleibt -- UND liefert Lowpass/Highpass/Bandpass gleichzeitig aus
+ * EINEM gemeinsamen Kern, weshalb der Sweep-Regler (der zwischen Highpass-
+ * und Lowpass-Charakter überblendet) hier mit einer einzigen Filterstufe
+ * auskommt statt zwei parallelen Biquads + drei Gain-Knoten für die
+ * Kreuzblende.
+ *
+ * Kein Transzendentale im Sample-Loop: tan()/Koeffizienten werden nur EINMAL
+ * PRO BLOCK neu gerechnet (sweep/reso sind bewusst k-rate-Parameter, s.
+ * parameterDescriptors -- für einen Touch-Drag reicht das, ein Update alle
+ * 128 Samples/~2.9ms ist weit unter jeder Zipper-Hörschwelle), nicht pro
+ * Sample wie es a-rate-Parameter erzwingen würden.
+ *
+ * hpMaxHz/lpMinHz/edgeMinHz/edgeMaxHz kommen als processorOptions vom
+ * Aufrufer (core/inserts.js#makeSweepFilter) -- dieselben vier Eckwerte,
+ * die fx.js vorher direkt in seine eigene #logLerp-Rechnung einsetzte,
+ * jetzt nur eine Ebene tiefer. So bleibt dieser Worklet ein generischer,
+ * wiederverwendbarer Sweep-Filter-Kern statt fest an fx.js' Hz-Bereich
+ * gekoppelt zu sein.
+ *
+ * Wie bei allen anderen Worklets in diesem Projekt: exportiert nur den
+ * Quelltext als String -- RackWerk wird als EINE gebündelte index.html
+ * ausgeliefert, der String wird zur Laufzeit per Blob-URL an
+ * audioWorklet.addModule() übergeben. Eigener globaler Scope ohne Zugriff
+ * auf unsere ES-Module, deshalb komplett eigenständig.
+ */
+const SVF_WORKLET_SRC = `
+/** Wie core/onepole-worklet.js#DENORMAL_FLOOR -- schützt vor dauerhaft im
+ *  Denormal-Bereich hängenden Zustandswerten nach dem Verstummen des
+ *  Eingangs (auf manchen CPUs deutlich langsamere Gleitkomma-Arithmetik). */
+const DENORMAL_FLOOR = 1e-30;
+
+class RackwerkSVFProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'sweep', defaultValue: 0, minValue: -1, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'reso', defaultValue: 5, minValue: 0.1, maxValue: 30, automationRate: 'k-rate' },
+    ];
+  }
+
+  constructor(options) {
+    super();
+    const po = options.processorOptions ?? {};
+    this.edgeMinHz = po.edgeMinHz ?? 20;
+    this.hpMaxHz = po.hpMaxHz ?? 5000;
+    this.edgeMaxHz = po.edgeMaxHz ?? 20000;
+    this.lpMinHz = po.lpMinHz ?? 150;
+
+    // TPT-Integrator-Zustand (ic1eq/ic2eq), EIN Paar pro Kanal -- wie
+    // onepole-worklet.js: fester Float64Array-Puffer statt wachsendem
+    // JS-Array, Kanalzahl steht beim Anlegen fest.
+    this.ic1 = new Float64Array(32);
+    this.ic2 = new Float64Array(32);
+
+    // Koeffizienten-Cache -- sweep/reso sind k-rate (ein Wert pro Block),
+    // updateCoeffs() lohnt sich trotzdem als expliziter Cache-Check: bei
+    // stillstehenden Reglern (der Normalfall) spart das drei Divisionen
+    // plus ein tan() pro Block.
+    this.lastSweep = NaN;
+    this.lastReso = NaN;
+    this.a1 = 0; this.a2 = 0; this.a3 = 0; this.k = 0;
+    this.dryGain = 1; this.hpGain = 0; this.lpGain = 0;
+  }
+
+  updateCoeffs(sweep, reso) {
+    if (sweep === this.lastSweep && reso === this.lastReso) return;
+    this.lastSweep = sweep;
+    this.lastReso = reso;
+
+    const s = Math.max(-1, Math.min(1, sweep));
+    // Dieselbe log-Interpolation wie fx.js' frühere #logLerp -- sweep<0
+    // wandert Richtung Highpass (Grenzfreq. steigt von edgeMinHz Richtung
+    // hpMaxHz), sweep>0 Richtung Lowpass (fällt von edgeMaxHz Richtung
+    // lpMinHz). Bei sweep=0 ist der gewählte Wert irrelevant (hp/lpGain
+    // sind dann beide 0, reiner Dry-Durchlauf).
+    const fc = s < 0
+      ? this.edgeMinHz * Math.pow(this.hpMaxHz / this.edgeMinHz, -s)
+      : this.edgeMaxHz * Math.pow(this.lpMinHz / this.edgeMaxHz, s);
+    this.dryGain = 1 - Math.abs(s);
+    this.hpGain = s < 0 ? -s : 0;
+    this.lpGain = s > 0 ? s : 0;
+
+    // Nyquist-Sicherheitsklemme: tan(pi*fc/fs) läuft bei fc->fs/2 gegen
+    // Unendlich -- edgeMaxHz (20kHz) liegt bei ungewöhnlich niedrigen
+    // Sample-Raten sonst gefährlich nah dran.
+    const fcSafe = Math.min(fc, sampleRate * 0.49);
+    const g = Math.tan(Math.PI * fcSafe / sampleRate);
+    // reso ist der GLEICHE Wert, den die alte BiquadFilterNode-Fassung als
+    // .Q entgegennahm (Regler-Bereich 0.7..15, s. fx.js) -- Chromes
+    // natives BiquadFilterNode folgt bei niedrigen Grenzfrequenzen relativ
+    // zur Sample-Rate (hier 150-5000Hz bei 44.1/48kHz) EMPIRISCH NICHT der
+    // Lehrbuch-RBJ-Beziehung peak_dB ≈ 20*log10(Q), sondern eher
+    // peak_dB ≈ Q (nachgemessen per getFrequencyResponse: Q=5 -> ~5.4dB
+    // Peak, Q=15 -> ~15dB, Q=20 -> 20dB, nicht die per RBJ-Formel zu
+    // erwartenden 14/23.5/26dB). Ein TPT-SVF mit direktem k=1/reso hätte
+    // bei gleichem reso-Wert also eine deutlich AGGRESSIVERE Resonanz als
+    // die alte Fassung -- reso wird deshalb zuerst in ein äquivalentes
+    // SVF-Q umgerechnet (qEff = 10^(reso/20)), das bei der SVF-eigenen
+    // Lehrbuch-Formel dieselbe gemessene peak_dB-Kurve reproduziert. Damit
+    // klingt Reso beim Umstieg von Biquad auf SVF UNVERÄNDERT.
+    const qEff = Math.pow(10, reso / 20);
+    const k = 1 / Math.max(0.05, qEff);
+    const a1 = 1 / (1 + g * (g + k));
+    this.a1 = a1;
+    this.a2 = g * a1;
+    this.a3 = g * this.a2;
+    this.k = k;
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!output || !output.length) return true;
+
+    // k-rate: parameters.sweep/reso haben IMMER genau ein Element.
+    this.updateCoeffs(parameters.sweep[0], parameters.reso[0]);
+    const { a1, a2, a3, k, dryGain, hpGain, lpGain } = this;
+
+    for (let ch = 0; ch < output.length; ch++) {
+      const inCh = input?.[ch];
+      const outCh = output[ch];
+      let ic1 = this.ic1[ch];
+      let ic2 = this.ic2[ch];
+
+      for (let i = 0; i < outCh.length; i++) {
+        const x = inCh ? inCh[i] : 0;
+        // Andy-Simper/Cytomic-TPT-SVF: liefert Lowpass (v2) UND Highpass
+        // (x - k*v1 - v2) aus demselben Durchlauf -- der Sweep-Regler
+        // blendet nur noch zwischen den beiden fertigen Ausgängen (plus
+        // trocken), baut aber nie zwei getrennte Filterketten auf.
+        const v3 = x - ic2;
+        const v1 = a1 * ic1 + a2 * v3;
+        const v2 = ic2 + a2 * ic1 + a3 * v3;
+        ic1 = 2 * v1 - ic1;
+        ic2 = 2 * v2 - ic2;
+        const lp = v2;
+        const hp = x - k * v1 - v2;
+        outCh[i] = dryGain * x + hpGain * hp + lpGain * lp;
+      }
+
+      // Denormal-/NaN-Schutz einmal pro Block, wie onepole-worklet.js.
+      if (ic1 > -DENORMAL_FLOOR && ic1 < DENORMAL_FLOOR) ic1 = 0;
+      if (ic2 > -DENORMAL_FLOOR && ic2 < DENORMAL_FLOOR) ic2 = 0;
+      if (!Number.isFinite(ic1) || !Number.isFinite(ic2)) { ic1 = 0; ic2 = 0; }
+      this.ic1[ch] = ic1;
+      this.ic2[ch] = ic2;
+    }
+    return true;
+  }
+}
+registerProcessor('rackwerk-svf', RackwerkSVFProcessor);
+`;
+
+return { SVF_WORKLET_SRC };
+})();
+
 /* ===== js/core/resonator-worklet.js ===== */
 const { RESONATOR_PROCESSOR_NAME, RESONATOR_PARAMS, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, RESONATOR_WORKLET_SRC } = (() => {
 /**
@@ -17916,7 +18088,7 @@ return { PITCHTRACK_WORKLET_SRC };
 })();
 
 /* ===== js/core/inserts.js ===== */
-const { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve } = (() => {
+const { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter } = (() => {
 /**
  * inserts.js — pro Maschine frei zusammensteckbare Insert-Effekte
  * (Compressor, EQ, Drive/Saturation).
@@ -17940,7 +18112,18 @@ const { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLa
  *  bei amount=0) klingt schon bei niedrigem amount hörbar verzerrt, weil
  *  selbst k=1 spürbar von der Identität abweicht — das Blending macht
  *  den Regler über den ganzen Bereich nutzbar, von ganz sauber bis hart. */
-function makeDriveCurve(amount) {
+/**
+ * `character` (0..1, Default 0) blendet dieselbe asymmetrische Vorverzerrung
+ * ein, die Tape Machine bereits nutzt (s. makeTapeCurve unten): eine
+ * additive quadratische Beimischung VOR dem tanh() macht die Kurve
+ * asymmetrisch -- mehr geradzahlige Röhren-/Class-A-Obertöne statt der rein
+ * ungeraden Harmonischen des reinen tanh(). Default 0 = exakt das alte,
+ * symmetrische Verhalten (rückwärtskompatibel zu Projekten ohne dieses
+ * Feld). Der Insert bekommt dafür einen DC-Sperrfilter NACH dem Shaper (s.
+ * DEFS.drive), aus demselben Grund wie bei Tape: eine asymmetrische Kurve
+ * kann sonst einen Gleichspannungsanteil einschleusen.
+ */
+function makeDriveCurve(amount, character = 0) {
   const n = 1024;
   const curve = new Float32Array(n);
   const K = 30;
@@ -17951,7 +18134,8 @@ function makeDriveCurve(amount) {
     // Tabellenindex, den WaveShaperNode für x=0 tatsächlich abfragt,
     // wodurch echte Stille einen kleinen, hörbaren DC-Versatz bekommt.
     const x = (i * 2) / (n - 1) - 1;
-    const driven = Math.tanh(K * x) / norm;
+    const biased = x + character * 0.15 * x * x;
+    const driven = Math.tanh(K * biased) / norm;
     curve[i] = (1 - amount) * x + amount * driven;
   }
   return curve;
@@ -18328,6 +18512,69 @@ function makeOnePoleLowpass(ctx, cutoffHz) {
       input.disconnect();
       output.disconnect();
       filter?.disconnect();
+    },
+  };
+}
+
+/** DJ-Style-Sweep-Filter (Master-Kanal, s. core/fx.js#buildFilterChain) als
+ *  TPT-State-Variable-Filter -- ersetzt die frühere Dry/Highpass/Lowpass-
+ *  Kreuzblende aus zwei BiquadFilterNodes + drei Gain-Knoten (s. core/svf-
+ *  worklet.js für die ausführliche Begründung: das Sweep-Pad in der Jam-
+ *  Ansicht ist der einzige Regler im Rack, der per Touch-Drag kontinuierlich
+ *  in Echtzeit gezogen wird, genau das Szenario, in dem ein Biquad hörbar
+ *  knacksen kann). Ein SVF-Kern liefert Lowpass+Highpass gleichzeitig,
+ *  `sweep` blendet nur noch zwischen den beiden fertigen Ausgängen -- eine
+ *  Filterstufe statt zwei parallele Ketten.
+ *
+ *  Gleiches "transparenter Platzhalter, bis das Worklet-Modul geladen ist"-
+ *  Muster wie makeOnePoleLowpass oben: stabile input/output-GainNodes, die
+ *  sich beim Laden unsichtbar für den Aufrufer umverkabeln. */
+function makeSweepFilter(ctx, { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz }) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let node = null;
+  let disposed = false;
+  let sweep = 0;
+  let reso = 5;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-svf', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz },
+    });
+    node.parameters.get('sweep').value = sweep;
+    node.parameters.get('reso').value = reso;
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-svf')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-svf', SVF_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    setSweep(v, t, timeConstant) {
+      sweep = v;
+      node?.parameters.get('sweep').setTargetAtTime(v, t, timeConstant);
+    },
+    setReso(v, t, timeConstant) {
+      reso = v;
+      node?.parameters.get('reso').setTargetAtTime(v, t, timeConstant);
+    },
+    dispose() {
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      node?.disconnect();
     },
   };
 }
@@ -18917,7 +19164,10 @@ const DEFS = {
     // "fizzy"/präsenter statt wummernd). 0 = flach = unverändert.
     // mix: Dry/Wet wie Abletons Saturator -- 1.0 (Default) entspricht dem
     // alten, immer volltrockenfreien Verhalten.
-    defaults: { drive: 0.4, tone: 0.6, level: 0.8, base: 0, mix: 1 },
+    // asym: 0..1, Default 0 (unverändertes altes Verhalten für bestehende
+    // Projekte) -- blendet dieselbe asymmetrische Vorverzerrung ein, die
+    // Tape Machine bereits nutzt (s. makeDriveCurve oben für die Begründung).
+    defaults: { drive: 0.4, tone: 0.6, level: 0.8, base: 0, asym: 0, mix: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
       const dry = ctx.createGain();
@@ -18930,9 +19180,24 @@ const DEFS = {
       pre.frequency.value = 300;
       pre.gain.value = p.base * 15; // ±15dB, deutlich hörbar ohne extrem zu sein
 
+      // drive/asym leben in eigenen Closure-Variablen statt weiter p.drive/
+      // p.asym zu lesen -- die Kurve hängt von BEIDEN Reglern ab, setParam()
+      // bekommt aber bei jedem Aufruf nur den EINEN gerade geänderten Wert.
+      let currentDrive = p.drive;
+      let currentAsym = p.asym ?? 0;
       const shaper = ctx.createWaveShaper();
       shaper.oversample = '4x';
-      shaper.curve = makeDriveCurve(p.drive);
+      shaper.curve = makeDriveCurve(currentDrive, currentAsym);
+
+      // DC-Sperrfilter NACH dem Shaper -- nötig, sobald asym>0 (s. dortiger
+      // Kommentar); bei asym=0 (Default) unhörbar, deshalb bewusst immer
+      // verkabelt statt bedingt, spart eine Sonderfall-Umverkabelung beim
+      // Umschalten.
+      const dcBlock = ctx.createBiquadFilter();
+      dcBlock.type = 'highpass';
+      dcBlock.frequency.value = 20;
+      dcBlock.Q.value = 0.7;
+
       const tone = ctx.createBiquadFilter();
       tone.type = 'lowpass';
       tone.Q.value = 0.7;
@@ -18948,7 +19213,8 @@ const DEFS = {
       input.connect(dryDelay).connect(dry);
       input.connect(pre);
       pre.connect(shaper);
-      shaper.connect(tone);
+      shaper.connect(dcBlock);
+      dcBlock.connect(tone);
       tone.connect(level);
       level.connect(wet);
       const outSum = ctx.createGain();
@@ -18957,17 +19223,19 @@ const DEFS = {
 
       // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
       // Audio-Thread, das zudem bei aktivem Signal hörbar knackst, weil
-      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- der Knob
-      // feuert aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
+      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- die Knobs
+      // feuern aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
       // Gleiches Entprellen wie fx.js' #buildIR() für den Reverb-Impuls.
       let driveTimer = null;
+      const scheduleCurveRebuild = () => {
+        clearTimeout(driveTimer);
+        driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(currentDrive, currentAsym); }, 60);
+      };
       return {
         input, output: outSum,
         setParam(key, v) {
-          if (key === 'drive') {
-            clearTimeout(driveTimer);
-            driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(v); }, 60);
-          }
+          if (key === 'drive') { currentDrive = v; scheduleCurveRebuild(); }
+          else if (key === 'asym') { currentAsym = v; scheduleCurveRebuild(); }
           else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
           else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
           else if (key === 'base') pre.gain.setTargetAtTime(v * 15, engine.now, 0.01);
@@ -18979,7 +19247,7 @@ const DEFS = {
         dispose() {
           clearTimeout(driveTimer);
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          dryDelay.disconnect(); pre.disconnect(); shaper.disconnect(); tone.disconnect(); level.disconnect();
+          dryDelay.disconnect(); pre.disconnect(); shaper.disconnect(); dcBlock.disconnect(); tone.disconnect(); level.disconnect();
         },
       };
     },
@@ -20481,6 +20749,7 @@ const UI_PARAMS = {
   drive: [
     { key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' },
     { key: 'base', label: 'Base', min: -1, max: 1, unit: '' },
+    { key: 'asym', label: 'Asym', min: 0, max: 1, unit: '' },
     { key: 'tone', label: 'Tone', min: 0, max: 1, unit: '' },
     { key: 'level', label: 'Level', min: 0, max: 2, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
@@ -20793,7 +21062,7 @@ function createInsert(type, saved = null) {
   return insert;
 }
 
-return { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve };
+return { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, createInsert, insertChainLatencySec, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS, makeFeedbackClipCurve, makeDriveCurve, makeSweepFilter };
 })();
 
 /* ===== js/core/modular.js ===== */
@@ -25285,9 +25554,9 @@ const REV_DAMPING_MIN = 500;
 const REV_DAMPING_MAX = 15000;
 
 // DJ-Mixer-Filter fürs Master-Signal (Nutzer-Wunsch: "Song-Performance",
-// wie beim Auflegen) -- bipolarer Sweep statt Typ-Umschaltung, s.
-// #buildFilterChain für die vollständige Begründung des click-freien
-// Parallel-HP/LP/Dry-Crossfade-Ansatzes.
+// wie beim Auflegen) -- bipolarer Sweep statt Typ-Umschaltung, läuft über
+// einen TPT-State-Variable-Filter-Worklet (s. #buildFilterChain/core/svf-
+// worklet.js für die Begründung).
 const FILTER_HP_MAX_HZ = 5000;   // Sweep -1 (voll gegen den Uhrzeigersinn)
 const FILTER_LP_MIN_HZ = 150;    // Sweep +1 (voll im Uhrzeigersinn)
 const FILTER_EDGE_MIN_HZ = 20;   // Sweep 0 -- HP-Grenzfreq. startet hier
@@ -25454,83 +25723,47 @@ class MasterFX {
 
   /**
    * Master-Filter für die Song-Performance ("wie beim Auflegen"): EIN
-   * bipolarer Sweep-Regler statt einer Typ-Umschaltung. Ein einzelner
-   * BiquadFilterNode könnte zwar .type zur Laufzeit zwischen lowpass/
-   * highpass wechseln, aber sein interner Zustand (Filter-Delay-Line)
-   * überträgt sich dabei NICHT sauber -- das riskiert genau das Knacksen,
-   * das an jeder anderen Stelle in dieser Codebase bewusst vermieden wird
-   * (s. z. B. #buildDelayChain oben). Stattdessen laufen HP- und LP-Zweig
-   * PERMANENT parallel vom selben Eingang mit, jeder mit eigenem Gain:
-   *
-   *   filterIn ─┬→ dryGain ────────────────────────┐
-   *             ├→ hp (Biquad) → hpGain ───────────┼→ filterOut
-   *             └→ lp (Biquad) → lpGain ────────────┘
-   *
-   * sweep<0: hpGain blendet von 0 auf |sweep| auf, hp.frequency steigt
-   *          (log-skaliert) von 20Hz Richtung 5kHz; lpGain bleibt 0.
-   * sweep>0: lpGain blendet von 0 auf sweep auf, lp.frequency fällt
-   *          (log-skaliert) von 20kHz Richtung 150Hz; hpGain bleibt 0.
-   * dryGain = 1 - |sweep| -- bei sweep=0 exakt 1, garantiert transparent
-   * (keine Rundungs-/Interpolationsfehler wie bei einer Typ-Umschaltung).
-   * Reso (Q) wirkt an beiden Zweigen gleichzeitig, unabhängig vom Sweep --
-   * harmlos, solange der jeweilige Zweig ohnehin auf Gain 0 steht.
+   * bipolarer Sweep-Regler statt einer Typ-Umschaltung. Läuft über einen
+   * TPT-State-Variable-Filter (s. core/svf-worklet.js) statt zweier
+   * paralleler BiquadFilterNodes -- der Sweep-Regler ist der einzige im
+   * ganzen Rack, der per Touch-Drag kontinuierlich in Echtzeit gezogen
+   * wird (nicht nur angetippt), genau das Szenario, in dem ein Biquad bei
+   * schnellen frequency-/Q-Änderungen hörbar knacksen kann, weil sein
+   * interner Zustand (Filter-Delay-Line) noch zu den ALTEN Koeffizienten
+   * gehört, wenn die neuen greifen. Das SVF liefert Lowpass UND Highpass
+   * gleichzeitig aus EINEM Kern, der Worklet übernimmt die Sweep/Reso-
+   * Kreuzblende komplett selbst (s. dortiger Dateikopf-Kommentar für die
+   * genaue Hz-Zuordnung, identisch zur früheren #logLerp-Rechnung hier).
    */
   #buildFilterChain(ctx) {
     // audio-engine.js verbindet masterFilterIn->masterFilterOut anfangs
     // direkt (Identität, s. dortiger Kommentar) -- muss hier weichen, sonst
-    // liefe das trockene Signal parallel zur eigentlichen Dry/HP/LP-
-    // Kreuzblende IMMER zusätzlich unverändert durch (identisches Muster/
-    // dieselbe Falle wie bei #rewireMasterInsertChain, s. dortiger
-    // disconnectChainEdge()-Kommentar).
+    // liefe das trockene Signal parallel zum SVF IMMER zusätzlich
+    // unverändert durch (identisches Muster/dieselbe Falle wie bei
+    // #rewireMasterInsertChain, s. dortiger disconnectChainEdge()-Kommentar).
     engine.masterFilterIn.disconnect(engine.masterFilterOut);
 
-    this.filterDry = ctx.createGain();
-    this.filterHP = ctx.createBiquadFilter();
-    this.filterLP = ctx.createBiquadFilter();
-    this.filterHP.type = 'highpass';
-    this.filterLP.type = 'lowpass';
-    this.filterHPGain = ctx.createGain();
-    this.filterLPGain = ctx.createGain();
-
-    engine.masterFilterIn.connect(this.filterDry);
-    engine.masterFilterIn.connect(this.filterHP);
-    engine.masterFilterIn.connect(this.filterLP);
-    this.filterHP.connect(this.filterHPGain);
-    this.filterLP.connect(this.filterLPGain);
-    this.filterDry.connect(engine.masterFilterOut);
-    this.filterHPGain.connect(engine.masterFilterOut);
-    this.filterLPGain.connect(engine.masterFilterOut);
+    this.sweepFilter = makeSweepFilter(ctx, {
+      edgeMinHz: FILTER_EDGE_MIN_HZ,
+      hpMaxHz: FILTER_HP_MAX_HZ,
+      edgeMaxHz: FILTER_EDGE_MAX_HZ,
+      lpMinHz: FILTER_LP_MIN_HZ,
+    });
+    engine.masterFilterIn.connect(this.sweepFilter.input);
+    this.sweepFilter.output.connect(engine.masterFilterOut);
 
     this.#applyFilterSweep(this.params.filterSweep);
     this.#applyFilterReso(this.params.filterReso);
   }
 
-  /** log-skalierte Interpolation zwischen a und b (t: 0..1). */
-  #logLerp(a, b, t) { return a * Math.pow(b / a, t); }
-
   #applyFilterSweep(sweep) {
-    if (!this.filterHP) return;
-    const t = engine.now;
-    const s = Math.max(-1, Math.min(1, sweep));
-    this.filterDry.gain.setTargetAtTime(1 - Math.abs(s), t, 0.02);
-    if (s < 0) {
-      this.filterHP.frequency.setTargetAtTime(
-        this.#logLerp(FILTER_EDGE_MIN_HZ, FILTER_HP_MAX_HZ, -s), t, 0.02);
-      this.filterHPGain.gain.setTargetAtTime(-s, t, 0.02);
-      this.filterLPGain.gain.setTargetAtTime(0, t, 0.02);
-    } else {
-      this.filterLP.frequency.setTargetAtTime(
-        this.#logLerp(FILTER_EDGE_MAX_HZ, FILTER_LP_MIN_HZ, s), t, 0.02);
-      this.filterLPGain.gain.setTargetAtTime(s, t, 0.02);
-      this.filterHPGain.gain.setTargetAtTime(0, t, 0.02);
-    }
+    if (!this.sweepFilter) return;
+    this.sweepFilter.setSweep(Math.max(-1, Math.min(1, sweep)), engine.now, 0.02);
   }
 
   #applyFilterReso(q) {
-    if (!this.filterHP) return;
-    const t = engine.now;
-    this.filterHP.Q.setTargetAtTime(q, t, 0.02);
-    this.filterLP.Q.setTargetAtTime(q, t, 0.02);
+    if (!this.sweepFilter) return;
+    this.sweepFilter.setReso(q, engine.now, 0.02);
   }
 
   #flushTimer = null;
@@ -25761,7 +25994,7 @@ class MasterFX {
       this.reverbInsert.setParam('decay', Math.min(REV_DECAY_MAX, Math.max(0, this.params.revDecay)));
       this.reverbInsert.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, this.params.revDamp)));
     }
-    if (this.filterHP) {
+    if (this.sweepFilter) {
       this.#applyFilterSweep(this.params.filterSweep);
       this.#applyFilterReso(this.params.filterReso);
     }
@@ -28516,6 +28749,20 @@ const { SubSynth } = (() => {
  */
 const VOICE_HEADROOM = 0.6;
 
+/** Deckel für gleichzeitig GEHALTENE Keybed-Stimmen (this.voices, s. unten)
+ *  -- ohne den würde jede neue, andere Tonhöhe unbegrenzt neue native
+ *  Audio-Nodes anhäufen (Arp/viele gehaltene Tasten über eine lange Jam-
+ *  Session, besonders auf dem Handy ein reales Ressourcenrisiko). Beim
+ *  Erreichen wird die ÄLTESTE Stimme "gestohlen" (s. noteOn/noteOff unten)
+ *  -- ausreichend hoch für jedes reale Spielen mit zwei Händen plus Arp,
+ *  ohne spürbar zu limitieren. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- deutlich kürzer
+ *  als der reguläre, vom Nutzer eingestellte Release (der oft viel länger
+ *  ist), aber lang genug, um den harten Cutoff hörbar zu entschärfen
+ *  (Fast-Fade-Out statt Klick). */
+const STEAL_RELEASE_S = 0.015;
+
 class SubSynth extends StepSequencedSynth {
   static meta = {
     type: 'subsynth',
@@ -28607,6 +28854,10 @@ class SubSynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    // Deckel erreicht -- älteste Stimme (erster Map-Eintrag, Maps behalten
+    // Einfügereihenfolge) mit kurzem Fade-Out abräumen statt unbegrenzt
+    // weitere Nodes anzuhäufen, s. MAX_VOICES oben.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -28639,13 +28890,15 @@ class SubSynth extends StepSequencedSynth {
     this.voices.set(midi, { osc, filter, env });
   }
 
-  noteOff(midi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben) --
+   *  fester, sehr kurzer Release statt des vom Nutzer eingestellten. */
+  noteOff(midi, steal = false) {
     const v = this.voices.get(midi);
     if (!v) return;
     this.voices.delete(midi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     v.env.gain.cancelScheduledValues(t);
     v.env.gain.setTargetAtTime(0, t, rel / 4);
     v.osc.stop(t + rel + 0.1);
@@ -29145,6 +29398,14 @@ const CHORD_KEYS = Object.keys(CHORDS);
  *  wie bei SubSynth (dort ausführlich gegen den Rest des Kits austariert). */
 const VOICE_HEADROOM = 0.6;
 
+/** Deckel für gleichzeitig gehaltene Akkorde (this.voices ist hier pro
+ *  ROOT-Note ein ganzes Voicing) -- s. subsynth.js#MAX_VOICES für die
+ *  ausführliche Begründung, hier identisch übernommen. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- s.
+ *  subsynth.js#STEAL_RELEASE_S. */
+const STEAL_RELEASE_S = 0.015;
+
 class PolySynth extends StepSequencedSynth {
   static meta = {
     type: 'polysynth',
@@ -29237,6 +29498,9 @@ class PolySynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Voicings) ---------- */
   noteOn(rootMidi) {
     if (this.voices.has(rootMidi)) return;
+    // s. subsynth.js#noteOn -- ältesten gehaltenen Akkord verdrängen statt
+    // unbegrenzt weitere Voicings anzuhäufen.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -29265,13 +29529,14 @@ class PolySynth extends StepSequencedSynth {
     this.voices.set(rootMidi, voiceList);
   }
 
-  noteOff(rootMidi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
+  noteOff(rootMidi, steal = false) {
     const voiceList = this.voices.get(rootMidi);
     if (!voiceList) return;
     this.voices.delete(rootMidi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     for (const v of voiceList) {
       v.env.gain.cancelScheduledValues(t);
       v.env.gain.setTargetAtTime(0, t, rel / 4);
@@ -31477,6 +31742,12 @@ const { FMSynth } = (() => {
  *  der Spitzenlautstärke bleibt statt abzuklingen. */
 const VOICE_HEADROOM = 0.55;
 
+/** Deckel für gleichzeitig gehaltene Stimmen -- s. subsynth.js#MAX_VOICES. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- s.
+ *  subsynth.js#STEAL_RELEASE_S. */
+const STEAL_RELEASE_S = 0.015;
+
 /** Skaliert die 0..1-Regler "FM Amount"/"FM Env" auf den tatsächlichen
  *  Modulationsindex (klassische FM-Grössenordnung, s. Chowning: Index
  *  0 = kein Effekt, ~1-3 = moderat, 6+ = hell/metallisch/rauschig). Über
@@ -31614,6 +31885,9 @@ class FMSynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    // s. subsynth.js#noteOn -- älteste Stimme verdrängen statt unbegrenzt
+    // weitere anzuhäufen.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -31634,13 +31908,14 @@ class FMSynth extends StepSequencedSynth {
     this.voices.set(midi, { car, mod, modGain, fbGain, filter, ampEnv, modFreq });
   }
 
-  noteOff(midi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
+  noteOff(midi, steal = false) {
     const v = this.voices.get(midi);
     if (!v) return;
     this.voices.delete(midi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     v.ampEnv.gain.cancelScheduledValues(t);
     v.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;
@@ -32714,6 +32989,15 @@ const { PsySynth } = (() => {
  *  Kopien Energie beisteuern. */
 const VOICE_HEADROOM = 0.4;
 
+/** Deckel für gleichzeitig gehaltene Stimmen -- s. subsynth.js#MAX_VOICES.
+ *  Bewusst nicht niedriger trotz bis zu 5 Unisono-Kopien pro Note: der
+ *  Deckel begrenzt gehaltene NOTEN, nicht die (davon abgeleitete) Zahl der
+ *  tatsächlichen Oszillator-Nodes. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- s.
+ *  subsynth.js#STEAL_RELEASE_S. */
+const STEAL_RELEASE_S = 0.015;
+
 /** Skaliert die 0..1-Regler "FM Amount"/"FM Env" auf den Modulationsindex --
  *  identisch zu FMSynth (dieselbe Sinus-auf-Sinus-FM-Mathematik, dort per
  *  Offline-Sweep als sicher bis zum vollen Regelweg bestätigt). */
@@ -32980,6 +33264,9 @@ class PsySynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    // s. subsynth.js#noteOn -- älteste Stimme verdrängen statt unbegrenzt
+    // weitere anzuhäufen.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -33001,13 +33288,14 @@ class PsySynth extends StepSequencedSynth {
     this.voices.set(midi, note);
   }
 
-  noteOff(midi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
+  noteOff(midi, steal = false) {
     const note = this.voices.get(midi);
     if (!note) return;
     this.voices.delete(midi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     note.ampEnv.gain.cancelScheduledValues(t);
     note.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;

@@ -39,6 +39,15 @@ import { midiToHz } from '../core/dsp.js';
  *  Kopien Energie beisteuern. */
 const VOICE_HEADROOM = 0.4;
 
+/** Deckel für gleichzeitig gehaltene Stimmen -- s. subsynth.js#MAX_VOICES.
+ *  Bewusst nicht niedriger trotz bis zu 5 Unisono-Kopien pro Note: der
+ *  Deckel begrenzt gehaltene NOTEN, nicht die (davon abgeleitete) Zahl der
+ *  tatsächlichen Oszillator-Nodes. */
+const MAX_VOICES = 16;
+/** Fester, sehr kurzer Release beim Stimmen-Diebstahl -- s.
+ *  subsynth.js#STEAL_RELEASE_S. */
+const STEAL_RELEASE_S = 0.015;
+
 /** Skaliert die 0..1-Regler "FM Amount"/"FM Env" auf den Modulationsindex --
  *  identisch zu FMSynth (dieselbe Sinus-auf-Sinus-FM-Mathematik, dort per
  *  Offline-Sweep als sicher bis zum vollen Regelweg bestätigt). */
@@ -305,6 +314,9 @@ export class PsySynth extends StepSequencedSynth {
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
   noteOn(midi) {
     if (this.voices.has(midi)) return;
+    // s. subsynth.js#noteOn -- älteste Stimme verdrängen statt unbegrenzt
+    // weitere anzuhäufen.
+    if (this.voices.size >= MAX_VOICES) this.noteOff(this.voices.keys().next().value, true);
     this.pulse();
     if (this.isLiveRecording) {
       const idx = this.liveStepIndex(this.pattern.length);
@@ -326,13 +338,14 @@ export class PsySynth extends StepSequencedSynth {
     this.voices.set(midi, note);
   }
 
-  noteOff(midi) {
+  /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
+  noteOff(midi, steal = false) {
     const note = this.voices.get(midi);
     if (!note) return;
     this.voices.delete(midi);
 
     const t = engine.ctx.currentTime;
-    const rel = this.params.release;
+    const rel = steal ? STEAL_RELEASE_S : this.params.release;
     note.ampEnv.gain.cancelScheduledValues(t);
     note.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;

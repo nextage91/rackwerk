@@ -17,6 +17,7 @@ import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
 import { noise } from './dsp.js';
 import { ONEPOLE_WORKLET_SRC } from './onepole-worklet.js';
+import { SVF_WORKLET_SRC } from './svf-worklet.js';
 import { RESONATOR_PROCESSOR_NAME, RESONATOR_META_JSON, RESONATOR_WASM_BASE64, RESONATOR_WORKLET_SRC } from './resonator-worklet.js';
 import { GATE_WORKLET_SRC } from './gate-worklet.js';
 import { FREQSHIFT_WORKLET_SRC } from './freqshift-worklet.js';
@@ -31,7 +32,18 @@ import { PITCHTRACK_WORKLET_SRC } from './pitchtrack-worklet.js';
  *  bei amount=0) klingt schon bei niedrigem amount hörbar verzerrt, weil
  *  selbst k=1 spürbar von der Identität abweicht — das Blending macht
  *  den Regler über den ganzen Bereich nutzbar, von ganz sauber bis hart. */
-export function makeDriveCurve(amount) {
+/**
+ * `character` (0..1, Default 0) blendet dieselbe asymmetrische Vorverzerrung
+ * ein, die Tape Machine bereits nutzt (s. makeTapeCurve unten): eine
+ * additive quadratische Beimischung VOR dem tanh() macht die Kurve
+ * asymmetrisch -- mehr geradzahlige Röhren-/Class-A-Obertöne statt der rein
+ * ungeraden Harmonischen des reinen tanh(). Default 0 = exakt das alte,
+ * symmetrische Verhalten (rückwärtskompatibel zu Projekten ohne dieses
+ * Feld). Der Insert bekommt dafür einen DC-Sperrfilter NACH dem Shaper (s.
+ * DEFS.drive), aus demselben Grund wie bei Tape: eine asymmetrische Kurve
+ * kann sonst einen Gleichspannungsanteil einschleusen.
+ */
+export function makeDriveCurve(amount, character = 0) {
   const n = 1024;
   const curve = new Float32Array(n);
   const K = 30;
@@ -42,7 +54,8 @@ export function makeDriveCurve(amount) {
     // Tabellenindex, den WaveShaperNode für x=0 tatsächlich abfragt,
     // wodurch echte Stille einen kleinen, hörbaren DC-Versatz bekommt.
     const x = (i * 2) / (n - 1) - 1;
-    const driven = Math.tanh(K * x) / norm;
+    const biased = x + character * 0.15 * x * x;
+    const driven = Math.tanh(K * biased) / norm;
     curve[i] = (1 - amount) * x + amount * driven;
   }
   return curve;
@@ -419,6 +432,69 @@ function makeOnePoleLowpass(ctx, cutoffHz) {
       input.disconnect();
       output.disconnect();
       filter?.disconnect();
+    },
+  };
+}
+
+/** DJ-Style-Sweep-Filter (Master-Kanal, s. core/fx.js#buildFilterChain) als
+ *  TPT-State-Variable-Filter -- ersetzt die frühere Dry/Highpass/Lowpass-
+ *  Kreuzblende aus zwei BiquadFilterNodes + drei Gain-Knoten (s. core/svf-
+ *  worklet.js für die ausführliche Begründung: das Sweep-Pad in der Jam-
+ *  Ansicht ist der einzige Regler im Rack, der per Touch-Drag kontinuierlich
+ *  in Echtzeit gezogen wird, genau das Szenario, in dem ein Biquad hörbar
+ *  knacksen kann). Ein SVF-Kern liefert Lowpass+Highpass gleichzeitig,
+ *  `sweep` blendet nur noch zwischen den beiden fertigen Ausgängen -- eine
+ *  Filterstufe statt zwei parallele Ketten.
+ *
+ *  Gleiches "transparenter Platzhalter, bis das Worklet-Modul geladen ist"-
+ *  Muster wie makeOnePoleLowpass oben: stabile input/output-GainNodes, die
+ *  sich beim Laden unsichtbar für den Aufrufer umverkabeln. */
+export function makeSweepFilter(ctx, { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz }) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  let node = null;
+  let disposed = false;
+  let sweep = 0;
+  let reso = 5;
+
+  const attach = () => {
+    node = new AudioWorkletNode(ctx, 'rackwerk-svf', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { edgeMinHz, hpMaxHz, edgeMaxHz, lpMinHz },
+    });
+    node.parameters.get('sweep').value = sweep;
+    node.parameters.get('reso').value = reso;
+    input.connect(node).connect(output);
+  };
+
+  if (simpleWorkletReady('rackwerk-svf')) {
+    attach();
+  } else {
+    input.connect(output);
+    ensureSimpleWorklet(ctx, 'rackwerk-svf', SVF_WORKLET_SRC).then((ok) => {
+      if (!ok || disposed) return;
+      input.disconnect(output);
+      attach();
+    });
+  }
+
+  return {
+    input,
+    output,
+    setSweep(v, t, timeConstant) {
+      sweep = v;
+      node?.parameters.get('sweep').setTargetAtTime(v, t, timeConstant);
+    },
+    setReso(v, t, timeConstant) {
+      reso = v;
+      node?.parameters.get('reso').setTargetAtTime(v, t, timeConstant);
+    },
+    dispose() {
+      disposed = true;
+      input.disconnect();
+      output.disconnect();
+      node?.disconnect();
     },
   };
 }
@@ -1008,7 +1084,10 @@ const DEFS = {
     // "fizzy"/präsenter statt wummernd). 0 = flach = unverändert.
     // mix: Dry/Wet wie Abletons Saturator -- 1.0 (Default) entspricht dem
     // alten, immer volltrockenfreien Verhalten.
-    defaults: { drive: 0.4, tone: 0.6, level: 0.8, base: 0, mix: 1 },
+    // asym: 0..1, Default 0 (unverändertes altes Verhalten für bestehende
+    // Projekte) -- blendet dieselbe asymmetrische Vorverzerrung ein, die
+    // Tape Machine bereits nutzt (s. makeDriveCurve oben für die Begründung).
+    defaults: { drive: 0.4, tone: 0.6, level: 0.8, base: 0, asym: 0, mix: 1 },
     build(ctx, p) {
       const input = ctx.createGain();
       const dry = ctx.createGain();
@@ -1021,9 +1100,24 @@ const DEFS = {
       pre.frequency.value = 300;
       pre.gain.value = p.base * 15; // ±15dB, deutlich hörbar ohne extrem zu sein
 
+      // drive/asym leben in eigenen Closure-Variablen statt weiter p.drive/
+      // p.asym zu lesen -- die Kurve hängt von BEIDEN Reglern ab, setParam()
+      // bekommt aber bei jedem Aufruf nur den EINEN gerade geänderten Wert.
+      let currentDrive = p.drive;
+      let currentAsym = p.asym ?? 0;
       const shaper = ctx.createWaveShaper();
       shaper.oversample = '4x';
-      shaper.curve = makeDriveCurve(p.drive);
+      shaper.curve = makeDriveCurve(currentDrive, currentAsym);
+
+      // DC-Sperrfilter NACH dem Shaper -- nötig, sobald asym>0 (s. dortiger
+      // Kommentar); bei asym=0 (Default) unhörbar, deshalb bewusst immer
+      // verkabelt statt bedingt, spart eine Sonderfall-Umverkabelung beim
+      // Umschalten.
+      const dcBlock = ctx.createBiquadFilter();
+      dcBlock.type = 'highpass';
+      dcBlock.frequency.value = 20;
+      dcBlock.Q.value = 0.7;
+
       const tone = ctx.createBiquadFilter();
       tone.type = 'lowpass';
       tone.Q.value = 0.7;
@@ -1039,7 +1133,8 @@ const DEFS = {
       input.connect(dryDelay).connect(dry);
       input.connect(pre);
       pre.connect(shaper);
-      shaper.connect(tone);
+      shaper.connect(dcBlock);
+      dcBlock.connect(tone);
       tone.connect(level);
       level.connect(wet);
       const outSum = ctx.createGain();
@@ -1048,17 +1143,19 @@ const DEFS = {
 
       // Kurve neu bauen ist teuer (1024 Sample-tanh() + Reassignment an den
       // Audio-Thread, das zudem bei aktivem Signal hörbar knackst, weil
-      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- der Knob
-      // feuert aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
+      // WaveShaper-Kurven beim Wechsel nicht überblendet werden) -- die Knobs
+      // feuern aber auf JEDEN pointermove, beim Ziehen also bis zu 60x/s.
       // Gleiches Entprellen wie fx.js' #buildIR() für den Reverb-Impuls.
       let driveTimer = null;
+      const scheduleCurveRebuild = () => {
+        clearTimeout(driveTimer);
+        driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(currentDrive, currentAsym); }, 60);
+      };
       return {
         input, output: outSum,
         setParam(key, v) {
-          if (key === 'drive') {
-            clearTimeout(driveTimer);
-            driveTimer = setTimeout(() => { shaper.curve = makeDriveCurve(v); }, 60);
-          }
+          if (key === 'drive') { currentDrive = v; scheduleCurveRebuild(); }
+          else if (key === 'asym') { currentAsym = v; scheduleCurveRebuild(); }
           else if (key === 'tone') tone.frequency.setTargetAtTime(400 * Math.pow(12000 / 400, v), engine.now, 0.01);
           else if (key === 'level') level.gain.setTargetAtTime(v, engine.now, 0.01);
           else if (key === 'base') pre.gain.setTargetAtTime(v * 15, engine.now, 0.01);
@@ -1070,7 +1167,7 @@ const DEFS = {
         dispose() {
           clearTimeout(driveTimer);
           input.disconnect(); dry.disconnect(); wet.disconnect(); outSum.disconnect();
-          dryDelay.disconnect(); pre.disconnect(); shaper.disconnect(); tone.disconnect(); level.disconnect();
+          dryDelay.disconnect(); pre.disconnect(); shaper.disconnect(); dcBlock.disconnect(); tone.disconnect(); level.disconnect();
         },
       };
     },
@@ -2572,6 +2669,7 @@ export const UI_PARAMS = {
   drive: [
     { key: 'drive', label: 'Drive', min: 0, max: 1, unit: '' },
     { key: 'base', label: 'Base', min: -1, max: 1, unit: '' },
+    { key: 'asym', label: 'Asym', min: 0, max: 1, unit: '' },
     { key: 'tone', label: 'Tone', min: 0, max: 1, unit: '' },
     { key: 'level', label: 'Level', min: 0, max: 2, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },

@@ -38,7 +38,7 @@
  */
 import { engine } from './audio-engine.js';
 import { transport } from './transport.js';
-import { createInsert, makeFeedbackClipCurve } from './inserts.js';
+import { createInsert, makeFeedbackClipCurve, makeSweepFilter } from './inserts.js';
 import { automation } from './automation.js';
 import { undo } from './undo.js';
 import { renderInsertChain, openInsertPicker, INSERT_DISPLAY } from '../ui/insert-chain.js';
@@ -63,9 +63,9 @@ const REV_DAMPING_MIN = 500;
 const REV_DAMPING_MAX = 15000;
 
 // DJ-Mixer-Filter fürs Master-Signal (Nutzer-Wunsch: "Song-Performance",
-// wie beim Auflegen) -- bipolarer Sweep statt Typ-Umschaltung, s.
-// #buildFilterChain für die vollständige Begründung des click-freien
-// Parallel-HP/LP/Dry-Crossfade-Ansatzes.
+// wie beim Auflegen) -- bipolarer Sweep statt Typ-Umschaltung, läuft über
+// einen TPT-State-Variable-Filter-Worklet (s. #buildFilterChain/core/svf-
+// worklet.js für die Begründung).
 const FILTER_HP_MAX_HZ = 5000;   // Sweep -1 (voll gegen den Uhrzeigersinn)
 const FILTER_LP_MIN_HZ = 150;    // Sweep +1 (voll im Uhrzeigersinn)
 const FILTER_EDGE_MIN_HZ = 20;   // Sweep 0 -- HP-Grenzfreq. startet hier
@@ -232,83 +232,47 @@ class MasterFX {
 
   /**
    * Master-Filter für die Song-Performance ("wie beim Auflegen"): EIN
-   * bipolarer Sweep-Regler statt einer Typ-Umschaltung. Ein einzelner
-   * BiquadFilterNode könnte zwar .type zur Laufzeit zwischen lowpass/
-   * highpass wechseln, aber sein interner Zustand (Filter-Delay-Line)
-   * überträgt sich dabei NICHT sauber -- das riskiert genau das Knacksen,
-   * das an jeder anderen Stelle in dieser Codebase bewusst vermieden wird
-   * (s. z. B. #buildDelayChain oben). Stattdessen laufen HP- und LP-Zweig
-   * PERMANENT parallel vom selben Eingang mit, jeder mit eigenem Gain:
-   *
-   *   filterIn ─┬→ dryGain ────────────────────────┐
-   *             ├→ hp (Biquad) → hpGain ───────────┼→ filterOut
-   *             └→ lp (Biquad) → lpGain ────────────┘
-   *
-   * sweep<0: hpGain blendet von 0 auf |sweep| auf, hp.frequency steigt
-   *          (log-skaliert) von 20Hz Richtung 5kHz; lpGain bleibt 0.
-   * sweep>0: lpGain blendet von 0 auf sweep auf, lp.frequency fällt
-   *          (log-skaliert) von 20kHz Richtung 150Hz; hpGain bleibt 0.
-   * dryGain = 1 - |sweep| -- bei sweep=0 exakt 1, garantiert transparent
-   * (keine Rundungs-/Interpolationsfehler wie bei einer Typ-Umschaltung).
-   * Reso (Q) wirkt an beiden Zweigen gleichzeitig, unabhängig vom Sweep --
-   * harmlos, solange der jeweilige Zweig ohnehin auf Gain 0 steht.
+   * bipolarer Sweep-Regler statt einer Typ-Umschaltung. Läuft über einen
+   * TPT-State-Variable-Filter (s. core/svf-worklet.js) statt zweier
+   * paralleler BiquadFilterNodes -- der Sweep-Regler ist der einzige im
+   * ganzen Rack, der per Touch-Drag kontinuierlich in Echtzeit gezogen
+   * wird (nicht nur angetippt), genau das Szenario, in dem ein Biquad bei
+   * schnellen frequency-/Q-Änderungen hörbar knacksen kann, weil sein
+   * interner Zustand (Filter-Delay-Line) noch zu den ALTEN Koeffizienten
+   * gehört, wenn die neuen greifen. Das SVF liefert Lowpass UND Highpass
+   * gleichzeitig aus EINEM Kern, der Worklet übernimmt die Sweep/Reso-
+   * Kreuzblende komplett selbst (s. dortiger Dateikopf-Kommentar für die
+   * genaue Hz-Zuordnung, identisch zur früheren #logLerp-Rechnung hier).
    */
   #buildFilterChain(ctx) {
     // audio-engine.js verbindet masterFilterIn->masterFilterOut anfangs
     // direkt (Identität, s. dortiger Kommentar) -- muss hier weichen, sonst
-    // liefe das trockene Signal parallel zur eigentlichen Dry/HP/LP-
-    // Kreuzblende IMMER zusätzlich unverändert durch (identisches Muster/
-    // dieselbe Falle wie bei #rewireMasterInsertChain, s. dortiger
-    // disconnectChainEdge()-Kommentar).
+    // liefe das trockene Signal parallel zum SVF IMMER zusätzlich
+    // unverändert durch (identisches Muster/dieselbe Falle wie bei
+    // #rewireMasterInsertChain, s. dortiger disconnectChainEdge()-Kommentar).
     engine.masterFilterIn.disconnect(engine.masterFilterOut);
 
-    this.filterDry = ctx.createGain();
-    this.filterHP = ctx.createBiquadFilter();
-    this.filterLP = ctx.createBiquadFilter();
-    this.filterHP.type = 'highpass';
-    this.filterLP.type = 'lowpass';
-    this.filterHPGain = ctx.createGain();
-    this.filterLPGain = ctx.createGain();
-
-    engine.masterFilterIn.connect(this.filterDry);
-    engine.masterFilterIn.connect(this.filterHP);
-    engine.masterFilterIn.connect(this.filterLP);
-    this.filterHP.connect(this.filterHPGain);
-    this.filterLP.connect(this.filterLPGain);
-    this.filterDry.connect(engine.masterFilterOut);
-    this.filterHPGain.connect(engine.masterFilterOut);
-    this.filterLPGain.connect(engine.masterFilterOut);
+    this.sweepFilter = makeSweepFilter(ctx, {
+      edgeMinHz: FILTER_EDGE_MIN_HZ,
+      hpMaxHz: FILTER_HP_MAX_HZ,
+      edgeMaxHz: FILTER_EDGE_MAX_HZ,
+      lpMinHz: FILTER_LP_MIN_HZ,
+    });
+    engine.masterFilterIn.connect(this.sweepFilter.input);
+    this.sweepFilter.output.connect(engine.masterFilterOut);
 
     this.#applyFilterSweep(this.params.filterSweep);
     this.#applyFilterReso(this.params.filterReso);
   }
 
-  /** log-skalierte Interpolation zwischen a und b (t: 0..1). */
-  #logLerp(a, b, t) { return a * Math.pow(b / a, t); }
-
   #applyFilterSweep(sweep) {
-    if (!this.filterHP) return;
-    const t = engine.now;
-    const s = Math.max(-1, Math.min(1, sweep));
-    this.filterDry.gain.setTargetAtTime(1 - Math.abs(s), t, 0.02);
-    if (s < 0) {
-      this.filterHP.frequency.setTargetAtTime(
-        this.#logLerp(FILTER_EDGE_MIN_HZ, FILTER_HP_MAX_HZ, -s), t, 0.02);
-      this.filterHPGain.gain.setTargetAtTime(-s, t, 0.02);
-      this.filterLPGain.gain.setTargetAtTime(0, t, 0.02);
-    } else {
-      this.filterLP.frequency.setTargetAtTime(
-        this.#logLerp(FILTER_EDGE_MAX_HZ, FILTER_LP_MIN_HZ, s), t, 0.02);
-      this.filterLPGain.gain.setTargetAtTime(s, t, 0.02);
-      this.filterHPGain.gain.setTargetAtTime(0, t, 0.02);
-    }
+    if (!this.sweepFilter) return;
+    this.sweepFilter.setSweep(Math.max(-1, Math.min(1, sweep)), engine.now, 0.02);
   }
 
   #applyFilterReso(q) {
-    if (!this.filterHP) return;
-    const t = engine.now;
-    this.filterHP.Q.setTargetAtTime(q, t, 0.02);
-    this.filterLP.Q.setTargetAtTime(q, t, 0.02);
+    if (!this.sweepFilter) return;
+    this.sweepFilter.setReso(q, engine.now, 0.02);
   }
 
   #flushTimer = null;
@@ -539,7 +503,7 @@ class MasterFX {
       this.reverbInsert.setParam('decay', Math.min(REV_DECAY_MAX, Math.max(0, this.params.revDecay)));
       this.reverbInsert.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, this.params.revDamp)));
     }
-    if (this.filterHP) {
+    if (this.sweepFilter) {
       this.#applyFilterSweep(this.params.filterSweep);
       this.#applyFilterReso(this.params.filterReso);
     }
