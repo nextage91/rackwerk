@@ -95,6 +95,12 @@ export class PsySynth extends StepSequencedSynth {
     };
     /** aktive Stimmen: midi → { subVoices: [...], filter, ampEnv, noteBus } */
     this.voices = new Map();
+    // Wiederverwendungs-Pool für fm-voice-Instanzen -- s. fmsynth.js#fmPool
+    // für die ausführliche Begründung (gleiches Muster hier, PRO UNISONO-
+    // KOPIE): der Sequenzer-Lookahead-Planer kann mehrere Steps in einem
+    // synchronen Tick nachholen, bei PsySynths bis zu 5 Unisono-Kopien PRO
+    // Note potenziert sich das zusätzlich.
+    this.fmPool = [];
     this.output.gain.value = this.params.volume;
 
     // Drei dauerhaft laufende Swirl-LFOs (wie Tape Machines Wow/Flutter --
@@ -135,26 +141,42 @@ export class PsySynth extends StepSequencedSynth {
     this.pattern = this.patterns[0];
   }
 
+  /** s. fmsynth.js#acquireFmVoice/#releaseFmVoice -- identisches Muster. */
+  #acquireFmVoice(ctx) {
+    return this.fmPool.pop() ?? makeFmVoice(ctx);
+  }
+
+  #releaseFmVoice(fm) {
+    fm.output.disconnect();
+    this.fmPool.push(fm);
+  }
+
   /** Eine einzelne Unisono-Kopie (Carrier+Modulator als EIN überabgetastetes
    *  fm-voice-Worklet, s. core/dsp.js#makeFmVoice/core/fm-voice-worklet.js --
    *  vermeidet das per Messung bestätigte Aliasing der früheren zwei
    *  nativen Carrier/Modulator-OscillatorNodes, s. tools/dsp-tests/
    *  fm-aliasing-measurement.mjs -- plus Ring, weiterhin nativ (Ring-
-   *  Modulation zeigte in derselben Messung KEIN relevantes Aliasing).
-   *  Carrier UND Modulator teilen sich EIN gemeinsames `detune`-Param (statt
-   *  vorher zwei separat verbundener), baut den Knoten-Graphen OHNE die
-   *  zeitabhängige FM-/Amp-Automation zu planen (dieselbe Aufteilung wie
-   *  FMSynths #buildVoice). `pan` ist die feste Unisono-Stereoposition,
-   *  NICHT die Swirl-Pan-Modulation (die kommt on top über panDepthGain,
-   *  s. #connectSwirl). */
-  #buildSubVoice(carrierFreq, detuneCents, pan) {
+   *  Modulation zeigte in derselben Messung KEIN relevantes Aliasing, UND
+   *  ein natives OscillatorNode ist ohnehin billig genug, um es weiterhin
+   *  pro Note frisch zu bauen -- nur der Worklet-Teil kommt aus dem Pool,
+   *  s. #acquireFmVoice). Carrier UND Modulator teilen sich EIN
+   *  gemeinsames `detune`-Param (statt vorher zwei separat verbundener),
+   *  baut den Knoten-Graphen OHNE die zeitabhängige FM-/Amp-Automation zu
+   *  planen (dieselbe Aufteilung wie FMSynths #buildVoice). `pan` ist die
+   *  feste Unisono-Stereoposition, NICHT die Swirl-Pan-Modulation (die
+   *  kommt on top über panDepthGain, s. #connectSwirl). */
+  #buildSubVoice(carrierFreq, detuneCents, pan, t) {
     const ctx = engine.ctx;
     const p = this.params;
 
-    const fm = makeFmVoice(ctx);
+    const fm = this.#acquireFmVoice(ctx);
+    fm.carrierFreq.cancelScheduledValues(t);
     fm.carrierFreq.value = carrierFreq;
+    fm.modFreq.cancelScheduledValues(t);
     fm.modFreq.value = Math.max(0.01, carrierFreq * p.ratio);
+    fm.feedback.cancelScheduledValues(t);
     fm.feedback.value = p.feedback * FEEDBACK_SCALE;
+    fm.detune.cancelScheduledValues(t);
     fm.detune.value = detuneCents;
 
     // Ringmodulation: `ring` treibt NICHT den Eingang von ringGain, sondern
@@ -191,6 +213,10 @@ export class PsySynth extends StepSequencedSynth {
     const modFreq = Math.max(0.01, carrierFreq * p.ratio);
     const peak = (p.fmAmount + p.fmEnv) * FM_INDEX_SCALE * modFreq;
     const sustain = p.fmAmount * FM_INDEX_SCALE * modFreq;
+    // cancelScheduledValues -- s. fmsynth.js#applyFmEnv: eine aus dem Pool
+    // wiederverwendete Stimme kann noch eine laufende Abkling-Automation
+    // der vorherigen Note tragen.
+    subVoice.fm.fmIndex.cancelScheduledValues(t);
     subVoice.fm.fmIndex.setValueAtTime(peak, t);
     subVoice.fm.fmIndex.setTargetAtTime(sustain, t, Math.max(0.01, p.fmDecay) / 3);
   }
@@ -210,12 +236,15 @@ export class PsySynth extends StepSequencedSynth {
     this.filterDepthGain.connect(note.filter.frequency);
   }
 
-  /** Gegenstück zu #connectSwirl -- MUSS vorm endgültigen Verwerfen einer
-   *  Note laufen: die geteilten Depth-Gains sind die QUELLE dieser
-   *  Verbindungen, `sv.fm.dispose()` (Ziel-seitig) räumt sie NICHT mit auf
-   *  (Web-Audio-Verbindungen trennt man von der Quelle aus). Ohne das
-   *  blieben pro Note verwaiste Verbindungen an den geteilten, dauerhaft
-   *  laufenden LFO-Gains hängen. */
+  /** Gegenstück zu #connectSwirl -- MUSS laufen, bevor eine Note endgültig
+   *  aufgegeben wird (egal ob die fm-voice dabei entsorgt ODER in den Pool
+   *  zurückgelegt wird, s. #teardownNote): die geteilten Depth-Gains sind
+   *  die QUELLE dieser Verbindungen, ein zielseitiges Aufräumen der
+   *  Unisono-Kopie räumt sie NICHT mit auf (Web-Audio-Verbindungen trennt
+   *  man von der Quelle aus). Ohne das blieben pro Note verwaiste
+   *  Verbindungen an den geteilten, dauerhaft laufenden LFO-Gains hängen --
+   *  UND bei einer aus dem Pool wiederverwendeten fm-voice würde die NÄCHSTE
+   *  Note plötzlich zusätzlich von der alten Swirl-Verbindung mitmoduliert. */
   #disconnectSwirl(note) {
     for (const sv of note.subVoices) {
       this.pitchDepthGain.disconnect(sv.fm.detune);
@@ -248,7 +277,7 @@ export class PsySynth extends StepSequencedSynth {
       // durch max(1,n-1) sicher vor Division durch 0" wie an mehreren
       // Stellen im Rest der App (z. B. WaveShaper-Kurven-Indizierung).
       const spread = n > 1 ? (2 * i) / (n - 1) - 1 : 0;
-      const sv = this.#buildSubVoice(carrierFreq, spread * (p.unisonDetune / 2), spread);
+      const sv = this.#buildSubVoice(carrierFreq, spread * (p.unisonDetune / 2), spread, t);
       this.#applyFmEnv(sv, carrierFreq, t);
       sv.panner.connect(noteBus);
       subVoices.push(sv);
@@ -261,20 +290,31 @@ export class PsySynth extends StepSequencedSynth {
 
   /** Räumt eine Note vollständig ab -- geteilt zwischen playNote (Sequenzer)
    *  und noteOff (Keybed), damit beide Pfade denselben Aufräum-Code
-   *  (inkl. #disconnectSwirl) nutzen. Läuft im onended der ERSTEN Carrier-
-   *  Stimme, also erst NACHDEM alle Oszillatoren tatsächlich gestoppt haben
-   *  (nicht schon beim Auslösen der Freigabe) -- sonst würde das Swirl-
-   *  Schweben schon während der noch hörbaren Release-Fahne abrupt
-   *  abreissen. */
+   *  (inkl. #disconnectSwirl) nutzen. Wird per #scheduleRelease erst NACH
+   *  dem vollständigen Ausklang aufgerufen (nicht schon beim Auslösen der
+   *  Freigabe) -- sonst würde das Swirl-Schweben schon während der noch
+   *  hörbaren Release-Fahne abrupt abreissen. Die fm-voice jeder Unisono-
+   *  Kopie geht zurück in den Pool statt entsorgt zu werden (s.
+   *  #releaseFmVoice) -- ausser die ganze Maschine wurde inzwischen
+   *  abgebaut (s. disposeAudio). */
   #teardownNote(note) {
     this.#disconnectSwirl(note);
     for (const sv of note.subVoices) {
-      sv.fm.dispose(); sv.ring.disconnect();
+      if (this.#disposed) sv.fm.dispose();
+      else this.#releaseFmVoice(sv.fm);
+      sv.ring.disconnect();
       sv.ringGain.disconnect(); sv.ringDepthGain.disconnect(); sv.panner.disconnect();
     }
     note.noteBus.disconnect();
     note.filter.disconnect();
     note.ampEnv.disconnect();
+  }
+
+  /** s. fmsynth.js#scheduleRelease -- identisches Muster, hier für die
+   *  GANZE Note (alle Unisono-Kopien) auf einmal. */
+  #scheduleRelease(note, stopAt) {
+    const delayMs = Math.max(0, (stopAt - engine.ctx.currentTime) * 1000);
+    setTimeout(() => this.#teardownNote(note), delayMs);
   }
 
   /** Fire-and-forget-Stimme für den Sequenzer. */
@@ -298,9 +338,9 @@ export class PsySynth extends StepSequencedSynth {
     const stopAt = time + dur + p.release + 0.1;
     for (const sv of note.subVoices) {
       sv.ring.start(time);
-      sv.fm.stop(stopAt); sv.ring.stop(stopAt);
+      sv.ring.stop(stopAt);
     }
-    note.subVoices[0].fm.onended = () => this.#teardownNote(note);
+    this.#scheduleRelease(note, stopAt);
   }
 
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
@@ -341,16 +381,22 @@ export class PsySynth extends StepSequencedSynth {
     note.ampEnv.gain.cancelScheduledValues(t);
     note.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
     const stopAt = t + rel + 0.1;
-    for (const sv of note.subVoices) { sv.fm.stop(stopAt); sv.ring.stop(stopAt); }
-    note.subVoices[0].fm.onended = () => this.#teardownNote(note);
+    for (const sv of note.subVoices) sv.ring.stop(stopAt);
+    this.#scheduleRelease(note, stopAt);
   }
 
   allNotesOff() {
     for (const midi of [...this.voices.keys()]) this.noteOff(midi);
   }
 
+  /** true nach disposeAudio() -- s. #scheduleRelease/#teardownNote. */
+  #disposed = false;
+
   disposeAudio() {
     this.allNotesOff();
+    this.#disposed = true;
+    for (const fm of this.fmPool) fm.dispose();
+    this.fmPool = [];
     this.pitchLfo.stop(); this.pitchLfo.disconnect(); this.pitchDepthGain.disconnect();
     this.filterLfo.stop(); this.filterLfo.disconnect(); this.filterDepthGain.disconnect();
     this.panLfo.stop(); this.panLfo.disconnect(); this.panDepthGain.disconnect();
