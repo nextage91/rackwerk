@@ -41,7 +41,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, makeFmVoice, applyFilterEnv } from '../core/dsp.js';
+import { midiToHz, makeFmVoice, applyFilterEnv, trackVoice, scheduleVoicePhaseRelease, liveReanchorAttack, liveReanchorDecay } from '../core/dsp.js';
 
 /** Headroom pro Stimme -- wie SubSynth/PolySynth (dort ausführlich gegen
  *  den Rest des Kits austariert): eine gehaltene Note braucht Kopfraum,
@@ -100,6 +100,10 @@ export class FMSynth extends StepSequencedSynth {
     };
     /** aktive Stimmen: midi → {fm, filter, ampEnv} */
     this.voices = new Map();
+    // Verfolgt JEDE klingende Stimme (gehalten UND Sequenzer-Fire-and-
+    // Forget) über ihre gesamte Hörbarkeitsdauer -- s. subsynth.js#
+    // activeVoices/dsp.js#trackVoice fürs "Warum".
+    this.activeVoices = new Set();
     // Wiederverwendungs-Pool für fm-voice-Instanzen (s. #acquireFmVoice/
     // #releaseFmVoice unten) -- vermeidet, für JEDE Note einen neuen
     // AudioWorkletNode+5 ConstantSourceNodes zu bauen. Das war der
@@ -226,13 +230,14 @@ export class FMSynth extends StepSequencedSynth {
    *  `this.#disposed`, falls die ganze Maschine inzwischen abgebaut wurde
    *  (s. disposeAudio) -- dann landet die Stimme NICHT mehr im (dann
    *  schon geleerten) Pool, sondern wird selbst sauber entsorgt. */
-  #scheduleRelease(fm, filter, ampEnv, stopAt) {
+  #scheduleRelease(voice, stopAt) {
     const delayMs = Math.max(0, (stopAt - engine.ctx.currentTime) * 1000);
     setTimeout(() => {
-      filter.disconnect();
-      ampEnv.disconnect();
-      if (this.#disposed) fm.dispose();
-      else this.#releaseFmVoice(fm);
+      voice.filter.disconnect();
+      voice.ampEnv.disconnect();
+      if (this.#disposed) voice.fm.dispose();
+      else this.#releaseFmVoice(voice.fm);
+      this.activeVoices.delete(voice);
     }, delayMs);
   }
 
@@ -241,7 +246,7 @@ export class FMSynth extends StepSequencedSynth {
     time = engine.quantizeTime(time);
     this.pulse(time);
     const p = this.params;
-    const { fm, filter, modFreq } = this.#buildVoice(midi, time);
+    const { fm, filter, carrierFreq, modFreq } = this.#buildVoice(midi, time);
     this.#applyFmEnv(fm, modFreq, time);
 
     const ampEnv = engine.ctx.createGain();
@@ -259,13 +264,19 @@ export class FMSynth extends StepSequencedSynth {
     ampEnv.gain.value = 0;
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
+    const attackTarget = VOICE_HEADROOM * vel;
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(attackTarget, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     filter.connect(ampEnv).connect(this.output);
 
+    // Live-Reglernachführung -- s. subsynth.js#playNote fürs "Warum".
+    const voice = { fm, filter, ampEnv, carrierFreq, modFreq, attackTarget };
+    trackVoice(this.activeVoices, voice);
+    scheduleVoicePhaseRelease(voice, time, time + dur);
+
     const stopAt = time + dur + p.release + 0.1;
-    this.#scheduleRelease(fm, filter, ampEnv, stopAt);
+    this.#scheduleRelease(voice, stopAt);
   }
 
   /* ---------- Stimmenverwaltung (gehaltene Keybed-Noten) ---------- */
@@ -282,7 +293,7 @@ export class FMSynth extends StepSequencedSynth {
     }
     const t = engine.ctx.currentTime;
     const p = this.params;
-    const { fm, filter, modFreq } = this.#buildVoice(midi, t);
+    const { fm, filter, carrierFreq, modFreq } = this.#buildVoice(midi, t);
     this.#applyFmEnv(fm, modFreq, t);
 
     const ampEnv = engine.ctx.createGain();
@@ -290,7 +301,9 @@ export class FMSynth extends StepSequencedSynth {
     ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM, t + p.attack);
     filter.connect(ampEnv).connect(this.output);
 
-    this.voices.set(midi, { fm, filter, ampEnv, modFreq });
+    const voice = { fm, filter, ampEnv, carrierFreq, modFreq, attackTarget: VOICE_HEADROOM };
+    trackVoice(this.activeVoices, voice);
+    this.voices.set(midi, voice);
   }
 
   /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben). */
@@ -303,8 +316,9 @@ export class FMSynth extends StepSequencedSynth {
     const rel = steal ? STEAL_RELEASE_S : this.params.release;
     v.ampEnv.gain.cancelScheduledValues(t);
     v.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
+    v.phase = 'release'; // s. subsynth.js#noteOff -- reales, synchrones Ereignis
     const stopAt = t + rel + 0.1;
-    this.#scheduleRelease(v.fm, v.filter, v.ampEnv, stopAt);
+    this.#scheduleRelease(v, stopAt);
   }
 
   allNotesOff() {
@@ -339,11 +353,25 @@ export class FMSynth extends StepSequencedSynth {
     `;
     seg.querySelectorAll('.seg__btn').forEach((b) =>
       b.classList.toggle('is-active', b.dataset.mode === this.params.modMode));
+    // Recompute + live nachziehen: geteilt zwischen Mod-Mode-Umschalter
+    // (unten) und Ratio/Mod-Hz-Knöpfen (opRow) -- jeweils dieselbe
+    // Umrechnung wie #modFreqFor, pro Stimme anhand IHRER eigenen
+    // carrierFreq (s. #buildVoice), damit jede Note ihre eigene Tonhöhen-
+    // beziehung behält (DX7/Operator-nah, s. dsp.js#trackVoice).
+    const reanchorModFreq = () => {
+      const t = engine.ctx.currentTime;
+      for (const v of this.activeVoices) {
+        const newModFreq = Math.max(0.01, this.#modFreqFor(v.carrierFreq));
+        v.modFreq = newModFreq;
+        v.fm.modFreq.setTargetAtTime(newModFreq, t, 0.01);
+      }
+    };
     seg.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-mode]');
       if (!btn) return;
       this.params.modMode = btn.dataset.mode;
       seg.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+      reanchorModFreq();
     });
     container.appendChild(seg);
 
@@ -363,15 +391,25 @@ export class FMSynth extends StepSequencedSynth {
       const val = e.detail.value;
       this.params[key] = val;
 
-      // Live-Parameter direkt auf laufende Stimmen anwenden. Ratio/ModHz/
-      // FM Amount/Env/Decay wirken bewusst NICHT rückwirkend auf schon
-      // laufende Hüllkurven (die wurden beim Anschlag fest eingeplant,
-      // wie bei jeder anderen Hüllkurve in dieser App) -- nur Feedback
-      // ist ein reiner, ungehüllter Klangfarbe-Regler und lässt sich
-      // deshalb ohne Widerspruch live nachziehen.
+      // Live-Parameter direkt auf laufende Stimmen anwenden -- DX7/Operator-
+      // nah (Chat: "das gilt für alle Parameter"), s. dsp.js#trackVoice
+      // fürs "Warum". FM Env bleibt bewusst NICHT live: er bestimmt nur den
+      // PEAK beim Anschlag (setValueAtTime, s. #applyFmEnv) -- der ist für
+      // eine bereits klingende Note längst Geschichte, ein Regler-Dreh
+      // danach kann ihn nicht rückwirkend ändern (genau wie envAmt beim
+      // Filter, s. ampRow unten).
+      const t = engine.ctx.currentTime;
       if (key === 'feedback') {
-        const t = engine.ctx.currentTime;
-        for (const v of this.voices.values()) v.fm.feedback.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
+        for (const v of this.activeVoices) v.fm.feedback.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
+      } else if (key === 'ratio' || key === 'modFreq') {
+        reanchorModFreq();
+      } else if (key === 'fmAmount') {
+        for (const v of this.activeVoices) v.fm.fmIndex.setTargetAtTime(val * FM_INDEX_SCALE * v.modFreq, t, 0.01);
+      } else if (key === 'fmDecay') {
+        for (const v of this.activeVoices) {
+          const sustain = this.params.fmAmount * FM_INDEX_SCALE * v.modFreq;
+          liveReanchorDecay(v.fm.fmIndex, t, Math.max(0.01, val) / 3, sustain);
+        }
       }
     });
     container.appendChild(opRow);
@@ -393,7 +431,7 @@ export class FMSynth extends StepSequencedSynth {
       if (!btn) return;
       this.params.filterType = btn.dataset.ft;
       filterSeg.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
+      for (const v of this.activeVoices) v.filter.type = btn.dataset.ft;
     });
     container.appendChild(filterSeg);
 
@@ -415,14 +453,21 @@ export class FMSynth extends StepSequencedSynth {
       this.params[key] = val;
       const t = engine.ctx.currentTime;
       if (key === 'cutoff') {
-        for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(val, t, 0.01);
       } else if (key === 'resonance') {
-        for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'fDecay') {
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(this.params.cutoff, t, Math.max(0.01, val) / 3);
+      } else if (key === 'attack') {
+        for (const v of this.activeVoices) if (v.phase === 'attack') liveReanchorAttack(v.ampEnv.gain, t, val, v.attackTarget);
+      } else if (key === 'release') {
+        for (const v of this.activeVoices) if (v.phase === 'release') liveReanchorDecay(v.ampEnv.gain, t, val / 4, 0);
       } else if (key === 'volume') {
         this.setLevel(val);
       }
-      // envAmt/fDecay wirken bewusst NICHT rückwirkend -- wie FM Amount/
-      // Env/Decay oben, s. dortigen Kommentar (beim Anschlag fest eingeplant).
+      // envAmt wirkt bewusst NICHT rückwirkend -- reiner Peak-Regler
+      // (setValueAtTime beim Anschlag, s. dsp.js#applyFilterEnv), s.
+      // Kommentar bei opRow oben (identisches Prinzip wie FM Env).
     });
     container.appendChild(ampRow);
 

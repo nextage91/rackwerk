@@ -285,3 +285,64 @@ export function makeFmVoice(ctx) {
     },
   };
 }
+
+/**
+ * Live-Regler-Nachführung (Chat: "so nah wie möglich beim Original DX7/
+ * Operator... das gilt für alle Parameter"): auf echter Hardware/in
+ * professionellen Nachbauten liest die Hüllkurve den AKTUELLEN Reglerwert
+ * kontinuierlich, nicht nur einmalig beim Anschlag/Loslassen. Diese drei
+ * Helfer setzen genau das um, geteilt zwischen SubSynth/PolySynth/FMSynth/
+ * PsySynth (identisches Muster, nur je andere AudioParams/Stimmenformen).
+ *
+ * `activeVoices` (pro Maschine EIN Set, s. buildAudio() dort) verfolgt JEDE
+ * klingende Stimme -- gehalten (Keybed) UND Fire-and-Forget (Sequenzer) --
+ * über ihre GESAMTE Hörbarkeitsdauer inkl. Release, nicht nur solange sie in
+ * der jeweiligen `this.voices`-Halte-Map steht (die nur für Keybed-Halte-
+ * Semantik/MAX_VOICES-Diebstahl existiert und Stimmen bei noteOff() sofort
+ * entfernt, obwohl sie noch hörbar ausklingen). Jede Stimme trägt ein
+ * `.phase`-Feld ('attack' bis ihr Release beginnt, danach 'release') --
+ * Attack-Regler wirken nur auf 'attack'-Stimmen (ein rückwirkendes
+ * Wiederhochziehen einer schon loslassenden Stimme wäre ein ungewolltes
+ * Neu-Anschlagen), Release-Regler nur auf 'release'-Stimmen. Alle anderen
+ * live-fähigen Parameter (Cutoff, Ratio, Feedback, Filter-/FM-Decay-Zeit …)
+ * sind NICHT phasenabhängig -- sie wirken wie auf echter Hardware jederzeit,
+ * unabhängig vom Hüllkurvenstand.
+ */
+
+/** Registriert eine neu gebaute Stimme fürs Live-Nachführen -- Phase startet
+ *  immer bei 'attack'. Aufrufen direkt nach dem Verbinden der Stimme, sowohl
+ *  in noteOn() als auch in playNote(). */
+export function trackVoice(activeVoices, voice) {
+  voice.phase = 'attack';
+  activeVoices.add(voice);
+}
+
+/** Plant den Attack->Release-Phasenübergang einer Fire-and-Forget-Stimme
+ *  (Sequenzer/playNote, Übergang bei `time+dur`, ein in der Zukunft
+ *  liegender, nicht-synchroner Zeitpunkt). Keybed-Stimmen brauchen das
+ *  NICHT -- dort ist der noteOff()-Aufruf selbst schon das reale, SYNCHRONE
+ *  Ereignis, `voice.phase = 'release'` dort direkt zu setzen reicht. */
+export function scheduleVoicePhaseRelease(voice, now, releaseAt) {
+  const relMs = Math.max(0, (releaseAt - now) * 1000);
+  setTimeout(() => { voice.phase = 'release'; }, relMs);
+}
+
+/** Attack-Rampe live nachziehen: bricht die laufende Automation ab und
+ *  plant eine NEUE Rampe vom AKTUELLEN Wert (nicht von 0) zum Zielwert --
+ *  nur für Stimmen mit `.phase === 'attack'` aufrufen (s. Dateikopf-
+ *  Kommentar oben). */
+export function liveReanchorAttack(gainParam, t, attackS, target) {
+  const cur = gainParam.value;
+  gainParam.cancelScheduledValues(t);
+  gainParam.setValueAtTime(cur, t);
+  gainParam.linearRampToValueAtTime(target, t + Math.max(0.001, attackS));
+}
+
+/** Release-/Decay-Kurve live nachziehen: kontinuierlicher Exponential-
+ *  Übergang vom aktuellen Wert Richtung `target` mit NEUER Zeitkonstante --
+ *  für Release NUR bei `.phase === 'release'` aufrufen; Filter-/FM-Decay
+ *  sind nicht phasenabhängig (s. Dateikopf-Kommentar). */
+export function liveReanchorDecay(param, t, timeConstant, target = 0) {
+  param.cancelScheduledValues(t);
+  param.setTargetAtTime(target, t, Math.max(0.001, timeConstant));
+}
