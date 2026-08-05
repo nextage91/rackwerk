@@ -41,7 +41,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, makeFmVoice } from '../core/dsp.js';
+import { midiToHz, makeFmVoice, applyFilterEnv } from '../core/dsp.js';
 
 /** Headroom pro Stimme -- wie SubSynth/PolySynth (dort ausführlich gegen
  *  den Rest des Kits austariert): eine gehaltene Note braucht Kopfraum,
@@ -89,8 +89,11 @@ export class FMSynth extends StepSequencedSynth {
       fmEnv: 0.35,         // zusätzlicher Peak-Boost beim Anschlag (0..1)
       fmDecay: 0.25,       // s — Abklingzeit des FM-Index-Peaks
       feedback: 0,         // Modulator-Eigenrückkopplung (0..1, s. FEEDBACK_SCALE)
+      filterType: 'lowpass', // 'lowpass' | 'highpass' | 'bandpass', s. subsynth.js#filterType
       cutoff: 8000,
       resonance: 0.7,
+      envAmt: 0.3,          // Filterhüllkurve: 0..1 ≙ 0..+4 Oktaven über Cutoff, s. dsp.js#applyFilterEnv
+      fDecay: 0.2,          // s — Abklingzeit der Filterhüllkurve
       attack: 0.005,
       release: 0.4,
       volume: 0.7,
@@ -180,10 +183,17 @@ export class FMSynth extends StepSequencedSynth {
     fm.detune.cancelScheduledValues(t);
     fm.detune.value = 0; // FMSynth nutzt kein Detune, aber defensiv zurücksetzen (Pool-Wiederverwendung)
 
+    // Filterhüllkurve (wie SubSynth/PolySynth, s. dsp.js#applyFilterEnv):
+    // öffnet beim Anschlag zusätzlich über den statischen Cutoff hinaus und
+    // fällt dann zurück -- verstärkt genau das FM-eigene "beim Anschlag
+    // heller, dann dunkler"-Verhalten (s. Dateikopf-Kommentar zu FM Env)
+    // auch im Filter selbst, statt nur im Modulationsindex. Bislang fest
+    // auf Lowpass/statischen Cutoff, klang dadurch spürbar statischer als
+    // SubSynth/PolySynth (Chat: "die filter... klingen zu clean").
     const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = p.cutoff;
+    filter.type = p.filterType;
     filter.Q.value = p.resonance;
+    applyFilterEnv(filter, t, p);
     fm.output.connect(filter);
 
     return { fm, filter, carrierFreq, modFreq };
@@ -366,11 +376,34 @@ export class FMSynth extends StepSequencedSynth {
     });
     container.appendChild(opRow);
 
+    // Filtertyp: LP/HP/BP -- identisches Muster zu subsynth.js#filterType,
+    // wirkt sofort auch auf klingende (gehaltene) Stimmen.
+    const filterSeg = document.createElement('div');
+    filterSeg.className = 'seg';
+    filterSeg.innerHTML = `
+      <span class="seg__label">Filter</span>
+      <button class="seg__btn" data-ft="lowpass">LP</button>
+      <button class="seg__btn" data-ft="highpass">HP</button>
+      <button class="seg__btn" data-ft="bandpass">BP</button>
+    `;
+    filterSeg.querySelectorAll('.seg__btn').forEach((b) =>
+      b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
+    filterSeg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ft]');
+      if (!btn) return;
+      this.params.filterType = btn.dataset.ft;
+      filterSeg.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
+    });
+    container.appendChild(filterSeg);
+
     const ampRow = document.createElement('div');
     ampRow.className = 'machine__row';
     ampRow.innerHTML = `
       <x-knob label="Cutoff"  min="200" max="16000" value="8000" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
       <x-knob label="Reso"    min="0.5" max="12" value="0.7" data-p="resonance" data-auto></x-knob>
+      <x-knob label="Env Amt" min="0" max="1" value="0.3" data-p="envAmt" data-auto></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="1.5" value="0.2" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
       <x-knob label="Attack"  min="0.002" max="10" value="0.005" curve="log" unit="s" data-p="attack" data-auto></x-knob>
       <x-knob label="Release" min="0.02" max="10" value="0.4" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume"  min="0" max="1" value="0.7" data-p="volume" data-auto></x-knob>
@@ -388,6 +421,8 @@ export class FMSynth extends StepSequencedSynth {
       } else if (key === 'volume') {
         this.setLevel(val);
       }
+      // envAmt/fDecay wirken bewusst NICHT rückwirkend -- wie FM Amount/
+      // Env/Decay oben, s. dortigen Kommentar (beim Anschlag fest eingeplant).
     });
     container.appendChild(ampRow);
 
