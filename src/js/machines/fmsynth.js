@@ -235,6 +235,18 @@ export class FMSynth extends StepSequencedSynth {
     this.#applyFmEnv(fm, modFreq, time);
 
     const ampEnv = engine.ctx.createGain();
+    // ampEnv.gain.value = 0 SOFORT (nicht erst per setValueAtTime(0, time)):
+    // `time` liegt beim Sequenzer bis zu SCHEDULE_AHEAD=0.1s in der Zukunft
+    // (s. transport.js), ein frisches GainNode steht bis zum ERSTEN
+    // Automations-Event aber auf seinem Default-Gain 1 -- und die (aus dem
+    // Pool wiederverwendete, nie gestoppte, s. #acquireFmVoice) fm-voice
+    // wird bereits JETZT (nicht erst bei `time`) in die Filter/Amp-Kette
+    // verbunden. Ohne dieses sofortige `.value = 0` lief das alte/neue
+    // Signal bis zu 100ms lang unhüllt auf voller Lautstärke durch, bevor
+    // die Hüllkurve bei `time` abrupt auf 0 sprang und wieder hochfuhr --
+    // genau das hörbare Knacksen NUR bei Sequenzer-, nie bei Tastentriggerung
+    // (dort ist `time` == `currentTime`, die Lücke praktisch null).
+    ampEnv.gain.value = 0;
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);

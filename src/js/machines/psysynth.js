@@ -328,6 +328,13 @@ export class PsySynth extends StepSequencedSynth {
     const ampEnv = engine.ctx.createGain();
     note.ampEnv = ampEnv;
     const headroom = VOICE_HEADROOM / Math.sqrt(n);
+    // ampEnv.gain.value = 0 SOFORT -- s. fmsynth.js#playNote für die
+    // ausführliche Begründung (identischer Bug: `time` liegt beim
+    // Sequenzer bis zu 100ms in der Zukunft, die wiederverwendeten/nie
+    // gestoppten fm-voices der Unisono-Kopien werden aber schon JETZT in
+    // die Filter/Amp-Kette verbunden -- ohne dieses `.value = 0` lief das
+    // Signal bis `time` auf dem GainNode-Default-Gain 1 unhüllt durch).
+    ampEnv.gain.value = 0;
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
     ampEnv.gain.setValueAtTime(0, time);
