@@ -327,22 +327,44 @@ export function scheduleVoicePhaseRelease(voice, now, releaseAt) {
   setTimeout(() => { voice.phase = 'release'; }, relMs);
 }
 
+/** Kleiner Sicherheitsvorlauf für live nachgezogene Automation (s.
+ *  liveReanchorAttack/liveReanchorDecay unten) -- OHNE ihn (Scheduling exakt
+ *  auf `ctx.currentTime`) klingt es bei SCHNELLEM Reglerziehen (viele
+ *  'input'-Events pro Sekunde, z. B. PsySynths Release während aktiver
+ *  Bewegung, Bugreport: "als ob die Release-Zeit ganz kurz auf ganz kurz
+ *  springen würde") wie kurze Aussetzer: `ctx.currentTime` wird im JS zwar
+ *  "jetzt" gelesen, das Audio-Rendering hat diesen Zeitpunkt aber oft schon
+ *  überholt, bis der Befehl den Audio-Thread erreicht -- die meisten Browser
+ *  "schnappen" die Kurve dann auf den Zielwert, statt sie glatt weiterzuführen
+ *  (winzige, aber hörbare Lautstärke-Einbrüche bei jedem dieser Events). Ein
+ *  paar Millisekunden Vorlauf (deutlich mehr als ein Render-Quantum, aber
+ *  kurz genug, um beim Drehen nicht spürbar hinterherzuhinken) beheben das. */
+const LIVE_SCHED_LOOKAHEAD_S = 0.01;
+
 /** Attack-Rampe live nachziehen: bricht die laufende Automation ab und
  *  plant eine NEUE Rampe vom AKTUELLEN Wert (nicht von 0) zum Zielwert --
  *  nur für Stimmen mit `.phase === 'attack'` aufrufen (s. Dateikopf-
- *  Kommentar oben). */
+ *  Kommentar oben). Geplant bei `t + LIVE_SCHED_LOOKAHEAD_S`, nicht exakt
+ *  bei `t` -- s. dortigen Kommentar fürs "Warum" (Snap-Artefakte bei
+ *  schnellem Reglerziehen). */
 export function liveReanchorAttack(gainParam, t, attackS, target) {
+  const at = t + LIVE_SCHED_LOOKAHEAD_S;
   const cur = gainParam.value;
-  gainParam.cancelScheduledValues(t);
-  gainParam.setValueAtTime(cur, t);
-  gainParam.linearRampToValueAtTime(target, t + Math.max(0.001, attackS));
+  gainParam.cancelScheduledValues(at);
+  gainParam.setValueAtTime(cur, at);
+  gainParam.linearRampToValueAtTime(target, at + Math.max(0.001, attackS));
 }
 
 /** Release-/Decay-Kurve live nachziehen: kontinuierlicher Exponential-
  *  Übergang vom aktuellen Wert Richtung `target` mit NEUER Zeitkonstante --
  *  für Release NUR bei `.phase === 'release'` aufrufen; Filter-/FM-Decay
- *  sind nicht phasenabhängig (s. Dateikopf-Kommentar). */
+ *  sind nicht phasenabhängig (s. Dateikopf-Kommentar). Geplant bei
+ *  `t + LIVE_SCHED_LOOKAHEAD_S`, s. dortigen Kommentar -- KEIN
+ *  cancelScheduledValues nötig: ein späterer setTargetAtTime-Aufruf knüpft
+ *  laut Web-Audio-Spezifikation ohnehin nahtlos am aktuellen Kurvenwert zu
+ *  SEINEM eigenen Startzeitpunkt an, das Canceln war hier nur ein
+ *  zusätzlicher, bei schnellem Reglerziehen selbst riskanter Automations-
+ *  Eingriff ohne eigenen Nutzen. */
 export function liveReanchorDecay(param, t, timeConstant, target = 0) {
-  param.cancelScheduledValues(t);
-  param.setTargetAtTime(target, t, Math.max(0.001, timeConstant));
+  param.setTargetAtTime(target, t + LIVE_SCHED_LOOKAHEAD_S, Math.max(0.001, timeConstant));
 }
