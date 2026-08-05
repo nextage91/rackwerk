@@ -31,7 +31,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, makeFmVoice } from '../core/dsp.js';
+import { midiToHz, makeFmVoice, applyFilterEnv } from '../core/dsp.js';
 
 /** Headroom pro Unisono-Einzelstimme, zusätzlich durch Wurzel(Stimmenzahl)
  *  geteilt (s. PolySynth für dieselbe Konvention) -- niedriger als
@@ -83,8 +83,11 @@ export class PsySynth extends StepSequencedSynth {
       ringAmount: 0.3,
       unisonVoices: 3,
       unisonDetune: 15,   // Cent, volle Spreizung (±Detune/2 je äusserster Stimme)
+      filterType: 'lowpass', // 'lowpass' | 'highpass' | 'bandpass', s. subsynth.js#filterType
       cutoff: 3000,
       resonance: 2,
+      envAmt: 0.35,       // Filterhüllkurve: 0..1 ≙ 0..+4 Oktaven über Cutoff, s. dsp.js#applyFilterEnv
+      fDecay: 0.3,        // s — Abklingzeit der Filterhüllkurve
       attack: 0.02,
       release: 0.6,
       volume: 0.6,
@@ -264,10 +267,17 @@ export class PsySynth extends StepSequencedSynth {
     const n = Math.max(1, Math.round(p.unisonVoices));
 
     const noteBus = ctx.createGain();
+    // Filterhüllkurve (wie SubSynth/PolySynth/FMSynth, s. dsp.js#
+    // applyFilterEnv) -- öffnet den gemeinsamen Bus-Filter beim Anschlag
+    // zusätzlich über den statischen Cutoff hinaus, fällt dann zurück. Der
+    // klassische Psytrance/Goa-Acid-Filtersweep, additiv zur Swirl-Filter-
+    // LFO-Modulation (s. #connectSwirl, verbindet sich später auf DENSELBEN
+    // `filter.frequency`-Param -- Automation + audio-rate Modulation
+    // summieren sich korrekt, kein Konflikt).
     const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = p.cutoff;
+    filter.type = p.filterType;
     filter.Q.value = p.resonance;
+    applyFilterEnv(filter, t, p);
     noteBus.connect(filter);
 
     const subVoices = [];
@@ -432,11 +442,34 @@ export class PsySynth extends StepSequencedSynth {
     `;
     container.appendChild(ringRow);
 
+    // Filtertyp: LP/HP/BP -- identisches Muster zu subsynth.js#filterType,
+    // wirkt sofort auch auf klingende (gehaltene) Noten.
+    const filterSeg = document.createElement('div');
+    filterSeg.className = 'seg';
+    filterSeg.innerHTML = `
+      <span class="seg__label">Filter</span>
+      <button class="seg__btn" data-ft="lowpass">LP</button>
+      <button class="seg__btn" data-ft="highpass">HP</button>
+      <button class="seg__btn" data-ft="bandpass">BP</button>
+    `;
+    filterSeg.querySelectorAll('.seg__btn').forEach((b) =>
+      b.classList.toggle('is-active', b.dataset.ft === this.params.filterType));
+    filterSeg.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ft]');
+      if (!btn) return;
+      this.params.filterType = btn.dataset.ft;
+      filterSeg.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+      for (const note of this.voices.values()) note.filter.type = btn.dataset.ft;
+    });
+    container.appendChild(filterSeg);
+
     const ampRow = document.createElement('div');
     ampRow.className = 'machine__row';
     ampRow.innerHTML = `
       <x-knob label="Cutoff" min="200" max="16000" value="3000" curve="log" unit="Hz" data-p="cutoff" data-auto></x-knob>
       <x-knob label="Reso" min="0.5" max="12" value="2" data-p="resonance" data-auto></x-knob>
+      <x-knob label="Env Amt" min="0" max="1" value="0.35" data-p="envAmt" data-auto></x-knob>
+      <x-knob label="F.Decay" min="0.03" max="1.5" value="0.3" curve="log" unit="s" data-p="fDecay" data-auto></x-knob>
       <x-knob label="Attack" min="0.002" max="10" value="0.02" curve="log" unit="s" data-p="attack" data-auto></x-knob>
       <x-knob label="Release" min="0.02" max="10" value="0.6" curve="log" unit="s" data-p="release" data-auto></x-knob>
       <x-knob label="Volume" min="0" max="1" value="0.6" data-p="volume" data-auto></x-knob>
