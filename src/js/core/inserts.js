@@ -2874,13 +2874,19 @@ export const UI_PARAMS = {
   ],
 };
 
-/** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
+/** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI.
+ *  Labels "High Cut"/"Low Cut" (nicht "Low Pass"/"High Pass") -- Nutzer-
+ *  Anfrage, dieselbe Umbenennung wie bei Ableton EQ8/FabFilter Pro-Q: sagt
+ *  direkt, WELCHES Frequenzende beschnitten wird, statt den (für Einsteiger
+ *  verwirrenden) Filtertyp-Fachbegriff zu verlangen. `value` bleibt
+ *  'lowpass'/'highpass' (identisch zum BiquadFilterNode-Typ, s. DEFS.eq8) --
+ *  reine UI-Beschriftung, keine DSP-Änderung. */
 export const EQ_TYPES = [
   { value: 'lowshelf', label: 'Low Shelf' },
   { value: 'peaking', label: 'Peak' },
   { value: 'highshelf', label: 'High Shelf' },
-  { value: 'highpass', label: 'High Pass' },
-  { value: 'lowpass', label: 'Low Pass' },
+  { value: 'highpass', label: 'Low Cut' },
+  { value: 'lowpass', label: 'High Cut' },
 ];
 
 /** Flankensteilheit für eq8s Highpass/Lowpass-Bänder (s. DEFS.eq8) --

@@ -106,20 +106,20 @@ await page.waitForTimeout(600);
 const menuButtonsBefore = await page.locator('.pat-chip .pat-chip__btn').allTextContents();
 check('hold menu has no slope row before picking Highpass/Lowpass', !menuButtonsBefore.some((t) => t.includes('dB/Okt') || t === 'Brickwall'));
 
-const hpBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'High Pass' });
+const hpBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'Low Cut' });
 await hpBtn.click();
 await page.waitForTimeout(50);
 const menuButtonsAfterHp = await page.locator('.pat-chip .pat-chip__btn').allTextContents();
-check('slope row appears after picking High Pass (in same popup)', menuButtonsAfterHp.some((t) => t.includes('dB/Okt')));
-check('Brickwall option present for High Pass', menuButtonsAfterHp.includes('Brickwall'));
+check('slope row appears after picking Low Cut (in same popup)', menuButtonsAfterHp.some((t) => t.includes('dB/Okt')));
+check('Brickwall option present for Low Cut', menuButtonsAfterHp.includes('Brickwall'));
 
-// Switch to Low Pass -> Brickwall must disappear (user requirement: "nur highpass")
-const lpBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'Low Pass' });
+// Switch to High Cut -> Brickwall must disappear (user requirement: "nur highpass")
+const lpBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'High Cut' });
 await lpBtn.click();
 await page.waitForTimeout(50);
 const menuButtonsAfterLp = await page.locator('.pat-chip .pat-chip__btn').allTextContents();
-check('slope row still appears for Low Pass', menuButtonsAfterLp.some((t) => t.includes('dB/Okt')));
-check('Brickwall option is NOT present for Low Pass', !menuButtonsAfterLp.includes('Brickwall'));
+check('slope row still appears for High Cut', menuButtonsAfterLp.some((t) => t.includes('dB/Okt')));
+check('Brickwall option is NOT present for High Cut', !menuButtonsAfterLp.includes('Brickwall'));
 
 // Pick -18 dB/Okt slope, then re-open the menu and confirm it's marked active.
 const slope18Btn = page.locator('.pat-chip .pat-chip__btn', { hasText: '-18 dB/Okt' });
@@ -127,13 +127,20 @@ await slope18Btn.click();
 await dispatchPointer('pointerup', 4, hx, hy);
 await page.waitForTimeout(80);
 
-await dispatchPointer('pointerdown', 5, hx, hy);
+// Der Knoten sitzt jetzt (High Cut, s. eq8IsCutType) auf einer Q-, nicht
+// mehr Gain-basierten Y-Position -- typischerweise NICHT mehr an hx/hy von
+// vor dem Typ-Wechsel (Nutzer-Anfrage: "einstellbares Q... Punkt hoch/
+// runterziehen", s. insert-chain.js#eq8NodeDb). Position frisch auslesen,
+// statt die veralteten Koordinaten von oben wiederzuverwenden.
+const hxAfter = box.x + (parseFloat(await node.getAttribute('cx')) / 300) * box.width;
+const hyAfter = box.y + (parseFloat(await node.getAttribute('cy')) / 150) * box.height;
+await dispatchPointer('pointerdown', 5, hxAfter, hyAfter);
 await page.waitForTimeout(600);
 const slope18Active = await page.locator('.pat-chip .pat-chip__btn.is-active', { hasText: '-18 dB/Okt' }).count();
 check('-18 dB/Okt marked active after re-opening menu', slope18Active === 1);
 const removeBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'Remove' });
 await removeBtn.click();
-await dispatchPointer('pointerup', 5, hx, hy);
+await dispatchPointer('pointerup', 5, hxAfter, hyAfter);
 await page.waitForTimeout(50);
 
 // ---------------- Zoom persistence across export/import ----------------
