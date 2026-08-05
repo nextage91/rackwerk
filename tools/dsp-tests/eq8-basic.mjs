@@ -115,7 +115,7 @@ await dispatchPointer('pointerdown', 5, hx, hy);
 await page.waitForTimeout(600);
 check('hold on a node opens the type/slope menu', (await page.locator('.pat-chip').count()) >= 1);
 const typeButtons = await page.locator('.pat-chip .pat-chip__btn').allTextContents();
-check('menu offers all 5 EQ types', ['Low Shelf', 'Peak', 'High Shelf', 'High Pass', 'Low Pass'].every((t) => typeButtons.includes(t)));
+check('menu offers all 5 EQ types', ['Low Shelf', 'Peak', 'High Shelf', 'Low Cut', 'High Cut'].every((t) => typeButtons.includes(t)));
 
 // Click "High Shelf"
 const hsBtn = page.locator('.pat-chip .pat-chip__btn', { hasText: 'High Shelf' });

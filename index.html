@@ -21882,13 +21882,19 @@ const UI_PARAMS = {
   ],
 };
 
-/** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI. */
+/** EQ-Filtertyp ist ein Enum, kein Knob — eigene, kleine Liste fürs UI.
+ *  Labels "High Cut"/"Low Cut" (nicht "Low Pass"/"High Pass") -- Nutzer-
+ *  Anfrage, dieselbe Umbenennung wie bei Ableton EQ8/FabFilter Pro-Q: sagt
+ *  direkt, WELCHES Frequenzende beschnitten wird, statt den (für Einsteiger
+ *  verwirrenden) Filtertyp-Fachbegriff zu verlangen. `value` bleibt
+ *  'lowpass'/'highpass' (identisch zum BiquadFilterNode-Typ, s. DEFS.eq8) --
+ *  reine UI-Beschriftung, keine DSP-Änderung. */
 const EQ_TYPES = [
   { value: 'lowshelf', label: 'Low Shelf' },
   { value: 'peaking', label: 'Peak' },
   { value: 'highshelf', label: 'High Shelf' },
-  { value: 'highpass', label: 'High Pass' },
-  { value: 'lowpass', label: 'Low Pass' },
+  { value: 'highpass', label: 'Low Cut' },
+  { value: 'lowpass', label: 'High Cut' },
 ];
 
 /** Flankensteilheit für eq8s Highpass/Lowpass-Bänder (s. DEFS.eq8) --
@@ -24348,6 +24354,23 @@ function eq8YToGain(y, range) {
   return Math.max(-range, Math.min(range, n * range));
 }
 
+/** Highpass/Lowpass ("Low Cut"/"High Cut", s. EQ_TYPES) haben laut Web-
+ *  Audio-Spec keinen wirksamen Gain-Parameter (s. inserts.js#
+ *  eq8ApplyBandParams) -- ihr Punkt hoch-/runterziehen setzt stattdessen die
+ *  Flankenresonanz (Q), genau wie bei Ableton EQ8/FabFilter Pro-Q (Nutzer-
+ *  Anfrage: "einstellbares Q... so dass man den Punkt hoch und runterziehen
+ *  kann"). `eq8QToDb`/`eq8DbToQ` bilden Q auf dieselbe dB-Y-Achse ab wie
+ *  Gain (Q ist selbst schon ein Verhältnis, 20·log10(Q) ist die dazu
+ *  passende log-Skala) -- so kann der Punkt auf EXAKT derselben Achse wie
+ *  ein normales Band gezeichnet/gezogen werden, ohne eine zweite, eigene
+ *  Achsen-Skalierung zu brauchen. */
+const eq8IsCutType = (b) => b.type === 'highpass' || b.type === 'lowpass';
+const eq8QToDb = (q) => 20 * Math.log10(q);
+const eq8DbToQ = (db) => Math.max(EQ8_Q_MIN, Math.min(EQ8_Q_MAX, 10 ** (db / 20)));
+/** Der Y-Achsen-Wert, mit dem ein Band gezeichnet/getroffen wird -- Q
+ *  (umgerechnet) für Cut-Typen, sonst der echte dB-Gain. */
+const eq8NodeDb = (b) => (eq8IsCutType(b) ? eq8QToDb(b.q) : b.gain);
+
 /** Skalen-Hilfslinien wie bei Ableton EQ8/FabFilter Pro-Q: viele feine,
  *  unbeschriftete Frequenz-Gitterlinien, aber nur ein paar wenige BESCHRIFTETE
  *  Zehnerpotenzen -- auf Handybreite (~300-350px) wäre jede Terz beschriftet
@@ -24384,13 +24407,28 @@ function eq8CurvePath(insert) {
   const db = insert.getEq8Response?.(freqs);
   if (!db) return `M0,${EQ8_MIDY} L${EQ8_W},${EQ8_MIDY}`;
   const range = eq8GainRangeOf(insert);
+  // Punkte AUSSERHALB der sichtbaren Zoomstufe NICHT einzeichnen (statt sie
+  // wie zuvor mit eq8GainToY() auf den Achsenrand zu klemmen) -- verifiziert
+  // per echter getEq8Response()-Messung (s. PR): ein steiler Cut (niedriger
+  // Cutoff bei kleiner Zoomstufe) erreicht seinen tatsächlichen Dämpfungs-
+  // boden oft schon deutlich unterhalb ±range, und die geklemmte Fassung
+  // zog von dort eine unschöne, rein darstellungsbedingte horizontale Linie
+  // über den Rest des Graphen (Nutzer-Feedback: "die Flanke fällt ab und
+  // verläuft dann horizontal... nicht schön, nicht nötig, dass sie
+  // angezeigt wird"). Stattdessen läuft die Kurve jetzt einfach aus dem
+  // sichtbaren Bereich heraus, wie bei Ableton EQ8/FabFilter Pro-Q --
+  // Achsen-Gitterlinien/Knoten-Position bleiben bewusst weiter geklemmt
+  // (eq8GainToY, s. dort), nur die reine Kurvenlinie nicht mehr.
   let d = '';
+  let prevVisible = false;
   for (let i = 0; i < freqs.length; i++) {
+    if (db[i] < -range || db[i] > range) { prevVisible = false; continue; }
     const x = (i / (freqs.length - 1)) * EQ8_W;
     const y = eq8GainToY(db[i], range);
-    d += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+    d += `${prevVisible ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `;
+    prevVisible = true;
   }
-  return d.trim();
+  return d.trim() || `M0,${EQ8_MIDY} L${EQ8_W},${EQ8_MIDY}`;
 }
 
 /** GR-Meter des Compressor-Moduls: pollt den echten `reduction`-Wert des
@@ -24607,7 +24645,7 @@ function setupEq8Graph(row, insert) {
     let best = -1, bestDist = maxDist;
     insert.params.bands.forEach((b, i) => {
       if (!b.active) return;
-      const d = Math.hypot(eq8FreqToX(b.freq) - x, gainToY(b.gain) - y);
+      const d = Math.hypot(eq8FreqToX(b.freq) - x, gainToY(eq8NodeDb(b)) - y);
       if (d < bestDist) { bestDist = d; best = i; }
     });
     return best;
@@ -24633,7 +24671,7 @@ function setupEq8Graph(row, insert) {
           svg.appendChild(el);
         }
         el.setAttribute('cx', eq8FreqToX(b.freq));
-        el.setAttribute('cy', gainToY(b.gain));
+        el.setAttribute('cy', gainToY(eq8NodeDb(b)));
         el.setAttribute('r', i === selectedBand ? 9 : 7);
         el.classList.toggle('is-selected', i === selectedBand);
       } else if (el) {
@@ -24716,7 +24754,10 @@ function setupEq8Graph(row, insert) {
   // (showDragReadout/hideDragReadout oben), dieselbe, die jetzt auch der
   // Graphic EQ für seine Fader verwendet.
   const fmtFreq = (hz) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 1 : 2)} kHz` : `${Math.round(hz)} Hz`);
-  const showReadout = (clientX, clientY, freq, gain) => showDragReadout(clientX, clientY, `${fmtFreq(freq)} · ${fmtGain(gain)}`);
+  // `secondary` ist bereits fertig formatiert (Aufrufer entscheiden, ob
+  // Gain-dB ODER -- bei Low Cut/High Cut -- "Q x.xx" gezeigt wird, s.
+  // pointermove unten).
+  const showReadout = (clientX, clientY, freq, secondary) => showDragReadout(clientX, clientY, `${fmtFreq(freq)} · ${secondary}`);
   const hideReadout = () => hideDragReadout();
 
   graph.addEventListener('pointerdown', (e) => {
@@ -24778,11 +24819,19 @@ function setupEq8Graph(row, insert) {
       if (moved) {
         const b = insert.params.bands[dragNode];
         b.freq = eq8XToFreq(pos.x);
-        b.gain = yToGain(pos.y);
         insert.setBand(dragNode, 'freq');
-        insert.setBand(dragNode, 'gain');
+        // Low Cut/High Cut haben keinen wirksamen Gain (s. eq8IsCutType-
+        // Kommentar) -- vertikales Ziehen stellt dort stattdessen die
+        // Flankenresonanz (Q) ein, wie bei Ableton EQ8/FabFilter Pro-Q.
+        if (eq8IsCutType(b)) {
+          b.q = eq8DbToQ(yToGain(pos.y));
+          insert.setBand(dragNode, 'q');
+        } else {
+          b.gain = yToGain(pos.y);
+          insert.setBand(dragNode, 'gain');
+        }
         redrawSettled();
-        showReadout(e.clientX, e.clientY, b.freq, b.gain);
+        showReadout(e.clientX, e.clientY, b.freq, eq8IsCutType(b) ? `Q ${b.q.toFixed(2)}` : fmtGain(b.gain));
       }
     } else if (activePointers.size === 2 && qNode >= 0) {
       const pts = [...activePointers.values()];
@@ -25075,7 +25124,7 @@ function renderInsertChain(listEl, owner) {
             <path class="eq8__curve" data-eq8-curve d="${eq8CurvePath(insert)}"></path>
             ${insert.params.bands.map((b, i) => (b.active ? `
               <circle class="eq8__node is-active" data-eq8-node="${i}"
-                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.gain, eq8Range)}" r="7"></circle>
+                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(eq8NodeDb(b), eq8Range)}" r="7"></circle>
             ` : '')).join('')}
           </svg>
           <div class="eq8__labels" aria-hidden="true">
@@ -25086,7 +25135,7 @@ function renderInsertChain(listEl, owner) {
         <div class="eq8__zoom" data-eq8-zoom aria-label="Gain-Zoom">
           ${EQ8_GAIN_RANGES.map((r) => `<button type="button" class="pat-chip__btn${r === eq8Range ? ' is-active' : ''}" data-eq8-zoom-value="${r}">±${r}dB</button>`).join('')}
         </div>
-        <p class="eq8__hint">Tap: select/add band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/slope/remove</p>
+        <p class="eq8__hint">Tap: select · Double tap: add/remove band · Drag: freq/gain (Q on cuts) · Two fingers anywhere: Q · Hold: type/slope</p>
       `;
     } else if (insert.type === 'beatRepeat') {
       // Kein 'free'-Modus (anders als Filter Delay) -- "Grid" ist bei Beat
