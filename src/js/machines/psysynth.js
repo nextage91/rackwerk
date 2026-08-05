@@ -31,7 +31,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, makeFmVoice, applyFilterEnv } from '../core/dsp.js';
+import { midiToHz, makeFmVoice, applyFilterEnv, trackVoice, scheduleVoicePhaseRelease, liveReanchorAttack, liveReanchorDecay } from '../core/dsp.js';
 
 /** Headroom pro Unisono-Einzelstimme, zusätzlich durch Wurzel(Stimmenzahl)
  *  geteilt (s. PolySynth für dieselbe Konvention) -- niedriger als
@@ -98,6 +98,14 @@ export class PsySynth extends StepSequencedSynth {
     };
     /** aktive Stimmen: midi → { subVoices: [...], filter, ampEnv, noteBus } */
     this.voices = new Map();
+    // Verfolgt JEDE klingende NOTE (gehalten UND Sequenzer-Fire-and-Forget)
+    // über ihre gesamte Hörbarkeitsdauer -- s. subsynth.js#activeVoices/
+    // dsp.js#trackVoice fürs "Warum". Auf NOTEN-Ebene (nicht pro Unisono-
+    // Kopie), weil ampEnv/filter/Phase pro Note geteilt sind (s.
+    // Dateikopf-Kommentar) -- Live-Regler, die einzelne Unisono-Kopien
+    // betreffen (Ratio, Ring, Detune, FM-Decay/Amount), iterieren dann
+    // `note.subVoices` innerhalb dieser Schleife.
+    this.activeVoices = new Set();
     // Wiederverwendungs-Pool für fm-voice-Instanzen -- s. fmsynth.js#fmPool
     // für die ausführliche Begründung (gleiches Muster hier, PRO UNISONO-
     // KOPIE): der Sequenzer-Lookahead-Planer kann mehrere Steps in einem
@@ -308,6 +316,7 @@ export class PsySynth extends StepSequencedSynth {
    *  #releaseFmVoice) -- ausser die ganze Maschine wurde inzwischen
    *  abgebaut (s. disposeAudio). */
   #teardownNote(note) {
+    this.activeVoices.delete(note);
     this.#disconnectSwirl(note);
     for (const sv of note.subVoices) {
       if (this.#disposed) sv.fm.dispose();
@@ -347,10 +356,16 @@ export class PsySynth extends StepSequencedSynth {
     ampEnv.gain.value = 0;
     // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
     // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
+    const attackTarget = headroom * vel;
     ampEnv.gain.setValueAtTime(0, time);
-    ampEnv.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(attackTarget, time + p.attack);
     ampEnv.gain.setTargetAtTime(0, time + dur, p.release / 4);
     note.filter.connect(ampEnv).connect(this.output);
+    note.attackTarget = attackTarget;
+
+    // Live-Reglernachführung -- s. subsynth.js#playNote fürs "Warum".
+    trackVoice(this.activeVoices, note);
+    scheduleVoicePhaseRelease(note, time, time + dur);
 
     const stopAt = time + dur + p.release + 0.1;
     for (const sv of note.subVoices) {
@@ -379,11 +394,14 @@ export class PsySynth extends StepSequencedSynth {
 
     const ampEnv = engine.ctx.createGain();
     note.ampEnv = ampEnv;
+    const attackTarget = VOICE_HEADROOM / Math.sqrt(n);
     ampEnv.gain.setValueAtTime(0, t);
-    ampEnv.gain.linearRampToValueAtTime(VOICE_HEADROOM / Math.sqrt(n), t + p.attack);
+    ampEnv.gain.linearRampToValueAtTime(attackTarget, t + p.attack);
     note.filter.connect(ampEnv).connect(this.output);
+    note.attackTarget = attackTarget;
 
     for (const sv of note.subVoices) { sv.ring.start(t); }
+    trackVoice(this.activeVoices, note);
     this.voices.set(midi, note);
   }
 
@@ -397,6 +415,7 @@ export class PsySynth extends StepSequencedSynth {
     const rel = steal ? STEAL_RELEASE_S : this.params.release;
     note.ampEnv.gain.cancelScheduledValues(t);
     note.ampEnv.gain.setTargetAtTime(0, t, rel / 4);
+    note.phase = 'release'; // s. subsynth.js#noteOff -- reales, synchrones Ereignis
     const stopAt = t + rel + 0.1;
     for (const sv of note.subVoices) sv.ring.stop(stopAt);
     this.#scheduleRelease(note, stopAt);
@@ -459,7 +478,7 @@ export class PsySynth extends StepSequencedSynth {
       if (!btn) return;
       this.params.filterType = btn.dataset.ft;
       filterSeg.querySelectorAll('.seg__btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-      for (const note of this.voices.values()) note.filter.type = btn.dataset.ft;
+      for (const note of this.activeVoices) note.filter.type = btn.dataset.ft;
     });
     container.appendChild(filterSeg);
 
@@ -497,21 +516,68 @@ export class PsySynth extends StepSequencedSynth {
       this.params[key] = val;
       const t = engine.ctx.currentTime;
 
-      // Live-Parameter direkt auf laufende Stimmen/LFOs anwenden -- wie bei
-      // FMSynth wirken Ratio/FM-Amount/Env/Decay/RingRatio/RingAmount/
-      // Unisono bewusst NICHT rückwirkend (beim Anschlag fest eingeplant),
-      // nur ungehüllte Klangfarbe-Regler (Feedback, Cutoff, Resonance) UND
-      // die Swirl-LFOs (dauerhaft laufender Hintergrund-Modulator, kein
-      // Bezug zu einzelnen Notenanschlägen) ziehen live nach.
+      // Live-Parameter direkt auf laufende Stimmen/LFOs anwenden -- DX7/
+      // Operator-nah (Chat: "das gilt für alle Parameter"), s. dsp.js#
+      // trackVoice fürs "Warum". FM Env bleibt bewusst NICHT live (reiner
+      // Anschlags-Peak, s. fmsynth.js#buildControls); Unisono-STIMMENZAHL
+      // bleibt strukturell next-note-only (Spawnen/Entfernen von Unisono-
+      // Kopien mitten im Klang wäre ein komplettes Neuverkabeln, identisch
+      // zu SubSynths Ladder-Filter-Wechsel, s. dort).
       if (key === 'feedback') {
-        for (const note of this.voices.values()) {
+        for (const note of this.activeVoices) {
           for (const sv of note.subVoices) sv.fm.feedback.setTargetAtTime(val * FEEDBACK_SCALE, t, 0.01);
         }
+      } else if (key === 'ratio') {
+        for (const note of this.activeVoices) {
+          const modFreq = Math.max(0.01, note.carrierFreq * val);
+          for (const sv of note.subVoices) sv.fm.modFreq.setTargetAtTime(modFreq, t, 0.01);
+        }
+      } else if (key === 'fmAmount') {
+        for (const note of this.activeVoices) {
+          const modFreq = Math.max(0.01, note.carrierFreq * this.params.ratio);
+          for (const sv of note.subVoices) sv.fm.fmIndex.setTargetAtTime(val * FM_INDEX_SCALE * modFreq, t, 0.01);
+        }
+      } else if (key === 'fmDecay') {
+        for (const note of this.activeVoices) {
+          const modFreq = Math.max(0.01, note.carrierFreq * this.params.ratio);
+          const sustain = this.params.fmAmount * FM_INDEX_SCALE * modFreq;
+          for (const sv of note.subVoices) liveReanchorDecay(sv.fm.fmIndex, t, Math.max(0.01, val) / 3, sustain);
+        }
+      } else if (key === 'ringRatio') {
+        for (const note of this.activeVoices) {
+          const ringFreq = Math.max(0.01, note.carrierFreq * val);
+          for (const sv of note.subVoices) sv.ring.frequency.setTargetAtTime(ringFreq, t, 0.01);
+        }
+      } else if (key === 'ringAmount') {
+        for (const note of this.activeVoices) {
+          for (const sv of note.subVoices) {
+            sv.ringGain.gain.setTargetAtTime(1 - val, t, 0.01);
+            sv.ringDepthGain.gain.setTargetAtTime(val, t, 0.01);
+          }
+        }
+      } else if (key === 'unisonDetune') {
+        // sv.panner.pan.value ist die feste Unisono-Ausbreitung (-1..1,
+        // "spread") derselben Kopie -- identisch zu dem Wert, mit dem ihr
+        // Detune ursprünglich berechnet wurde (s. #buildNote), hier nur mit
+        // dem NEUEN Detune-Reglerwert neu skaliert.
+        for (const note of this.activeVoices) {
+          for (const sv of note.subVoices) {
+            const detuneCents = sv.panner.pan.value * (val / 2);
+            sv.fm.detune.setTargetAtTime(detuneCents, t, 0.01);
+            sv.ring.detune.setTargetAtTime(detuneCents, t, 0.01);
+          }
+        }
       } else if (key === 'cutoff') {
-        for (const note of this.voices.values()) note.filter.frequency.setTargetAtTime(val, t, 0.01);
+        for (const note of this.activeVoices) note.filter.frequency.setTargetAtTime(val, t, 0.01);
         this.filterDepthGain.gain.setTargetAtTime(val * (2 ** (this.params.filterDepth * 2) - 1), t, 0.01);
       } else if (key === 'resonance') {
-        for (const note of this.voices.values()) note.filter.Q.setTargetAtTime(val, t, 0.01);
+        for (const note of this.activeVoices) note.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'fDecay') {
+        for (const note of this.activeVoices) note.filter.frequency.setTargetAtTime(this.params.cutoff, t, Math.max(0.01, val) / 3);
+      } else if (key === 'attack') {
+        for (const note of this.activeVoices) if (note.phase === 'attack') liveReanchorAttack(note.ampEnv.gain, t, val, note.attackTarget);
+      } else if (key === 'release') {
+        for (const note of this.activeVoices) if (note.phase === 'release') liveReanchorDecay(note.ampEnv.gain, t, val / 4, 0);
       } else if (key === 'volume') {
         this.setLevel(val);
       } else if (key === 'swirlRate') {

@@ -14,7 +14,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, applyFilterEnv, makeLadderFilter } from '../core/dsp.js';
+import { midiToHz, applyFilterEnv, makeLadderFilter, trackVoice, scheduleVoicePhaseRelease, liveReanchorAttack, liveReanchorDecay } from '../core/dsp.js';
 
 /** Baut den Filterknoten für eine Stimme -- entweder ein natives
  *  BiquadFilterNode (LP/HP/BP, wie bisher) oder den selbstschwingungs-
@@ -96,6 +96,12 @@ export class SubSynth extends StepSequencedSynth {
     };
     /** aktive Stimmen: midi → {osc, filter, env} */
     this.voices = new Map();
+    // Verfolgt JEDE klingende Stimme (gehalten UND Sequenzer-Fire-and-
+    // Forget) über ihre gesamte Hörbarkeitsdauer inkl. Release, s. dsp.js#
+    // trackVoice fürs "Warum" (Chat: "so nah wie möglich beim Original
+    // DX7/Operator... das gilt für alle Parameter" -- Regler sollen bereits
+    // klingende/ausklingende Noten live nachziehen, nicht nur die nächste).
+    this.activeVoices = new Set();
     this.output.gain.value = this.params.volume;
 
     /** 4 leere Pattern-Slots (A/B/C/D), {on, midi} pro Step. `this.pattern`
@@ -146,15 +152,25 @@ export class SubSynth extends StepSequencedSynth {
     // die Kappe verhinderte hier gar keinen Sprung, sie machte den Regler
     // bei kurzen Sequenzer-Schritten nur wirkungslos (Chat: "kann es sein
     // das der attack wert der envelope mit bis max. 1s zu tief ist").
+    const attackTarget = VOICE_HEADROOM * vel;
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(VOICE_HEADROOM * vel, time + p.attack);
+    env.gain.linearRampToValueAtTime(attackTarget, time + p.attack);
     env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
     osc.connect(filterIn(filter));
     filterOut(filter).connect(env).connect(this.output);
     osc.start(time);
-    osc.stop(time + dur + p.release + 0.1);
-    osc.onended = () => { osc.disconnect(); disposeFilterNode(filter); env.disconnect(); };
+    const stopAt = time + dur + p.release + 0.1;
+    osc.stop(stopAt);
+
+    // Live-Reglernachführung (s. dsp.js#trackVoice): diese Fire-and-Forget-
+    // Stimme bleibt in activeVoices bis sie tatsächlich verstummt, nicht
+    // nur bis playNote() zurückkehrt -- der Release-Regler muss sie auch
+    // NACH `time+dur` noch erreichen können, während sie ausklingt.
+    const voice = { osc, filter, env, attackTarget };
+    trackVoice(this.activeVoices, voice);
+    scheduleVoicePhaseRelease(voice, time, time + dur);
+    osc.onended = () => { osc.disconnect(); disposeFilterNode(filter); env.disconnect(); this.activeVoices.delete(voice); };
   }
 
   /* ---------- Stimmenverwaltung ---------- */
@@ -192,7 +208,9 @@ export class SubSynth extends StepSequencedSynth {
     // Map-Schlüssel bleibt die ROHE (nicht transponierte) MIDI-Note -- so
     // findet noteOff(midi) mit derselben Note vom Keybed die Stimme wieder,
     // unabhängig davon, ob Transpose inzwischen weitergedreht wurde.
-    this.voices.set(midi, { osc, filter, env });
+    const voice = { osc, filter, env, attackTarget: VOICE_HEADROOM };
+    trackVoice(this.activeVoices, voice);
+    this.voices.set(midi, voice);
   }
 
   /** `steal`: true nur beim Verdrängen durch MAX_VOICES (s. noteOn oben) --
@@ -207,7 +225,10 @@ export class SubSynth extends StepSequencedSynth {
     v.env.gain.cancelScheduledValues(t);
     v.env.gain.setTargetAtTime(0, t, rel / 4);
     v.osc.stop(t + rel + 0.1);
-    v.osc.onended = () => { v.osc.disconnect(); disposeFilterNode(v.filter); v.env.disconnect(); };
+    // Echtes, synchrones Ereignis -- anders als playNote() braucht noteOff()
+    // keinen scheduleVoicePhaseRelease()-Timer, s. dsp.js#trackVoice.
+    v.phase = 'release';
+    v.osc.onended = () => { v.osc.disconnect(); disposeFilterNode(v.filter); v.env.disconnect(); this.activeVoices.delete(v); };
   }
 
   allNotesOff() {
@@ -243,7 +264,7 @@ export class SubSynth extends StepSequencedSynth {
       this.params.filterType = btn.dataset.ft;
       seg.querySelectorAll('.seg__btn').forEach((b) =>
         b.classList.toggle('is-active', b === btn));
-      for (const v of this.voices.values()) v.filter.type = btn.dataset.ft;
+      for (const v of this.activeVoices) v.filter.type = btn.dataset.ft;
     });
     container.appendChild(seg);
 
@@ -265,12 +286,22 @@ export class SubSynth extends StepSequencedSynth {
       const val = e.detail.value;
       this.params[key] = val;
 
-      // Live-Parameter direkt auf laufende Stimmen anwenden
+      // Live-Parameter direkt auf laufende Stimmen anwenden -- DX7/Operator-
+      // nah (s. dsp.js#trackVoice fürs "Warum"): Cutoff/Reso/F.Decay wirken
+      // auf JEDE klingende Stimme (activeVoices, phasenunabhängig, wie ein
+      // Hardware-Regler es jederzeit tut); Attack nur auf Stimmen, die noch
+      // in der Attack-Rampe stehen; Release nur auf bereits loslassende.
       const t = engine.ctx.currentTime;
       if (key === 'cutoff') {
-        for (const v of this.voices.values()) v.filter.frequency.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(val, t, 0.01);
       } else if (key === 'resonance') {
-        for (const v of this.voices.values()) v.filter.Q.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'fDecay') {
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(this.params.cutoff, t, Math.max(0.01, val) / 3);
+      } else if (key === 'attack') {
+        for (const v of this.activeVoices) if (v.phase === 'attack') liveReanchorAttack(v.env.gain, t, val, v.attackTarget);
+      } else if (key === 'release') {
+        for (const v of this.activeVoices) if (v.phase === 'release') liveReanchorDecay(v.env.gain, t, val / 4, 0);
       } else if (key === 'transpose') {
         // Gehaltene Stimmen gleiten live mit -- wie bei polysynth.js'
         // Transpose-Knob, hier ohne zusätzliche Chord-Offsets.

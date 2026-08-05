@@ -17,7 +17,7 @@
 import { StepSequencedSynth } from './step-sequenced-synth.js';
 import { engine } from '../core/audio-engine.js';
 import { createKeybed } from '../ui/keybed.js';
-import { midiToHz, applyFilterEnv } from '../core/dsp.js';
+import { midiToHz, applyFilterEnv, trackVoice, scheduleVoicePhaseRelease, liveReanchorAttack, liveReanchorDecay } from '../core/dsp.js';
 import { automation } from '../core/automation.js';
 
 /** Chord-Voicings als Halbtonabstände zur Root-Note. */
@@ -72,6 +72,10 @@ export class PolySynth extends StepSequencedSynth {
     this.chordType = 'maj';
     /** aktive Stimmen: Root-MIDI → [{osc, filter, env, offset}, …] */
     this.voices = new Map();
+    // Verfolgt JEDE einzelne Chord-Ton-Stimme (gehalten UND Sequenzer-Fire-
+    // and-Forget) über ihre gesamte Hörbarkeitsdauer -- s. subsynth.js#
+    // activeVoices/dsp.js#trackVoice fürs "Warum".
+    this.activeVoices = new Set();
     this.output.gain.value = this.params.volume;
 
     /** 4 leere Pattern-Slots (A/B/C/D) — neu hinzugefügte Maschinen starten
@@ -124,16 +128,22 @@ export class PolySynth extends StepSequencedSynth {
       const { osc, filter } = this.#buildVoice(midi, time);
 
       const env = engine.ctx.createGain();
+      const attackTarget = headroom * vel;
       // KEIN Math.min(p.attack, dur*0.5) mehr -- s. subsynth.js#playNote
       // für die Begründung (dieselbe Kappe, derselbe unnötige Effekt).
       env.gain.setValueAtTime(0, time);
-      env.gain.linearRampToValueAtTime(headroom * vel, time + p.attack);
+      env.gain.linearRampToValueAtTime(attackTarget, time + p.attack);
       env.gain.setTargetAtTime(0, time + dur, p.release / 4);
 
       osc.connect(filter).connect(env).connect(this.output);
       osc.start(time);
       osc.stop(time + dur + p.release + 0.1);
-      osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); };
+
+      // Live-Reglernachführung -- s. subsynth.js#playNote fürs "Warum".
+      const voice = { osc, filter, env, offset, attackTarget };
+      trackVoice(this.activeVoices, voice);
+      scheduleVoicePhaseRelease(voice, time, time + dur);
+      osc.onended = () => { osc.disconnect(); filter.disconnect(); env.disconnect(); this.activeVoices.delete(voice); };
     }
   }
 
@@ -165,7 +175,9 @@ export class PolySynth extends StepSequencedSynth {
       osc.connect(filter).connect(env).connect(this.output);
       osc.start(t);
 
-      return { osc, filter, env, offset };
+      const voice = { osc, filter, env, offset, attackTarget: headroom };
+      trackVoice(this.activeVoices, voice);
+      return voice;
     });
 
     this.voices.set(rootMidi, voiceList);
@@ -183,7 +195,8 @@ export class PolySynth extends StepSequencedSynth {
       v.env.gain.cancelScheduledValues(t);
       v.env.gain.setTargetAtTime(0, t, rel / 4);
       v.osc.stop(t + rel + 0.1);
-      v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); };
+      v.phase = 'release'; // s. subsynth.js#noteOff -- reales, synchrones Ereignis
+      v.osc.onended = () => { v.osc.disconnect(); v.filter.disconnect(); v.env.disconnect(); this.activeVoices.delete(v); };
     }
   }
 
@@ -249,8 +262,7 @@ export class PolySynth extends StepSequencedSynth {
       this.params.filterType = btn.dataset.ft;
       filterSeg.querySelectorAll('.seg__btn').forEach((b) =>
         b.classList.toggle('is-active', b === btn));
-      for (const voiceList of this.voices.values())
-        for (const v of voiceList) v.filter.type = btn.dataset.ft;
+      for (const v of this.activeVoices) v.filter.type = btn.dataset.ft;
     });
     container.appendChild(filterSeg);
 
@@ -272,14 +284,21 @@ export class PolySynth extends StepSequencedSynth {
       const val = e.detail.value;
       this.params[key] = val;
 
-      // Live-Parameter direkt auf laufende Stimmen anwenden
+      // Live-Parameter direkt auf laufende Stimmen anwenden -- DX7/Operator-
+      // nah, s. subsynth.js#buildControls fürs "Warum" (Cutoff/Reso/F.Decay
+      // phasenunabhängig auf JEDE klingende Stimme, Attack/Release nur auf
+      // Stimmen in der jeweils passenden Hüllkurvenphase).
       const t = engine.ctx.currentTime;
       if (key === 'cutoff') {
-        for (const voiceList of this.voices.values())
-          for (const v of voiceList) v.filter.frequency.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(val, t, 0.01);
       } else if (key === 'resonance') {
-        for (const voiceList of this.voices.values())
-          for (const v of voiceList) v.filter.Q.setTargetAtTime(val, t, 0.01);
+        for (const v of this.activeVoices) v.filter.Q.setTargetAtTime(val, t, 0.01);
+      } else if (key === 'fDecay') {
+        for (const v of this.activeVoices) v.filter.frequency.setTargetAtTime(this.params.cutoff, t, Math.max(0.01, val) / 3);
+      } else if (key === 'attack') {
+        for (const v of this.activeVoices) if (v.phase === 'attack') liveReanchorAttack(v.env.gain, t, val, v.attackTarget);
+      } else if (key === 'release') {
+        for (const v of this.activeVoices) if (v.phase === 'release') liveReanchorDecay(v.env.gain, t, val / 4, 0);
       } else if (key === 'transpose') {
         // Gehaltene Stimmen live nachziehen — dafür ist der Knob da:
         // während der Akkord klingt (oder automatisiert läuft), am
