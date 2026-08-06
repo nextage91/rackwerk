@@ -18,7 +18,6 @@
  *   owner.removeInsert(id)
  */
 import { automation } from '../core/automation.js';
-import { engine } from '../core/audio-engine.js';
 import { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
 
@@ -110,85 +109,6 @@ function eq8YToGain(y, range) {
   const n = (EQ8_MIDY - y) / (EQ8_MIDY - 8);
   return Math.max(-range, Math.min(range, n * range));
 }
-
-/** Highpass/Lowpass ("Low Cut"/"High Cut", s. EQ_TYPES) haben laut Web-
- *  Audio-Spec keinen wirksamen Gain-Parameter (s. inserts.js#
- *  eq8ApplyBandParams) -- ihr Punkt hoch-/runterziehen setzt stattdessen die
- *  Flankenresonanz (Q), genau wie bei Ableton EQ8/FabFilter Pro-Q (Nutzer-
- *  Anfrage: "einstellbares Q... so dass man den Punkt hoch und runterziehen
- *  kann").
- *
- * `eq8QToDb`/`eq8DbToQ` bilden Q auf dieselbe dB-Y-Achse ab wie Gain, damit
- * der Punkt exakt AUF der tatsächlich gezeichneten Kurve sitzt -- NICHT
- * einfach `20·log10(Q)` (naive erste Fassung, verworfen nach Nutzer-
- * Feedback: "der Punkt ist unten, aber es gibt immer noch diese Erhöhung
- * von ca. 2dB, die sich kaum verschiebt"). Per echter getFrequencyResponse()-
- * Messung (s. PR) bestätigt: ein resonantes 2-poliges RBJ-Highpass/Lowpass-
- * Biquad (Web Audios native Umsetzung) hat SELBST bei seinem minimal
- * einstellbaren Q (0.1) noch eine kleine, unvermeidbare Überhöhung von ca.
- * +1.3dB an der Flanke -- anders als beim idealisierten zeitkontinuierlichen
- * Lehrbuchfilter gibt es bei DIESER (digitalen, RBJ-Cookbook-parametrierten)
- * Filterkonstruktion keine "Q < 0.707 -> exakt 0dB, keine Resonanz"-Grenze.
- * Die Messung zeigt ausserdem: dieser Zusammenhang (Peak-dB als Funktion
- * von Q) ist unabhängig von der Grenzfrequenz UND identisch für Highpass/
- * Lowpass -- eine einmal (lazy, beim ersten Gebrauch) über eine echte
- * BiquadFilterNode gemessene Tabelle reicht deshalb für alle Bänder/
- * Cutoffs. Zieht man den Punkt unter den so gemessenen Minimalwert (~+1.3dB),
- * bleibt er dort stehen -- das ist korrekt: flacher geht es mit diesem
- * Filtertyp nicht.
- */
-let eq8QPeakTable = null; // [{ q, db }], aufsteigend sortiert nach Q (== nach db)
-function eq8BuildQPeakTable() {
-  const ctx = engine.ctx;
-  const N_FREQ = 200, FREQ_MIN = 20, FREQ_MAX = 22000;
-  const freqs = new Float32Array(N_FREQ);
-  for (let i = 0; i < N_FREQ; i++) freqs[i] = FREQ_MIN * (FREQ_MAX / FREQ_MIN) ** (i / (N_FREQ - 1));
-  const mag = new Float32Array(N_FREQ), phase = new Float32Array(N_FREQ);
-  const N_Q = 48;
-  const f = ctx.createBiquadFilter();
-  f.type = 'highpass'; // Lowpass liefert (gemessen) identische Peak-Werte
-  f.frequency.value = 1000; // peak-dB(Q) ist grenzfrequenz-unabhängig, s. o.
-  const table = [];
-  for (let i = 0; i < N_Q; i++) {
-    const q = EQ8_Q_MIN * (EQ8_Q_MAX / EQ8_Q_MIN) ** (i / (N_Q - 1));
-    f.Q.value = q;
-    f.getFrequencyResponse(freqs, mag, phase);
-    let peak = -Infinity;
-    for (let j = 0; j < N_FREQ; j++) peak = Math.max(peak, 20 * Math.log10(mag[j]));
-    table.push({ q, db: peak });
-  }
-  return table;
-}
-const eq8QPeakTableRef = () => (eq8QPeakTable ??= eq8BuildQPeakTable());
-
-const eq8IsCutType = (b) => b.type === 'highpass' || b.type === 'lowpass';
-/** Lineare Interpolation über die (nach Q aufsteigend sortierte) Tabelle. */
-function eq8QToDb(q) {
-  const table = eq8QPeakTableRef();
-  const clamped = Math.max(EQ8_Q_MIN, Math.min(EQ8_Q_MAX, q));
-  let i = 1;
-  while (i < table.length - 1 && table[i].q < clamped) i++;
-  const a = table[i - 1], b = table[i];
-  const t = (clamped - a.q) / (b.q - a.q || 1);
-  return a.db + t * (b.db - a.db);
-}
-/** Kehrfunktion -- Tabelle ist nach db monoton steigend sortiert (Q steigt
- *  genau dann, wenn db steigt, s. Messung), Suche direkt über db. Werte
- *  ausserhalb des messbaren Bereichs klemmen auf den erreichbaren Rand
- *  (s. Dateikopf-Kommentar: unterhalb des Minimalpeaks geht es nicht flacher). */
-function eq8DbToQ(db) {
-  const table = eq8QPeakTableRef();
-  if (db <= table[0].db) return table[0].q;
-  if (db >= table[table.length - 1].db) return table[table.length - 1].q;
-  let i = 1;
-  while (i < table.length - 1 && table[i].db < db) i++;
-  const a = table[i - 1], b = table[i];
-  const t = (db - a.db) / (b.db - a.db || 1);
-  return a.q + t * (b.q - a.q);
-}
-/** Der Y-Achsen-Wert, mit dem ein Band gezeichnet/getroffen wird -- Q
- *  (umgerechnet) für Cut-Typen, sonst der echte dB-Gain. */
-const eq8NodeDb = (b) => (eq8IsCutType(b) ? eq8QToDb(b.q) : b.gain);
 
 /** Skalen-Hilfslinien wie bei Ableton EQ8/FabFilter Pro-Q: viele feine,
  *  unbeschriftete Frequenz-Gitterlinien, aber nur ein paar wenige BESCHRIFTETE
@@ -464,7 +384,7 @@ function setupEq8Graph(row, insert) {
     let best = -1, bestDist = maxDist;
     insert.params.bands.forEach((b, i) => {
       if (!b.active) return;
-      const d = Math.hypot(eq8FreqToX(b.freq) - x, gainToY(eq8NodeDb(b)) - y);
+      const d = Math.hypot(eq8FreqToX(b.freq) - x, gainToY(b.gain) - y);
       if (d < bestDist) { bestDist = d; best = i; }
     });
     return best;
@@ -490,7 +410,7 @@ function setupEq8Graph(row, insert) {
           svg.appendChild(el);
         }
         el.setAttribute('cx', eq8FreqToX(b.freq));
-        el.setAttribute('cy', gainToY(eq8NodeDb(b)));
+        el.setAttribute('cy', gainToY(b.gain));
         el.setAttribute('r', i === selectedBand ? 9 : 7);
         el.classList.toggle('is-selected', i === selectedBand);
       } else if (el) {
@@ -638,19 +558,11 @@ function setupEq8Graph(row, insert) {
       if (moved) {
         const b = insert.params.bands[dragNode];
         b.freq = eq8XToFreq(pos.x);
+        b.gain = yToGain(pos.y);
         insert.setBand(dragNode, 'freq');
-        // Low Cut/High Cut haben keinen wirksamen Gain (s. eq8IsCutType-
-        // Kommentar) -- vertikales Ziehen stellt dort stattdessen die
-        // Flankenresonanz (Q) ein, wie bei Ableton EQ8/FabFilter Pro-Q.
-        if (eq8IsCutType(b)) {
-          b.q = eq8DbToQ(yToGain(pos.y));
-          insert.setBand(dragNode, 'q');
-        } else {
-          b.gain = yToGain(pos.y);
-          insert.setBand(dragNode, 'gain');
-        }
+        insert.setBand(dragNode, 'gain');
         redrawSettled();
-        showReadout(e.clientX, e.clientY, b.freq, eq8IsCutType(b) ? `Q ${b.q.toFixed(2)}` : fmtGain(b.gain));
+        showReadout(e.clientX, e.clientY, b.freq, fmtGain(b.gain));
       }
     } else if (activePointers.size === 2 && qNode >= 0) {
       const pts = [...activePointers.values()];
@@ -943,7 +855,7 @@ export function renderInsertChain(listEl, owner) {
             <path class="eq8__curve" data-eq8-curve d="${eq8CurvePath(insert)}"></path>
             ${insert.params.bands.map((b, i) => (b.active ? `
               <circle class="eq8__node is-active" data-eq8-node="${i}"
-                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(eq8NodeDb(b), eq8Range)}" r="7"></circle>
+                cx="${eq8FreqToX(b.freq)}" cy="${eq8GainToY(b.gain, eq8Range)}" r="7"></circle>
             ` : '')).join('')}
           </svg>
           <div class="eq8__labels" aria-hidden="true">
@@ -954,7 +866,7 @@ export function renderInsertChain(listEl, owner) {
         <div class="eq8__zoom" data-eq8-zoom aria-label="Gain-Zoom">
           ${EQ8_GAIN_RANGES.map((r) => `<button type="button" class="pat-chip__btn${r === eq8Range ? ' is-active' : ''}" data-eq8-zoom-value="${r}">±${r}dB</button>`).join('')}
         </div>
-        <p class="eq8__hint">Tap: select · Double tap: add/remove band · Drag: freq/gain (Q on cuts) · Two fingers anywhere: Q · Hold: type/slope</p>
+        <p class="eq8__hint">Tap: select · Double tap: add/remove band · Drag: freq/gain · Two fingers anywhere: Q · Hold: type/slope</p>
       `;
     } else if (insert.type === 'beatRepeat') {
       // Kein 'free'-Modus (anders als Filter Delay) -- "Grid" ist bei Beat
