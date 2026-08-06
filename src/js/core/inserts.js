@@ -814,7 +814,7 @@ function eq8EffectiveFreq(b) {
   return b.freq;
 }
 
-function eq8WrapBiquad(node) { return { kind: 'biquad', node, input: node, output: node }; }
+function eq8WrapBiquad(node, role) { return { kind: 'biquad', node, input: node, output: node, role }; }
 
 function eq8MakeBiquad(ctx, type, freq, q) {
   const node = ctx.createBiquadFilter();
@@ -822,6 +822,85 @@ function eq8MakeBiquad(ctx, type, freq, q) {
   node.frequency.value = freq;
   node.Q.value = q;
   return node;
+}
+
+/** Feste, neutrale Q für die BASIS-Filterstufen eines Highpass/Lowpass-
+ *  Bandes (s. eq8BuildBandNodes/eq8ApplyBandParams unten) -- b.q steuert
+ *  seit der Resonanz-/Senken-Stufe (Nutzer-Anfrage: "ich möchte dort
+ *  absenken... auch ins Minus gehen können") nicht mehr diese Basis,
+ *  sondern ausschliesslich die Breite dieser zusätzlichen Stufe.
+ *
+ *  Der klassische "Lehrbuch"-Butterworth-Wert (1/√2, maximal flach, keine
+ *  Eigenresonanz) -- NICHT EQ8_Q_MIN (0.1): die Resonanz-Stufe gleicht den
+ *  exakten Basis-Wert AN DER GRENZFREQUENZ selbst aus (s. eq8MeasureBaseBump/
+ *  eq8ResonanceGain unten), dieser Wert ist bei jedem Q exakt `20·log10(Q)`
+ *  dB -- bei EQ8_Q_MIN (0.1) wären das -20dB, die die Resonanz-Stufe mit
+ *  einem entsprechend GROSSEN Gegen-Boost ausgleichen müsste, was direkt
+ *  daneben (die Resonanz-Stufe hat ja selbst eine gewisse Breite, s. b.q)
+ *  einen unschönen zusätzlichen Buckel erzeugen würde. Bei 1/√2 ist der
+ *  Basis-Wert an der Grenzfrequenz nur -3.01dB -- ein deutlich kleinerer,
+ *  unauffälligerer Ausgleich. */
+const EQ8_CUT_BASE_Q = Math.SQRT1_2;
+
+/** Misst EINMALIG (lazy, pro Flankensteilheit gecacht) den dB-Wert der
+ *  BASIS-Filterstufen (ohne die Resonanz-Stufe) GENAU AN der Grenzfrequenz
+ *  selbst -- NICHT ihr Maximum irgendwo in der Nähe (frühere, fehlerhafte
+ *  Fassung: ergab beim Testen z. B. bei slope=6 nur +3.16dB statt der
+ *  angeforderten +6dB, weil die 1-Pol-Basis an der Grenzfrequenz selbst per
+ *  Definition bereits bei -3dB liegt -- s. Erklärung unten). Kaskadierte
+ *  Filter addieren ihre dB-Werte AN JEDER EINZELNEN Frequenz (Amplituden
+ *  multiplizieren sich, log(a·b)=log(a)+log(b)) -- die angehängte Resonanz-
+ *  Biquad hat ihr Gain-Maximum exakt AN ihrer eigenen Mittenfrequenz
+ *  (dieselbe Grenzfrequenz), deshalb muss GENAU DORT (nicht am irgendwo
+ *  leicht verschobenen Maximum der Basis) korrigiert werden, damit die
+ *  KOMBINIERTE Kurve an dieser einen Stelle exakt auf b.gain landet.
+ *
+ *  Unterschiedlich viele kaskadierte Stufen (1-4 Pole je nach Flanken-
+ *  steilheit) summieren sich unterschiedlich stark auf, eine pauschale
+ *  Konstante über alle Flankensteilheiten wäre falsch. Nutzt dieselben
+ *  Formeln, die die App ohnehin schon für Kurven-Berechnung/Anzeige
+ *  einsetzt (natives getFrequencyResponse() für Biquads,
+ *  eq8OnePoleResponseDb() für die 1-poligen Worklet-Stufen -- rein
+ *  analytisch, kein echter Worklet-Knoten nötig) -- Grenzfrequenz-
+ *  unabhängig (per Messung bestätigt), deshalb reicht EIN fester
+ *  Referenzwert (1000Hz) für alle Bänder/Cutoffs. Wird von der Resonanz-
+ *  Stufe abgezogen (s. eq8ResonanceGain), damit "Regler in der Mitte"
+ *  (b.gain=0) wirklich einen sauber flachen Verlauf ergibt statt nur "in
+ *  der Nähe von flach". */
+const eq8BaseBumpCache = new Map(); // Flankensteilheit -> dB
+function eq8MeasureBaseBump(ctx, slope) {
+  if (eq8BaseBumpCache.has(slope)) return eq8BaseBumpCache.get(slope);
+  const REF_FREQ = 1000;
+  const freqs = new Float32Array([REF_FREQ]);
+  const mag = new Float32Array(1), phase = new Float32Array(1);
+  let totalDb = 0;
+  const addBiquad = () => {
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass'; // Lowpass liefert gemessen identisches Ergebnis, s. PR #219
+    f.frequency.value = REF_FREQ;
+    f.Q.value = EQ8_CUT_BASE_Q;
+    f.getFrequencyResponse(freqs, mag, phase);
+    totalDb += 20 * Math.log10(mag[0]);
+  };
+  const addOnePole = () => { totalDb += eq8OnePoleResponseDb(REF_FREQ, REF_FREQ, ctx.sampleRate, true); };
+  if (slope === 6) addOnePole();
+  else if (slope === 18) { addBiquad(); addOnePole(); }
+  else if (slope === 48) { addBiquad(); addBiquad(); addBiquad(); addBiquad(); }
+  else addBiquad(); // 12 (Default/Fallback)
+  eq8BaseBumpCache.set(slope, totalDb);
+  return totalDb;
+}
+
+/** Zielwert für die Resonanz-/Senken-Stufe eines Highpass/Lowpass-Bandes --
+ *  b.gain ist (wie bei peaking/shelf-Bändern) der GEWÜNSCHTE dB-Wert an der
+ *  Grenzfrequenz; abgezogen wird der gemessene Basis-Wert an GENAU dieser
+ *  Stelle (s. eq8MeasureBaseBump), damit b.gain=0 tatsächlich einen sauber
+ *  flachen Verlauf ergibt und negative Werte eine echte Senke UNTER 0dB
+ *  erzeugen -- mit einer reinen Basis-Filterstufe allein (egal welches Q)
+ *  ist das physikalisch nicht möglich, s. Dateikopf-Kommentar oben. */
+function eq8ResonanceGain(ctx, b, slope) {
+  if (!b.active) return 0;
+  return b.gain - eq8MeasureBaseBump(ctx, slope);
 }
 
 /** Baut EINE 1-polige Teil-Node (6dB/Okt-Anteil) -- nutzt dieselbe
@@ -848,29 +927,42 @@ function eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady) {
   return { kind: 'passthrough', node, input: node, output: node };
 }
 
-/** Baut die 1-4 Teil-Nodes EINES logischen Bandes, abhängig von Typ und
- *  (bei Highpass/Lowpass) Flankensteilheit. Peaking/Shelf ist immer genau
- *  ein Biquad (unverändert). `rebuildOnceReady` s. eq8MakeOnePoleStage. */
+/** Baut die Teil-Nodes EINES logischen Bandes, abhängig von Typ und (bei
+ *  Highpass/Lowpass) Flankensteilheit. Peaking/Shelf ist immer genau ein
+ *  Biquad (unverändert). `rebuildOnceReady` s. eq8MakeOnePoleStage.
+ *
+ *  Highpass/Lowpass bekommt zusätzlich zu den 1-4 "Basis"-Teil-Nodes (feste
+ *  neutrale Q, s. EQ8_CUT_BASE_Q) IMMER eine weitere, angehängte Peaking-
+ *  Biquad an derselben Grenzfrequenz -- die eigentliche Resonanz-/Senken-
+ *  Stufe (Nutzer-Anfrage, s. Dateikopf-Kommentar bei EQ8_CUT_BASE_Q):
+ *  b.gain bestimmt (nach Abzug der gemessenen Basis-Eigenüberhöhung, s.
+ *  eq8ResonanceGain) ihre Stärke, b.q ihre Breite -- exakt dieselben zwei
+ *  Regler-Gesten wie bei einem normalen Peaking-Band, nur automatisch an
+ *  jedes Cut-Band angehängt. Immer als LETZTES Element angehängt (s.
+ *  eq8ApplyBandParams unten, das sich darauf verlässt). */
 function eq8BuildBandNodes(ctx, b, rebuildOnceReady) {
   if (b.type === 'highpass' || b.type === 'lowpass') {
     const freq = eq8EffectiveFreq(b);
     const slope = b.slope ?? 12;
     const highpass = b.type === 'highpass';
-    if (slope === 6) {
-      return [eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
-    }
-    if (slope === 18) {
-      const biquad = eq8MakeBiquad(ctx, b.type, freq, b.q);
-      return [eq8WrapBiquad(biquad), eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
-    }
-    if (slope === 48 && highpass) {
-      // Brickwall: 4 kaskadierte Biquads = 8-polig = -48dB/Okt (Nutzer-
-      // Vorgabe, bewusst nur für Highpass, s. EQ_SLOPES-Kommentar).
-      return Array.from({ length: 4 }, () => eq8WrapBiquad(eq8MakeBiquad(ctx, 'highpass', freq, b.q)));
-    }
-    // Default/Fallback: 12dB/Okt, ein einzelner nativer Biquad (identisch
-    // zum bisherigen Alleinstellungsfall).
-    return [eq8WrapBiquad(eq8MakeBiquad(ctx, b.type, freq, b.q))];
+    const baseStages = (() => {
+      if (slope === 6) return [eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
+      if (slope === 18) {
+        const biquad = eq8MakeBiquad(ctx, b.type, freq, EQ8_CUT_BASE_Q);
+        return [eq8WrapBiquad(biquad), eq8MakeOnePoleStage(ctx, highpass, freq, rebuildOnceReady)];
+      }
+      if (slope === 48 && highpass) {
+        // Brickwall: 4 kaskadierte Biquads = 8-polig = -48dB/Okt (Nutzer-
+        // Vorgabe, bewusst nur für Highpass, s. EQ_SLOPES-Kommentar).
+        return Array.from({ length: 4 }, () => eq8WrapBiquad(eq8MakeBiquad(ctx, 'highpass', freq, EQ8_CUT_BASE_Q)));
+      }
+      // Default/Fallback: 12dB/Okt, ein einzelner nativer Biquad (identisch
+      // zum bisherigen Alleinstellungsfall).
+      return [eq8WrapBiquad(eq8MakeBiquad(ctx, b.type, freq, EQ8_CUT_BASE_Q))];
+    })();
+    const resonanceNode = eq8MakeBiquad(ctx, 'peaking', freq, b.q);
+    resonanceNode.gain.value = eq8ResonanceGain(ctx, b, slope);
+    return [...baseStages, eq8WrapBiquad(resonanceNode, 'resonance')];
   }
   // peaking / lowshelf / highshelf -- unverändert, immer ein Biquad.
   const node = eq8MakeBiquad(ctx, b.type, b.freq, b.q);
@@ -883,21 +975,26 @@ function eq8DisposeSub(s) {
   s.node.disconnect();
 }
 
-/** Schreibt freq/Q (und bei peaking/shelf: gain) aller Teil-Nodes EINES
- *  Bandes neu -- für reine Parameteränderungen (freq/gain/q/active), die
- *  KEINEN Neuaufbau brauchen (Node-Anzahl bleibt gleich). Q gilt für ALLE
- *  Biquad-Teil-Nodes eines Bandes gemeinsam (ein mehrpoliges resonantes
- *  Filter wie eine Analog-Filter-Leiter teilt sich ebenfalls eine
- *  Resonanz über alle Stufen) -- die 1-poligen Worklet-Stufen (und der
- *  transparente Platzhalter, solange das Modul noch lädt) haben kein
- *  Q-Konzept (physikalisch: ein 1-Pol-Filter kann nicht resonieren) und
- *  werden hier einfach übersprungen. */
+/** Schreibt freq/Q/Gain aller Teil-Nodes EINES Bandes neu -- für reine
+ *  Parameteränderungen (freq/gain/q/active), die KEINEN Neuaufbau brauchen
+ *  (Node-Anzahl bleibt gleich). Bei Highpass/Lowpass bekommen die Basis-
+ *  Stufen weiterhin die feste EQ8_CUT_BASE_Q (nicht b.q, s. Dateikopf-
+ *  Kommentar bei eq8BuildBandNodes) -- nur die angehängte Resonanz-Stufe
+ *  (an letzter Position, `role === 'resonance'`) bekommt b.q UND b.gain
+ *  (korrigiert um die gemessene Basis-Eigenüberhöhung, s.
+ *  eq8ResonanceGain). Die 1-poligen Worklet-Stufen (und der transparente
+ *  Platzhalter, solange das Modul noch lädt) haben kein Q-Konzept
+ *  (physikalisch: ein 1-Pol-Filter kann nicht resonieren) und werden hier
+ *  einfach übersprungen. */
 function eq8ApplyBandParams(subs, b) {
-  const freq = (b.type === 'highpass' || b.type === 'lowpass') ? eq8EffectiveFreq(b) : b.freq;
+  const isCut = b.type === 'highpass' || b.type === 'lowpass';
+  const freq = isCut ? eq8EffectiveFreq(b) : b.freq;
+  const slope = b.slope ?? 12;
   for (const s of subs) {
     if (s.kind === 'biquad') {
       s.node.frequency.setTargetAtTime(freq, engine.now, 0.01);
-      s.node.Q.setTargetAtTime(b.q, engine.now, 0.01);
+      const q = isCut ? (s.role === 'resonance' ? b.q : EQ8_CUT_BASE_Q) : b.q;
+      s.node.Q.setTargetAtTime(q, engine.now, 0.01);
     } else if (s.kind === 'onepoleWorklet') {
       s.node.parameters.get('cutoff').setTargetAtTime(freq, engine.now, 0.01);
     }
@@ -905,6 +1002,10 @@ function eq8ApplyBandParams(subs, b) {
   }
   if (b.type === 'peaking' || b.type === 'lowshelf' || b.type === 'highshelf') {
     subs[0].node.gain.setTargetAtTime(b.active ? b.gain : 0, engine.now, 0.01);
+  } else if (isCut) {
+    // Immer die LETZTE Teil-Node, s. eq8BuildBandNodes.
+    const resonanceStage = subs[subs.length - 1];
+    resonanceStage.node.gain.setTargetAtTime(eq8ResonanceGain(engine.ctx, b, slope), engine.now, 0.01);
   }
 }
 

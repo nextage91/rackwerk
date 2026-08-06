@@ -1,27 +1,22 @@
 /**
- * eq8-cut-node-tracks-curve.mjs — Regressionstest für den vom Nutzer
- * gemeldeten Bug: "der Punkt ist ja unten und es gibt immer noch diese
- * Erhöhung von ca. 2dB welche sich kaum verschiebt mit dem Punkt" (s. PR).
+ * eq8-cut-node-tracks-curve.mjs — Regressionstest für die dritte Fassung
+ * des Low-Cut/High-Cut-Reglerverhaltens (Nutzer-Anfrage: "es hat diesen
+ * fixen ca. +2db boost... es wäre toll wenn ich dort absenken könnte und
+ * auch ins minus gehen könnte" -- die vorherigen beiden Fassungen liessen
+ * entweder gar keine Wirkung zu (Gain war bei Highpass/Lowpass laut Web-
+ * Audio-Spec wirkungslos) oder nur eine Q-gesteuerte Annäherung an 0dB von
+ * OBEN (nie darunter, s. PR #219).
  *
- * Ursache: die erste Fassung von insert-chain.js#eq8QToDb/eq8DbToQ nahm
- * `20·log10(Q)` an -- eine Näherung, die für ein IDEALISIERTES
- * zeitkontinuierliches 2-poliges Filter gilt (Resonanzüberhöhung existiert
- * dort nur ab Q>1/√2, darunter exakt 0dB). Per echter
- * BiquadFilterNode.getFrequencyResponse()-Messung bestätigt (s. PR): Web
- * Audios native, RBJ-Cookbook-parametrierte Highpass/Lowpass-Biquads haben
- * dieses Verhalten NICHT -- selbst beim minimal einstellbaren Q (0.1) bleibt
- * eine kleine, unvermeidbare Überhöhung von ca. +1.3dB an der Flanke. Die
- * naive Formel liess den gezeichneten Punkt deshalb beliebig tief sinken
- * (z. B. -20dB bei Q=0.1), während die tatsächliche Kurve dort weiterhin
- * bei ca. +1.3dB lag -- Punkt und Kurve liefen auseinander.
- *
- * Der Fix (eq8-adjustments-Folgefix): eine einmalig (lazy) über eine echte
- * BiquadFilterNode GEMESSENE Q->Peak-dB-Tabelle ersetzt die naive Formel --
- * der Punkt sitzt jetzt für JEDEN Q-Wert exakt auf dem echten, gemessenen
- * Kurven-Peak. Dieser Test zieht den Punkt einmal in den mittleren Bereich
- * und einmal ganz ans untere Ende und vergleicht die aus der Punktposition
- * zurückgerechnete dB-Position direkt mit dem echten, per getEq8Response()
- * gemessenen Kurven-Peak.
+ * Die dritte, jetzt aktuelle Fassung hängt an jedes Low-Cut/High-Cut-Band
+ * IMMER eine zusätzliche Peaking-Biquad an der Grenzfrequenz an (s.
+ * inserts.js#eq8BuildBandNodes/eq8ResonanceGain) -- b.gain ist seitdem für
+ * ALLE Bandtypen (auch Cut-Typen) einheitlich "der gewünschte dB-Wert an
+ * der Grenzfrequenz", genau wie bei einem Peaking-Band. Das vereinfacht
+ * auch die UI (insert-chain.js) wieder: vertikales Ziehen setzt für JEDEN
+ * Bandtyp einheitlich b.gain, keine Sonderbehandlung/Lookup-Tabelle für
+ * Cut-Typen mehr nötig -- der Punkt sitzt deshalb (trivial, aber hier
+ * geprüft) IMMER exakt auf dem echten Kurvenwert an seiner eigenen
+ * Grenzfrequenz, in JEDE Richtung, auch ins Negative.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -80,18 +75,16 @@ await page.waitForTimeout(50);
 await dispatchPointer('pointerup', 2, hx, hy);
 await page.waitForTimeout(150);
 
-async function realPeak() {
+async function bandState() {
   return page.evaluate(async () => {
     const m = song.rack.machines[song.rack.machines.length - 1];
     const insert = m.inserts.find((i) => i.type === 'eq8');
-    const N = 200, FREQ_MIN = 20, FREQ_MAX = 20000;
-    const freqs = new Float32Array(N);
-    for (let i = 0; i < N; i++) freqs[i] = FREQ_MIN * (FREQ_MAX / FREQ_MIN) ** (i / (N - 1));
-    return Math.max(...insert.getEq8Response(freqs));
+    const b = insert.params.bands.find((bb) => bb.active);
+    const atCutoff = insert.getEq8Response(new Float32Array([b.freq]))[0];
+    return { gain: b.gain, atCutoff };
   });
 }
-async function nodeDb(range = 18) {
-  const cy = parseFloat(await node.getAttribute('cy'));
+function nodeDb(cy, range = 18) {
   const EQ8_MIDY = 75;
   return ((EQ8_MIDY - cy) / (EQ8_MIDY - 8)) * range;
 }
@@ -107,23 +100,26 @@ async function dragTo(clientYOffset) {
   await page.waitForTimeout(150);
 }
 
-// Drag to a moderate position -- node must sit exactly on the real curve peak.
-await dragTo(20);
-const db1 = await nodeDb();
-const peak1 = await realPeak();
-console.log(`Moderater Drag: Punkt=${db1.toFixed(2)}dB, echter Kurven-Peak=${peak1.toFixed(2)}dB`);
-check('Punktposition stimmt nach moderatem Drag mit dem echten Kurven-Peak überein', Math.abs(db1 - peak1) < 0.3);
+// Drag DOWN, well below the graph's vertical center -- this is exactly the
+// reported scenario: the point sits below center, and the real curve at
+// the cutoff must show a genuine NEGATIVE dB dip there, not just a small
+// unavoidable positive floor (s. Dateikopf-Kommentar/PR #219).
+await dragTo(50);
+const down = await bandState();
+const downCy = parseFloat(await node.getAttribute('cy'));
+console.log(`Nach unten gezogen: b.gain=${down.gain.toFixed(2)}dB, echte Antwort an der Grenzfrequenz=${down.atCutoff.toFixed(2)}dB, Punktposition=${nodeDb(downCy).toFixed(2)}dB`);
+check('Runterziehen erzeugt tatsächlich einen negativen b.gain', down.gain < -0.5);
+check('Die echte Kurve an der Grenzfrequenz zeigt eine ECHTE Senke unter 0dB (die eigentliche Nutzer-Anfrage)', down.atCutoff < -0.5);
+check('Der Punkt sitzt exakt auf dem echten Kurvenwert an der Grenzfrequenz', Math.abs(nodeDb(downCy) - down.atCutoff) < 0.3);
 
-// Drag all the way to the very bottom -- the point must stop at the REAL
-// achievable floor (~+1.3dB for a standard RBJ biquad, s. Dateikopf-
-// Kommentar), NOT at some deeply negative value the old 20*log10(Q) formula
-// would have implied.
-await dragTo(box.height); // weiter als die volle Grafikhöhe, garantiert am Boden
-const db2 = await nodeDb();
-const peak2 = await realPeak();
-console.log(`Ganz unten gezogen: Punkt=${db2.toFixed(2)}dB, echter Kurven-Peak=${peak2.toFixed(2)}dB`);
-check('Punktposition stimmt auch ganz unten mit dem echten Kurven-Peak überein (kein Auseinanderlaufen mehr)', Math.abs(db2 - peak2) < 0.3);
-check('Der erreichbare Boden liegt bei den erwarteten ca. +1.3dB (physikalischer Mindestwert), nicht bei einem beliebig tiefen Wert', peak2 > 0.5 && peak2 < 3);
+// Drag back up, well above center -- must produce a real resonance peak
+// above 0dB, matching the point's position exactly.
+await dragTo(-100);
+const up = await bandState();
+const upCy = parseFloat(await node.getAttribute('cy'));
+console.log(`Nach oben gezogen: b.gain=${up.gain.toFixed(2)}dB, echte Antwort an der Grenzfrequenz=${up.atCutoff.toFixed(2)}dB, Punktposition=${nodeDb(upCy).toFixed(2)}dB`);
+check('Hochziehen erzeugt tatsächlich einen positiven b.gain', up.gain > 0.5);
+check('Der Punkt sitzt auch beim Hochziehen exakt auf dem echten Kurvenwert', Math.abs(nodeDb(upCy) - up.atCutoff) < 0.3);
 
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);

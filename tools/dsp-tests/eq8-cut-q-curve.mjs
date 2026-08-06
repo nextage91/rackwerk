@@ -1,11 +1,18 @@
 /**
- * eq8-cut-q-curve.mjs — Regressionstest für zwei EQ8-Anpassungen (Nutzer-
- * Anfrage): (1) Low Cut/High Cut-Bänder haben keinen wirksamen Gain (Web-
- * Audio-Spec) -- ihr Punkt vertikal ziehen stellt jetzt die Flankenresonanz
- * (Q) ein, wie bei Ableton EQ8/FabFilter Pro-Q, statt wirkungslos zu bleiben.
- * (2) Die Kurve klemmt nicht mehr auf eine hässliche, rein darstellungs-
- * bedingte horizontale Linie an der sichtbaren Zoomstufe, sondern läuft aus
- * dem sichtbaren Bereich heraus, sobald die echte Antwort ausserhalb liegt.
+ * eq8-cut-q-curve.mjs — Regressionstest für die Resonanz-/Senken-Stufe von
+ * Low Cut/High Cut-Bändern (Nutzer-Anfrage: "es hat diesen fixen ca. +2db
+ * boost... es wäre toll wenn ich dort absenken könnte und auch ins minus
+ * gehen könnte").
+ *
+ * Ein reines Highpass/Lowpass-Biquad kann physikalisch nie unter 0dB
+ * sacken (nur asymptotisch annähern oder resonant überschwingen, s. PR).
+ * Deshalb hängt jedes Low Cut/High Cut-Band jetzt IMMER eine zusätzliche
+ * Peaking-Biquad an seiner eigenen Grenzfrequenz an (s. inserts.js#
+ * eq8BuildBandNodes) -- b.gain (wie bei jedem anderen Bandtyp) bestimmt
+ * direkt den dB-Wert AN der Grenzfrequenz (0 = flach, negativ = echte
+ * Senke, positiv = Resonanzspitze), b.q bestimmt die BREITE dieser Spitze/
+ * Senke (schmal bei hohem Q, breit bei niedrigem Q) -- exakt wie bei einem
+ * normalen Peaking-Band.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -34,68 +41,67 @@ await page.waitForSelector('.eq8__graph');
 const out = await page.evaluate(async () => {
   const ctx = engine.ctx;
   if (ctx.state === 'suspended') await ctx.resume();
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const m = song.rack.machines[song.rack.machines.length - 1];
   const insert = m.inserts.find((i) => i.type === 'eq8');
   await new Promise((r) => setTimeout(r, 300)); // Worklet-Ladezeit
 
-  const N = 120, FREQ_MIN = 20, FREQ_MAX = 20000;
-  const freqs = new Float32Array(N);
-  for (let i = 0; i < N; i++) freqs[i] = FREQ_MIN * (FREQ_MAX / FREQ_MIN) ** (i / (N - 1));
+  const atFreq = (f) => insert.getEq8Response(new Float32Array([f]))[0];
 
-  // ---- 1) Q ist jetzt live über setBand(i,'q') wirksam für Low Cut ----
   const b = insert.params.bands[0];
   b.active = true;
   b.type = 'highpass'; // Low Cut
   b.freq = 1000;
-  b.slope = 12; // reiner Biquad, damit Q sofort (kein Worklet-Ladeversatz) wirkt
+  b.slope = 12;
+  b.q = 1;
   insert.setBand(0, 'active');
   insert.setBand(0, 'type');
   insert.setBand(0, 'freq');
   insert.setBand(0, 'slope');
-
-  // setBand('q') rampt per setTargetAtTime (Klick-Vermeidung, s. eq8ApplyBandParams)
-  // -- kurz warten, bis der Ramp eingeschwungen ist, bevor der Frequenzgang
-  // gemessen wird, sonst liest getEq8Response() noch den alten Q-Wert.
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  b.q = 0.5;
   insert.setBand(0, 'q');
-  await wait(120);
-  const dbLowQ = insert.getEq8Response(freqs);
-  const peakLowQ = Math.max(...dbLowQ);
+
+  // ---- 1) b.gain=0 ist flach, negativ erzeugt eine ECHTE Senke unter 0dB ----
+  b.gain = 0;
+  insert.setBand(0, 'gain');
+  await wait(150);
+  const flatAtCutoff = atFreq(1000);
+
+  b.gain = -6;
+  insert.setBand(0, 'gain');
+  await wait(150);
+  const dipAtCutoff = atFreq(1000);
+
+  b.gain = 6;
+  insert.setBand(0, 'gain');
+  await wait(150);
+  const boostAtCutoff = atFreq(1000);
+
+  // ---- 2) b.q bestimmt die BREITE der Spitze/Senke, nicht mehr ihre Höhe ----
+  // Bei gleichem Gain (+9dB) sollte ein niedriges Q einen deutlich breiteren
+  // (also auch bei einer Oktave Abstand noch spürbaren) Effekt haben als ein
+  // hohes, schmales Q.
+  b.gain = 9;
+  b.q = 0.5;
+  insert.setBand(0, 'gain');
+  insert.setBand(0, 'q');
+  await wait(150);
+  const wideAtOctave = atFreq(2000); // eine Oktave über der Grenzfrequenz
 
   b.q = 8;
   insert.setBand(0, 'q');
-  await wait(120);
-  const dbHighQ = insert.getEq8Response(freqs);
-  const peakHighQ = Math.max(...dbHighQ);
+  await wait(150);
+  const narrowAtOctave = atFreq(2000);
 
-  // ---- 2) Kurve klemmt nicht mehr auf eine flache Linie an der Zoomgrenze ----
-  // Niedriger Cutoff + kleine Zoomstufe -> die echte Antwort unterschreitet
-  // sicher die sichtbare Spanne (s. PR-Messung: cutoff=1000Hz/range=12
-  // erreicht ca. -23dB, deutlich unter ±12).
-  const b2 = insert.params.bands[1];
-  b2.active = true;
-  b2.type = 'lowpass'; // High Cut
-  b2.freq = 1000;
-  b2.slope = 6; // 1-Pol, s. PR-Kommentar zur Nyquist-Boden-Messung
-  insert.setBand(1, 'active');
-  insert.setBand(1, 'type');
-  insert.setBand(1, 'freq');
-  insert.setBand(1, 'slope');
-  insert.setGainRange(12);
-  await new Promise((r) => setTimeout(r, 200)); // Worklet-Ladezeit für Band 1
-  const dbClamp = insert.getEq8Response(freqs);
-  const belowRangeCount = dbClamp.filter((v) => v < -12).length;
-
-  return { peakLowQ, peakHighQ, belowRangeCount };
+  return { flatAtCutoff, dipAtCutoff, boostAtCutoff, wideAtOctave, narrowAtOctave };
 });
 
-console.log('Peak bei Q=0.5:', out.peakLowQ.toFixed(2), 'dB -- Peak bei Q=8:', out.peakHighQ.toFixed(2), 'dB');
-check('Niedriges Q zeigt nur eine kleine Resonanzspitze', out.peakLowQ < 3);
-check('Hohes Q erzeugt eine deutlich grössere Resonanzspitze (Ableton/Pro-Q-Verhalten)', out.peakHighQ > out.peakLowQ * 3);
+console.log('An der Grenzfrequenz -- gain=0:', out.flatAtCutoff.toFixed(2), 'dB | gain=-6:', out.dipAtCutoff.toFixed(2), 'dB | gain=+6:', out.boostAtCutoff.toFixed(2), 'dB');
+check('b.gain=0 ergibt einen sauber flachen Verlauf an der Grenzfrequenz (~0dB)', Math.abs(out.flatAtCutoff) < 0.3);
+check('b.gain=-6 erzeugt eine ECHTE Senke unter 0dB an der Grenzfrequenz (die eigentliche Nutzer-Anfrage)', out.dipAtCutoff < -5 && out.dipAtCutoff > -7);
+check('b.gain=+6 erzeugt eine Resonanzspitze von +6dB an der Grenzfrequenz', out.boostAtCutoff > 5 && out.boostAtCutoff < 7);
 
-console.log('Anzahl Stützstellen unterhalb der sichtbaren ±12dB-Zoomstufe:', out.belowRangeCount);
-check('Die reale Antwort verlässt tatsächlich die sichtbare Zoomstufe (Testaufbau korrekt)', out.belowRangeCount > 5);
+console.log('Eine Oktave über der Grenzfrequenz bei +9dB -- Q=0.5 (breit):', out.wideAtOctave.toFixed(2), 'dB, Q=8 (schmal):', out.narrowAtOctave.toFixed(2), 'dB');
+check('Niedriges Q wirkt breiter (mehr Resteffekt eine Oktave entfernt) als hohes Q', out.wideAtOctave > out.narrowAtOctave + 1);
 
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);
