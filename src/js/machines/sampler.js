@@ -35,6 +35,7 @@ import { store } from '../core/store.js';
 import { micRecorder } from '../core/mic-recorder.js';
 import { env, applyFilterEnv } from '../core/dsp.js';
 import { FILTER_DELAY_TYPES } from '../core/inserts.js';
+import { clampPopupLeft } from '../ui/popup-clamp.js';
 
 const PAD_COUNT = 8;
 const PAD_HOLD_MS = 500; // gleiche Halten-Schwelle wie pattern-bank.js/jam-view.js
@@ -852,10 +853,7 @@ function openPadMenu(sampler, i, anchorEl) {
 
   document.body.appendChild(padMenu);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - padMenu.offsetWidth - 8,
-    r.left + r.width / 2 - padMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - padMenu.offsetWidth / 2, padMenu.offsetWidth);
   padMenu.style.left = `${left}px`;
   padMenu.style.top = `${Math.max(8, r.top - padMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsidePadMenu, true), 0);
@@ -914,7 +912,7 @@ function openPadRenamePopup(sampler, i, anchorEl) {
 
   document.body.appendChild(padRenamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - padRenamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, padRenamePop.offsetWidth);
   padRenamePop.style.left = `${left}px`;
   padRenamePop.style.top = `${Math.max(8, r.top - padRenamePop.offsetHeight - 8)}px`;
   input.focus();

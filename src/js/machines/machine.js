@@ -21,6 +21,7 @@ import { renderModulationChain, openModulatorPicker } from '../ui/modulation-cha
 import { masterFX } from '../core/fx.js';
 import { undo } from '../core/undo.js';
 import { computeLevels } from '../ui/meter.js';
+import { clampPopupLeft } from '../ui/popup-clamp.js';
 
 let nextId = 1;
 let nextClipId = 1;
@@ -76,7 +77,7 @@ export function openRenamePopup(machine, anchorEl) {
 
   document.body.appendChild(renamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - renamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, renamePop.offsetWidth);
   renamePop.style.left = `${left}px`;
   renamePop.style.top = `${Math.max(8, r.top - renamePop.offsetHeight - 8)}px`;
   input.focus();

@@ -16,6 +16,7 @@
  * inkompatible Ablagen (Noten vs. Drums).
  */
 import { hintOnce, showHintToast } from '../core/hints.js';
+import { clampPopupLeft } from './popup-clamp.js';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
 const HOLD_MS = 500;
@@ -83,10 +84,7 @@ export function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, onAdd
     document.body.appendChild(chip);
     // über dem Button platzieren, am Bildschirmrand einklemmen
     const r = btn.getBoundingClientRect();
-    const left = Math.max(8, Math.min(
-      window.innerWidth - chip.offsetWidth - 8,
-      r.left + r.width / 2 - chip.offsetWidth / 2,
-    ));
+    const left = clampPopupLeft(r.left + r.width / 2 - chip.offsetWidth / 2, chip.offsetWidth);
     chip.style.left = `${left}px`;
     chip.style.top = `${Math.max(8, r.top - chip.offsetHeight - 8)}px`;
     setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);

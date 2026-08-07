@@ -26,6 +26,7 @@
  */
 import { transport } from './transport.js';
 import { hintSeen, markHintSeen } from './hints.js';
+import { clampPopupLeft } from '../ui/popup-clamp.js';
 
 const RESOLUTION = 128;   // Slots pro Takt
 const TICK_MS = 22;       // ~45 Hz UI-/Playback-Rate
@@ -226,10 +227,7 @@ class Automation {
 
     // über dem Knob positionieren, am Bildschirmrand einklemmen
     const r = knob.getBoundingClientRect();
-    const left = Math.max(8, Math.min(
-      window.innerWidth - chip.offsetWidth - 8,
-      r.left + r.width / 2 - chip.offsetWidth / 2,
-    ));
+    const left = clampPopupLeft(r.left + r.width / 2 - chip.offsetWidth / 2, chip.offsetWidth);
     chip.style.left = `${left}px`;
     chip.style.top = `${Math.max(8, r.top - 48)}px`;
 

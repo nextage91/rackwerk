@@ -1057,6 +1057,14 @@ function wireBottomBar(rack) {
 
   for (const s of Object.values(sheets)) {
     new MutationObserver(syncActive).observe(s, { attributes: true, attributeFilter: ['hidden'] });
+    // Klick auf den Rand ausserhalb des Konsolen-Panels schliesst es --
+    // nur auf Desktop-Breiten sichtbar/klickbar (dort bekommt .sheet--console
+    // erst per Breakpoint einen Hintergrund + pointer-events:auto, s.
+    // app.css); auf Mobile deckt das Panel den ganzen Bereich ab, e.target
+    // ist dort also nie das Sheet selbst.
+    s.addEventListener('click', (e) => {
+      if (e.target === s) s.hidden = true;
+    });
   }
   syncActive();
 }

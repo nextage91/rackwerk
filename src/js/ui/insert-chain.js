@@ -20,6 +20,7 @@
 import { automation } from '../core/automation.js';
 import { INSERT_TYPES, INSERT_CATEGORIES, insertMeta, UI_PARAMS, EQ_TYPES, EQ_SLOPES, EQ8_GAIN_RANGES, FILTER_DELAY_TYPES, DELAY_SYNC_BUTTONS, BEATREPEAT_DIVISIONS, INSERT_COLORS, RATIO_MODE_BUTTONS, OPTO_MODE_BUTTONS, GEQ_FREQS } from '../core/inserts.js';
 import { computeLevels } from './meter.js';
+import { clampPopupLeft } from './popup-clamp.js';
 
 /** Anzeigename + Typenschild je Insert-Typ fürs Rack-Modul-Faceplate —
  *  getrennt vom kurzen DSP-Namen (insertMeta().name), der bleibt für den
@@ -241,7 +242,7 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
   document.body.appendChild(eq8Menu);
 
   const position = () => {
-    const left = Math.max(8, Math.min(window.innerWidth - eq8Menu.offsetWidth - 8, clientX - eq8Menu.offsetWidth / 2));
+    const left = clampPopupLeft(clientX - eq8Menu.offsetWidth / 2, eq8Menu.offsetWidth);
     eq8Menu.style.left = `${left}px`;
     eq8Menu.style.top = `${Math.max(8, clientY - eq8Menu.offsetHeight - 16)}px`;
   };
@@ -343,7 +344,7 @@ function showDragReadout(clientX, clientY, text) {
     document.body.appendChild(dragReadoutEl);
   }
   dragReadoutEl.textContent = text;
-  const left = Math.max(8, Math.min(window.innerWidth - dragReadoutEl.offsetWidth - 8, clientX - dragReadoutEl.offsetWidth / 2));
+  const left = clampPopupLeft(clientX - dragReadoutEl.offsetWidth / 2, dragReadoutEl.offsetWidth);
   dragReadoutEl.style.left = `${left}px`;
   dragReadoutEl.style.top = `${Math.max(8, clientY - 60)}px`;
 }

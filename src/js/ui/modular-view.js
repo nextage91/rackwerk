@@ -76,6 +76,7 @@
  * Panel längst sichtbar ist).
  */
 import { MODULE_TYPES, MODULE_PORTS, MODULE_UI_PARAMS, OSCILLATOR_WAVES, FILTER_TYPES, moduleMeta } from '../core/modular.js';
+import { clampPopupLeft } from './popup-clamp.js';
 
 export function renderModularRack(container, machine) {
   const patch = machine.patch;
@@ -943,7 +944,7 @@ function openModuleMenu(patch, moduleId, anchorEl, onChange) {
 
   document.body.appendChild(moduleMenuEl);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - moduleMenuEl.offsetWidth - 8, r.left + r.width / 2 - moduleMenuEl.offsetWidth / 2));
+  const left = clampPopupLeft(r.left + r.width / 2 - moduleMenuEl.offsetWidth / 2, moduleMenuEl.offsetWidth);
   moduleMenuEl.style.left = `${left}px`;
   moduleMenuEl.style.top = `${Math.max(8, r.top - moduleMenuEl.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideModuleMenu, true), 0);
@@ -1001,7 +1002,7 @@ function openModuleRenamePopup(patch, moduleId, anchorEl, onChange) {
 
   document.body.appendChild(moduleRenamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - moduleRenamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, moduleRenamePop.offsetWidth);
   moduleRenamePop.style.left = `${left}px`;
   moduleRenamePop.style.top = `${Math.max(8, r.top - moduleRenamePop.offsetHeight - 8)}px`;
   input.focus();
