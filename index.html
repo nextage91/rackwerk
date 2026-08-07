@@ -38483,6 +38483,16 @@ function wireMixerUI(rack) {
   const sheet = $('#mixer-sheet');
   const list = $('#mixer-list');
 
+  // Aufklapp-Zustand der Drum-Gruppen (BeatBox/AnalogKit) -- render() baut
+  // #mixer-list bei JEDEM Öffnen komplett neu auf (list.innerHTML = ''),
+  // ohne das hier würde ein zugeklappter Zustand also beim nächsten Öffnen
+  // wieder verloren gehen. Ein WeakSet statt eines Arrays/Objekts, damit
+  // eine aus dem Rack entfernte Maschine automatisch mit rausfällt, ohne
+  // dass wir das selbst aufräumen müssen. Fehlt eine Maschine hier drin,
+  // ist sie zugeklappt -- das ist der gewünschte Default (Nutzer-Anfrage:
+  // Gruppen sollen beim allerersten Öffnen zu sein, nicht aufgeklappt).
+  const expandedGroups = new WeakSet();
+
   /* Ein gemeinsamer rAF-Ticker treibt alle sichtbaren VU-Meter — nur
      während der Mixer offen ist, sonst unnötige Dauerlast im Hintergrund. */
   let meterEntries = [];
@@ -38572,6 +38582,7 @@ function wireMixerUI(rack) {
         // setTrackLevel/setTrackPan/setTrackSend/getTrackMeterAnalyser).
         const group = document.createElement('div');
         group.className = 'mixer-group';
+        if (!expandedGroups.has(m)) group.classList.add('is-collapsed');
         group.style.setProperty('--m-color', color);
         group.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.1)`);
         group.appendChild(buildStrip(m, { name }));
@@ -38579,7 +38590,10 @@ function wireMixerUI(rack) {
         const toggle = document.createElement('button');
         toggle.className = 'mixer-group__toggle';
         toggle.setAttribute('aria-label', 'Toggle drum tracks');
-        toggle.addEventListener('click', () => group.classList.toggle('is-collapsed'));
+        toggle.addEventListener('click', () => {
+          const collapsed = group.classList.toggle('is-collapsed');
+          if (collapsed) expandedGroups.delete(m); else expandedGroups.add(m);
+        });
         group.appendChild(toggle);
 
         const subtracks = document.createElement('div');
