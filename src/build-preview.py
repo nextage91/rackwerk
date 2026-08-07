@@ -24,6 +24,7 @@ MODULES = [
     ("js/ui/knob.js",           ["XKnob"]),
     ("js/ui/fader.js",          ["XFader"]),
     ("js/ui/meter.js",          ["XMeter", "computeLevels"]),
+    ("js/ui/popup-clamp.js",    ["clampPopupLeft"]),
     ("js/vendor/qrcodegen.js",  ["qrcodegen"]),
     ("js/vendor/jsqr.js",       ["jsQR"]),
     ("js/ui/qr.js",             ["drawQR"]),

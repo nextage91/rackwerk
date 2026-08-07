@@ -1092,6 +1092,12 @@ button {
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
+/* Master-Kanal (letzte Spalte, s. jam-view.js#buildMasterColumn) -- bisher
+   komplett ungestylt, fiel optisch als irgendeine generische .channel-Karte
+   durch. Eigener Akzentrahmen in --m-master (schon in tokens.css definiert,
+   bis jetzt nirgends verwendet); das Sticky-Verhalten auf breiten Screens
+   sitzt im Desktop-Breakpoint weiter unten, hier nur die Basis-Optik. */
+.channel--master { border-left: 3px solid var(--m-master); }
 .channel__head {
   flex: 0 0 auto;
   display: flex;
@@ -1830,3 +1836,104 @@ button {
 .sample-editor__knobs x-knob { --knob-size: 38px; gap: 3px; }
 .sample-editor__knobs x-knob .knob__label,
 .sample-editor__knobs x-knob .knob__value { font-size: 9px; white-space: nowrap; }
+
+/* ===================== Desktop (>=900px) =====================
+   Die App war bis hierher komplett Touch-first/Handy-only (s. tokens.css) --
+   kein einziger @media-Breakpoint ging nach OBEN, kein Container hatte eine
+   max-width. Auf einem breiten Desktop-Fenster wurde die Handy-Oberfläche
+   dadurch einfach kantenlos gestreckt (Zeilen/Regler-Reihen/Konsolen bis
+   zum Bildschirmrand). Diese Sektion fasst NUR die Container an -- Breite
+   begrenzen/zentrieren, wo mehr Platz sinnvoll mehr zeigen kann (Jam-Spalten,
+   Mixer-Kanalzüge) auch wirklich mehr zeigen. Maschinen-Faceplates und
+   Regler selbst bleiben unverändert -- ein Code-Pfad für Touch UND Maus,
+   kein separates Desktop-UI. */
+@media (min-width: 900px) {
+
+  /* --- Rack-Liste: Zeilen nicht über den ganzen Screen strecken --- */
+  .rack-row, .rack__add {
+    max-width: 720px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* --- Maschinen-Vollbild-Editor: als zentrierte "Karte" statt kantenlos,
+     mit sichtbarem Rack darum (dezent abgedunkelt) statt totaler Deckung.
+     Der abgedunkelte Rand + Klick-zum-Schliessen sitzt bewusst NICHT auf
+     .machine-focus selbst (das deckt per Basis-Regel (fixed, inset:0) auch
+     den Bereich über der Transport-Leiste und unter der Bottom-Bar ab) --
+     ein ::before, das exakt auf den Streifen ZWISCHEN den beiden begrenzt
+     ist, bekommt Hintergrund + pointer-events:auto; die Transport-/Bottom-
+     Bar bleiben so weiterhin klickbar, obwohl .machine-focus optisch
+     "darüber" liegt (identischer Bug + Fix wie bei .sheet--console unten).
+     Klick auf den Rand landet dank Pseudo-Element trotzdem als Event auf
+     .machine-focus selbst (target-Check in rack.js#mount greift also
+     unverändert). Auf Mobile ohne sichtbaren Rand ohne jede Wirkung. */
+  .machine-focus::before {
+    content: '';
+    position: absolute;
+    top: var(--transport-h, 64px);
+    bottom: var(--bottombar-h, 0px);
+    left: 0; right: 0;
+    background: rgba(0,0,0,.6);
+    pointer-events: auto;
+  }
+  .machine-focus__panel {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(92vw, 880px);
+    top: calc(var(--transport-h, 64px) + 16px);
+    bottom: calc(var(--bottombar-h, 0px) + 16px);
+    border-radius: var(--r-panel);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 1px 0 var(--edge-light) inset;
+  }
+
+  /* --- Mixer/Song/Jam-Konsole: gleicher Trick (s. .machine-focus::before
+     oben für die ausführliche Begründung), aber deutlich breiter -- hier
+     soll mehr Fensterbreite auch wirklich mehr Kanalzüge/Spalten
+     gleichzeitig zeigen, keine reine Lesebreite wie beim Maschinen-Editor. */
+  .sheet--console::before {
+    content: '';
+    position: absolute;
+    top: var(--transport-h, 64px);
+    bottom: var(--bottombar-h, 0px);
+    left: 0; right: 0;
+    background: rgba(0,0,0,.6);
+    pointer-events: auto;
+  }
+  .sheet--console .sheet__panel--console {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(96vw, 1800px);
+    top: calc(var(--transport-h, 64px) + 16px);
+    bottom: calc(var(--bottombar-h, 0px) + 16px);
+    border-radius: var(--r-panel);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 1px 0 var(--edge-light) inset;
+  }
+
+  /* --- Jam-Spalten: von "immer exakt 3, egal wie breit" (feste %, s.
+     .channel weiter oben) auf feste px umstellen -- dadurch werden bei mehr
+     Platz automatisch mehr Spalten gleichzeitig sichtbar statt weiterhin
+     nur 3 riesige. */
+  .channel { flex: 0 0 260px; }
+
+  /* --- Master-Kanal (letzte Jam-Spalte) am rechten Rand fixiert, damit man
+     nicht erst an jedem Instrument vorbeischieben muss, um an Master-Delay/
+     -Reverb ranzukommen (s. .channel--master Basis-Regel weiter oben --
+     dort nur der Akzentrahmen, hier zusätzlich das Sticky-Verhalten, das nur
+     bei mehreren gleichzeitig sichtbaren Spalten überhaupt sinnvoll ist).
+     margin-left:auto zusätzlich für den Fall WENIGER Instrumente (Konsole
+     dann breiter als der Inhalt) -- sonst klebt Master direkt hinter der
+     letzten Spur mit einer toten Lücke rechts daneben, statt an den echten
+     rechten Rand zu rutschen. Beides zusammen: die statische Position (vor
+     jedem Scroll) landet dank margin-left:auto schon ganz rechts; sobald
+     durch mehr Spalten tatsächlich gescrollt wird, übernimmt sticky. */
+  .channel--master { position: sticky; right: 0; margin-left: auto; }
+
+  /* --- Mixer-Kanalzüge: etwas mehr Breite als die für Touch optimierten
+     124px -- die Fader-Caps/Send-Regler haben so mehr Luft, ohne dass
+     merklich weniger Kanäle gleichzeitig sichtbar sind. */
+  .chstrip { flex: 0 0 150px; }
+}

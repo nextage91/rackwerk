@@ -47,6 +47,7 @@
 import { transport, STEPS_PER_BAR } from '../core/transport.js';
 import { undo } from '../core/undo.js';
 import { masterFX } from '../core/fx.js';
+import { clampPopupLeft } from '../ui/popup-clamp.js';
 
 /** Kuratierte Makro-Parameter je Maschinentyp — bewusst 4, nicht alle.
  *  Bei BeatBox/AnalogKit sind das die SPUR-Regler (Tune/Decay/Level/Snap
@@ -344,10 +345,7 @@ const onOutsideXYMenu = (e) => { if (xyMenu && !xyMenu.contains(e.target)) dismi
 
 function positionXYMenu(anchorEl) {
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - xyMenu.offsetWidth - 8,
-    r.left + r.width / 2 - xyMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - xyMenu.offsetWidth / 2, xyMenu.offsetWidth);
   const top = Math.max(8, Math.min(window.innerHeight - xyMenu.offsetHeight - 8, r.top - xyMenu.offsetHeight - 8));
   xyMenu.style.left = `${left}px`;
   xyMenu.style.top = `${top}px`;
@@ -871,10 +869,7 @@ function openClipDeleteMenu(machine, clipId, anchorEl) {
   document.body.appendChild(clipMenu);
   // über dem Clip platzieren, am Bildschirmrand einklemmen (wie pattern-bank.js)
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - clipMenu.offsetWidth - 8,
-    r.left + r.width / 2 - clipMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - clipMenu.offsetWidth / 2, clipMenu.offsetWidth);
   clipMenu.style.left = `${left}px`;
   clipMenu.style.top = `${Math.max(8, r.top - clipMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideClipMenu, true), 0);
@@ -1553,10 +1548,7 @@ function openMacroPopup(machine, anchorEl) {
 
   document.body.appendChild(macroPop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - macroPop.offsetWidth - 8,
-    r.left + r.width / 2 - macroPop.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - macroPop.offsetWidth / 2, macroPop.offsetWidth);
   const top = Math.max(8, Math.min(window.innerHeight - macroPop.offsetHeight - 8, r.top - macroPop.offsetHeight - 8));
   macroPop.style.left = `${left}px`;
   macroPop.style.top = `${top}px`;
@@ -1676,10 +1668,7 @@ function openSceneDeleteMenu(scene, anchorEl) {
   sceneMenu.appendChild(delBtn);
   document.body.appendChild(sceneMenu);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - sceneMenu.offsetWidth - 8,
-    r.left + r.width / 2 - sceneMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - sceneMenu.offsetWidth / 2, sceneMenu.offsetWidth);
   sceneMenu.style.left = `${left}px`;
   sceneMenu.style.top = `${Math.max(8, r.top - sceneMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideSceneMenu, true), 0);

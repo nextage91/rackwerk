@@ -159,6 +159,14 @@ export class Rack {
     const overlay = document.createElement('div');
     overlay.className = 'machine-focus';
     overlay.hidden = true;
+    // Klick auf den Rand ausserhalb des Panels schliesst den Editor -- nur
+    // auf Desktop-Breiten überhaupt sichtbar/klickbar (dort bekommt
+    // .machine-focus per Breakpoint erst einen Hintergrund + pointer-
+    // events:auto, s. app.css); auf Mobile deckt das Panel den ganzen
+    // Bereich ab, e.target ist dort also nie das Overlay selbst.
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.#closeFocus(machine);
+    });
     const panel = document.createElement('div');
     panel.className = 'machine-focus__panel';
     const back = document.createElement('button');

@@ -1189,6 +1189,12 @@ button {
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
+/* Master-Kanal (letzte Spalte, s. jam-view.js#buildMasterColumn) -- bisher
+   komplett ungestylt, fiel optisch als irgendeine generische .channel-Karte
+   durch. Eigener Akzentrahmen in --m-master (schon in tokens.css definiert,
+   bis jetzt nirgends verwendet); das Sticky-Verhalten auf breiten Screens
+   sitzt im Desktop-Breakpoint weiter unten, hier nur die Basis-Optik. */
+.channel--master { border-left: 3px solid var(--m-master); }
 .channel__head {
   flex: 0 0 auto;
   display: flex;
@@ -1927,6 +1933,107 @@ button {
 .sample-editor__knobs x-knob { --knob-size: 38px; gap: 3px; }
 .sample-editor__knobs x-knob .knob__label,
 .sample-editor__knobs x-knob .knob__value { font-size: 9px; white-space: nowrap; }
+
+/* ===================== Desktop (>=900px) =====================
+   Die App war bis hierher komplett Touch-first/Handy-only (s. tokens.css) --
+   kein einziger @media-Breakpoint ging nach OBEN, kein Container hatte eine
+   max-width. Auf einem breiten Desktop-Fenster wurde die Handy-Oberfläche
+   dadurch einfach kantenlos gestreckt (Zeilen/Regler-Reihen/Konsolen bis
+   zum Bildschirmrand). Diese Sektion fasst NUR die Container an -- Breite
+   begrenzen/zentrieren, wo mehr Platz sinnvoll mehr zeigen kann (Jam-Spalten,
+   Mixer-Kanalzüge) auch wirklich mehr zeigen. Maschinen-Faceplates und
+   Regler selbst bleiben unverändert -- ein Code-Pfad für Touch UND Maus,
+   kein separates Desktop-UI. */
+@media (min-width: 900px) {
+
+  /* --- Rack-Liste: Zeilen nicht über den ganzen Screen strecken --- */
+  .rack-row, .rack__add {
+    max-width: 720px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* --- Maschinen-Vollbild-Editor: als zentrierte "Karte" statt kantenlos,
+     mit sichtbarem Rack darum (dezent abgedunkelt) statt totaler Deckung.
+     Der abgedunkelte Rand + Klick-zum-Schliessen sitzt bewusst NICHT auf
+     .machine-focus selbst (das deckt per Basis-Regel (fixed, inset:0) auch
+     den Bereich über der Transport-Leiste und unter der Bottom-Bar ab) --
+     ein ::before, das exakt auf den Streifen ZWISCHEN den beiden begrenzt
+     ist, bekommt Hintergrund + pointer-events:auto; die Transport-/Bottom-
+     Bar bleiben so weiterhin klickbar, obwohl .machine-focus optisch
+     "darüber" liegt (identischer Bug + Fix wie bei .sheet--console unten).
+     Klick auf den Rand landet dank Pseudo-Element trotzdem als Event auf
+     .machine-focus selbst (target-Check in rack.js#mount greift also
+     unverändert). Auf Mobile ohne sichtbaren Rand ohne jede Wirkung. */
+  .machine-focus::before {
+    content: '';
+    position: absolute;
+    top: var(--transport-h, 64px);
+    bottom: var(--bottombar-h, 0px);
+    left: 0; right: 0;
+    background: rgba(0,0,0,.6);
+    pointer-events: auto;
+  }
+  .machine-focus__panel {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(92vw, 880px);
+    top: calc(var(--transport-h, 64px) + 16px);
+    bottom: calc(var(--bottombar-h, 0px) + 16px);
+    border-radius: var(--r-panel);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 1px 0 var(--edge-light) inset;
+  }
+
+  /* --- Mixer/Song/Jam-Konsole: gleicher Trick (s. .machine-focus::before
+     oben für die ausführliche Begründung), aber deutlich breiter -- hier
+     soll mehr Fensterbreite auch wirklich mehr Kanalzüge/Spalten
+     gleichzeitig zeigen, keine reine Lesebreite wie beim Maschinen-Editor. */
+  .sheet--console::before {
+    content: '';
+    position: absolute;
+    top: var(--transport-h, 64px);
+    bottom: var(--bottombar-h, 0px);
+    left: 0; right: 0;
+    background: rgba(0,0,0,.6);
+    pointer-events: auto;
+  }
+  .sheet--console .sheet__panel--console {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(96vw, 1800px);
+    top: calc(var(--transport-h, 64px) + 16px);
+    bottom: calc(var(--bottombar-h, 0px) + 16px);
+    border-radius: var(--r-panel);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 1px 0 var(--edge-light) inset;
+  }
+
+  /* --- Jam-Spalten: von "immer exakt 3, egal wie breit" (feste %, s.
+     .channel weiter oben) auf feste px umstellen -- dadurch werden bei mehr
+     Platz automatisch mehr Spalten gleichzeitig sichtbar statt weiterhin
+     nur 3 riesige. */
+  .channel { flex: 0 0 260px; }
+
+  /* --- Master-Kanal (letzte Jam-Spalte) am rechten Rand fixiert, damit man
+     nicht erst an jedem Instrument vorbeischieben muss, um an Master-Delay/
+     -Reverb ranzukommen (s. .channel--master Basis-Regel weiter oben --
+     dort nur der Akzentrahmen, hier zusätzlich das Sticky-Verhalten, das nur
+     bei mehreren gleichzeitig sichtbaren Spalten überhaupt sinnvoll ist).
+     margin-left:auto zusätzlich für den Fall WENIGER Instrumente (Konsole
+     dann breiter als der Inhalt) -- sonst klebt Master direkt hinter der
+     letzten Spur mit einer toten Lücke rechts daneben, statt an den echten
+     rechten Rand zu rutschen. Beides zusammen: die statische Position (vor
+     jedem Scroll) landet dank margin-left:auto schon ganz rechts; sobald
+     durch mehr Spalten tatsächlich gescrollt wird, übernimmt sticky. */
+  .channel--master { position: sticky; right: 0; margin-left: auto; }
+
+  /* --- Mixer-Kanalzüge: etwas mehr Breite als die für Touch optimierten
+     124px -- die Fader-Caps/Send-Regler haben so mehr Luft, ohne dass
+     merklich weniger Kanäle gleichzeitig sichtbar sind. */
+  .chstrip { flex: 0 0 150px; }
+}
 
 /* ============================================================
    RackWerk — Komponenten (Maschine, Knob, Keybed)
@@ -4848,6 +4955,40 @@ class XMeter extends HTMLElement {
 customElements.define('x-meter', XMeter);
 
 return { XMeter, computeLevels };
+})();
+
+/* ===== js/ui/popup-clamp.js ===== */
+const { clampPopupLeft } = (() => {
+/**
+ * clampPopupLeft — klemmt die horizontale Position eines an document.body
+ * gehängten Popups (Menü, Umbenennen-Popover, X/Y-Kontextmenü, ...) an den
+ * Rand der gerade sichtbaren App-Oberfläche statt an den rohen Browser-
+ * Viewport.
+ *
+ * Grund: Auf Desktop-Breiten (s. app.css, Sektion "Desktop (>=900px)")
+ * werden der Maschinen-Vollbild-Editor (.machine-focus__panel) und die
+ * Mixer/Song/Jam-Konsole (.sheet__panel--console) zentriert mit Rand
+ * dargestellt statt kantenlos -- ein Popup, das weiterhin gegen
+ * window.innerWidth klemmt, könnte dadurch in den abgedunkelten Rand NEBEN
+ * dem Panel rutschen und dort freischwebend über dem Scrim landen, sichtbar
+ * losgelöst von der eigentlich geöffneten Oberfläche.
+ *
+ * Fällt auf window.innerWidth zurück, wenn gerade kein solches Panel offen
+ * ist (z. B. ein Popup direkt in der Rack-Liste) oder auf Mobile, wo die
+ * Panels ohnehin randlos sind (dort liefert getBoundingClientRect() de
+ * facto dieselben Grenzen wie der Viewport, also keine Verhaltensänderung).
+ */
+function clampPopupLeft(preferredLeft, popupWidth) {
+  const panel =
+    document.querySelector('.machine-focus:not([hidden]) .machine-focus__panel') ??
+    document.querySelector('.sheet--console:not([hidden]) .sheet__panel--console');
+  const rect = panel?.getBoundingClientRect();
+  const min = (rect ? rect.left : 0) + 8;
+  const max = (rect ? rect.right : window.innerWidth) - popupWidth - 8;
+  return Math.max(min, Math.min(max, preferredLeft));
+}
+
+return { clampPopupLeft };
 })();
 
 /* ===== js/vendor/qrcodegen.js ===== */
@@ -16717,10 +16858,7 @@ function createPatternBank({ index = 0, onSwitch, getSlot, putSlot, onAddClip, s
     document.body.appendChild(chip);
     // über dem Button platzieren, am Bildschirmrand einklemmen
     const r = btn.getBoundingClientRect();
-    const left = Math.max(8, Math.min(
-      window.innerWidth - chip.offsetWidth - 8,
-      r.left + r.width / 2 - chip.offsetWidth / 2,
-    ));
+    const left = clampPopupLeft(r.left + r.width / 2 - chip.offsetWidth / 2, chip.offsetWidth);
     chip.style.left = `${left}px`;
     chip.style.top = `${Math.max(8, r.top - chip.offsetHeight - 8)}px`;
     setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
@@ -23625,10 +23763,7 @@ class Automation {
 
     // über dem Knob positionieren, am Bildschirmrand einklemmen
     const r = knob.getBoundingClientRect();
-    const left = Math.max(8, Math.min(
-      window.innerWidth - chip.offsetWidth - 8,
-      r.left + r.width / 2 - chip.offsetWidth / 2,
-    ));
+    const left = clampPopupLeft(r.left + r.width / 2 - chip.offsetWidth / 2, chip.offsetWidth);
     chip.style.left = `${left}px`;
     chip.style.top = `${Math.max(8, r.top - 48)}px`;
 
@@ -24586,7 +24721,7 @@ function openEq8Menu(insert, i, clientX, clientY, onChange) {
   document.body.appendChild(eq8Menu);
 
   const position = () => {
-    const left = Math.max(8, Math.min(window.innerWidth - eq8Menu.offsetWidth - 8, clientX - eq8Menu.offsetWidth / 2));
+    const left = clampPopupLeft(clientX - eq8Menu.offsetWidth / 2, eq8Menu.offsetWidth);
     eq8Menu.style.left = `${left}px`;
     eq8Menu.style.top = `${Math.max(8, clientY - eq8Menu.offsetHeight - 16)}px`;
   };
@@ -24688,7 +24823,7 @@ function showDragReadout(clientX, clientY, text) {
     document.body.appendChild(dragReadoutEl);
   }
   dragReadoutEl.textContent = text;
-  const left = Math.max(8, Math.min(window.innerWidth - dragReadoutEl.offsetWidth - 8, clientX - dragReadoutEl.offsetWidth / 2));
+  const left = clampPopupLeft(clientX - dragReadoutEl.offsetWidth / 2, dragReadoutEl.offsetWidth);
   dragReadoutEl.style.left = `${left}px`;
   dragReadoutEl.style.top = `${Math.max(8, clientY - 60)}px`;
 }
@@ -26555,7 +26690,7 @@ function openModuleMenu(patch, moduleId, anchorEl, onChange) {
 
   document.body.appendChild(moduleMenuEl);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - moduleMenuEl.offsetWidth - 8, r.left + r.width / 2 - moduleMenuEl.offsetWidth / 2));
+  const left = clampPopupLeft(r.left + r.width / 2 - moduleMenuEl.offsetWidth / 2, moduleMenuEl.offsetWidth);
   moduleMenuEl.style.left = `${left}px`;
   moduleMenuEl.style.top = `${Math.max(8, r.top - moduleMenuEl.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideModuleMenu, true), 0);
@@ -26613,7 +26748,7 @@ function openModuleRenamePopup(patch, moduleId, anchorEl, onChange) {
 
   document.body.appendChild(moduleRenamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - moduleRenamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, moduleRenamePop.offsetWidth);
   moduleRenamePop.style.left = `${left}px`;
   moduleRenamePop.style.top = `${Math.max(8, r.top - moduleRenamePop.offsetHeight - 8)}px`;
   input.focus();
@@ -28150,7 +28285,7 @@ function openRenamePopup(machine, anchorEl) {
 
   document.body.appendChild(renamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - renamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, renamePop.offsetWidth);
   renamePop.style.left = `${left}px`;
   renamePop.style.top = `${Math.max(8, r.top - renamePop.offsetHeight - 8)}px`;
   input.focus();
@@ -32390,10 +32525,7 @@ function openPadMenu(sampler, i, anchorEl) {
 
   document.body.appendChild(padMenu);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - padMenu.offsetWidth - 8,
-    r.left + r.width / 2 - padMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - padMenu.offsetWidth / 2, padMenu.offsetWidth);
   padMenu.style.left = `${left}px`;
   padMenu.style.top = `${Math.max(8, r.top - padMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsidePadMenu, true), 0);
@@ -32452,7 +32584,7 @@ function openPadRenamePopup(sampler, i, anchorEl) {
 
   document.body.appendChild(padRenamePop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - padRenamePop.offsetWidth - 8, r.left));
+  const left = clampPopupLeft(r.left, padRenamePop.offsetWidth);
   padRenamePop.style.left = `${left}px`;
   padRenamePop.style.top = `${Math.max(8, r.top - padRenamePop.offsetHeight - 8)}px`;
   input.focus();
@@ -35209,6 +35341,14 @@ class Rack {
     const overlay = document.createElement('div');
     overlay.className = 'machine-focus';
     overlay.hidden = true;
+    // Klick auf den Rand ausserhalb des Panels schliesst den Editor -- nur
+    // auf Desktop-Breiten überhaupt sichtbar/klickbar (dort bekommt
+    // .machine-focus per Breakpoint erst einen Hintergrund + pointer-
+    // events:auto, s. app.css); auf Mobile deckt das Panel den ganzen
+    // Bereich ab, e.target ist dort also nie das Overlay selbst.
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.#closeFocus(machine);
+    });
     const panel = document.createElement('div');
     panel.className = 'machine-focus__panel';
     const back = document.createElement('button');
@@ -35781,10 +35921,7 @@ const onOutsideXYMenu = (e) => { if (xyMenu && !xyMenu.contains(e.target)) dismi
 
 function positionXYMenu(anchorEl) {
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - xyMenu.offsetWidth - 8,
-    r.left + r.width / 2 - xyMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - xyMenu.offsetWidth / 2, xyMenu.offsetWidth);
   const top = Math.max(8, Math.min(window.innerHeight - xyMenu.offsetHeight - 8, r.top - xyMenu.offsetHeight - 8));
   xyMenu.style.left = `${left}px`;
   xyMenu.style.top = `${top}px`;
@@ -36308,10 +36445,7 @@ function openClipDeleteMenu(machine, clipId, anchorEl) {
   document.body.appendChild(clipMenu);
   // über dem Clip platzieren, am Bildschirmrand einklemmen (wie pattern-bank.js)
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - clipMenu.offsetWidth - 8,
-    r.left + r.width / 2 - clipMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - clipMenu.offsetWidth / 2, clipMenu.offsetWidth);
   clipMenu.style.left = `${left}px`;
   clipMenu.style.top = `${Math.max(8, r.top - clipMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideClipMenu, true), 0);
@@ -36990,10 +37124,7 @@ function openMacroPopup(machine, anchorEl) {
 
   document.body.appendChild(macroPop);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - macroPop.offsetWidth - 8,
-    r.left + r.width / 2 - macroPop.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - macroPop.offsetWidth / 2, macroPop.offsetWidth);
   const top = Math.max(8, Math.min(window.innerHeight - macroPop.offsetHeight - 8, r.top - macroPop.offsetHeight - 8));
   macroPop.style.left = `${left}px`;
   macroPop.style.top = `${top}px`;
@@ -37113,10 +37244,7 @@ function openSceneDeleteMenu(scene, anchorEl) {
   sceneMenu.appendChild(delBtn);
   document.body.appendChild(sceneMenu);
   const r = anchorEl.getBoundingClientRect();
-  const left = Math.max(8, Math.min(
-    window.innerWidth - sceneMenu.offsetWidth - 8,
-    r.left + r.width / 2 - sceneMenu.offsetWidth / 2,
-  ));
+  const left = clampPopupLeft(r.left + r.width / 2 - sceneMenu.offsetWidth / 2, sceneMenu.offsetWidth);
   sceneMenu.style.left = `${left}px`;
   sceneMenu.style.top = `${Math.max(8, r.top - sceneMenu.offsetHeight - 8)}px`;
   setTimeout(() => document.addEventListener('pointerdown', onOutsideSceneMenu, true), 0);
@@ -38532,6 +38660,14 @@ function wireBottomBar(rack) {
 
   for (const s of Object.values(sheets)) {
     new MutationObserver(syncActive).observe(s, { attributes: true, attributeFilter: ['hidden'] });
+    // Klick auf den Rand ausserhalb des Konsolen-Panels schliesst es --
+    // nur auf Desktop-Breiten sichtbar/klickbar (dort bekommt .sheet--console
+    // erst per Breakpoint einen Hintergrund + pointer-events:auto, s.
+    // app.css); auf Mobile deckt das Panel den ganzen Bereich ab, e.target
+    // ist dort also nie das Sheet selbst.
+    s.addEventListener('click', (e) => {
+      if (e.target === s) s.hidden = true;
+    });
   }
   syncActive();
 }
