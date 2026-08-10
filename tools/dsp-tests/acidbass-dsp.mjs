@@ -37,6 +37,7 @@ await page.waitForTimeout(800); // Worklet-Modul laden lassen
 
 const out = await page.evaluate(async () => {
   const ctx = engine.ctx;
+  const sr = ctx.sampleRate;
   if (ctx.state === 'suspended') await ctx.resume();
 
   /** Baut eine frische, isolierte Stimme + Abgriff. */
@@ -121,9 +122,72 @@ const out = await page.evaluate(async () => {
   await wait(200);
   const settled = stats(grab(v2.analyser));
 
+  // ---- 4: Slide -- echtes Legato (kein Hüllkurven-Retrigger, Tonhöhe
+  // gleitet zur Zielnote) statt eines normalen Neuanschlags. Niedriger
+  // Cutoff/envMod/Resonanz -> nahezu sinusförmige Ausgabe, damit eine
+  // simple Nulldurchgangs-Schätzung der Grundfrequenz überhaupt aussage-
+  // kräftig ist (Standardeinstellungen sind hell/resonant genug, dass
+  // Nulldurchgänge vor allem Filter-Klingeln statt der Grundfrequenz
+  // träfen). Bisher komplett ungetestet -- Anlass war ein Nutzer-Verdacht
+  // ("Slide funktioniert teilweise nicht"), s. Chat. Ergebnis der Prüfung:
+  // die DSP selbst verhält sich korrekt (separat auch per echter Transport-
+  // Wiedergabe verifiziert) -- der eigentliche Bug lag in der Touch-Ziel-
+  // grösse der Slide-Zone im Step-Editor (s. components.css), nicht hier.
+  const estFreq = (buf, sr) => {
+    let crossings = 0;
+    for (let i = 1; i < buf.length; i++) if (buf[i - 1] < 0 && buf[i] >= 0) crossings++;
+    return crossings / (buf.length / sr);
+  };
+  const slideParams = {
+    waveform: 'saw', tune: 0, cutoff: 220, resonance: 0.15, envMod: 0.05,
+    fDecay: 1.5, accentDecay: 1.5, accent: 0, overdrive: 0, filterFM: 0,
+    slideTime: 0.06, hiRes: false, ampDecay: 1.5,
+  };
+
+  const v3 = makeVoice();
+  v3.node.port.postMessage({ type: 'params', params: slideParams });
+  v3.node.port.postMessage({ type: 'trigger', midi: 36, time: ctx.currentTime, accent: false, slide: false });
+  await wait(220); // Hüllkurve klingt spürbar (aber nicht vollständig) ab
+  const slideRmsBefore = stats(grab(v3.analyser)).rms;
+  v3.node.port.postMessage({ type: 'trigger', midi: 48, time: ctx.currentTime, accent: false, slide: true });
+  await wait(15); // knapp NACH dem Trigger -- ein Retrigger-Sprung wäre hier schon sichtbar
+  const slideRmsRightAfter = stats(grab(v3.analyser)).rms;
+  await wait(80); // Slide-Zeit (60ms) sicher verstrichen
+  const slideFreqSettled = estFreq(grab(v3.analyser), sr);
+  v3.dispose();
+
+  // Vergleichs-Retrigger (slide:false) unter identischen Bedingungen --
+  // zeigt, DASS ein normaler Trigger die Hüllkurve sichtbar anhebt. Ohne
+  // diesen Vergleich wäre "kein Sprung bei Slide" kein Beweis für Legato,
+  // sondern könnte genauso gut heissen, dass gar kein Trigger mehr ankommt.
+  const v4 = makeVoice();
+  v4.node.port.postMessage({ type: 'params', params: slideParams });
+  v4.node.port.postMessage({ type: 'trigger', midi: 36, time: ctx.currentTime, accent: false, slide: false });
+  await wait(220);
+  const retrigRmsBefore = stats(grab(v4.analyser)).rms;
+  // DIESELBE Note erneut triggern (36, nicht 48) -- ein Vergleich über zwei
+  // verschiedene Noten hinweg ist verzerrt: Note 48 liegt mit ~131Hz näher
+  // am/über dem 220Hz-Cutoff als Note 36 (~65Hz) und wird dadurch vom
+  // Tiefpass unabhängig vom Hüllkurven-Zustand deutlich stärker gedämpft
+  // (weniger Pegel, komplett unabhängig davon ob/wie neu getriggert wurde --
+  // s. Chat: dieser Assert schlug deshalb mit Note 48 fälschlich fehl,
+  // obwohl die Hüllkurve selbst korrekt neu ansetzte). Gleiche Note hält
+  // den Filter-Frequenzgang konstant, misst also wirklich nur den
+  // Hüllkurven-Effekt. Ebenfalls länger warten als beim Slide-Test oben
+  // (60ms statt 15ms), damit der neue Attack das Analyser-Fenster (2048
+  // Samples = ~46ms Rückblick) tatsächlich dominiert.
+  v4.node.port.postMessage({ type: 'trigger', midi: 36, time: ctx.currentTime, accent: false, slide: false });
+  await wait(60);
+  const retrigRmsRightAfter = stats(grab(v4.analyser)).rms;
+  v4.dispose();
+
   v1.dispose();
   v2.dispose();
-  return { normal, extreme, steady, jumped, settled };
+  return {
+    normal, extreme, steady, jumped, settled,
+    slide: { before: slideRmsBefore, rightAfter: slideRmsRightAfter, freqSettled: slideFreqSettled, expectedTarget: 440 * Math.pow(2, (48 - 69) / 12) },
+    retrig: { before: retrigRmsBefore, rightAfter: retrigRmsRightAfter },
+  };
 });
 
 console.log(JSON.stringify(out, null, 1));
@@ -139,6 +203,17 @@ check('Zipper: das Übergangsfenster eines harten Cutoff-Sprungs bleibt im Rahme
   + `normale Signalsteilheit hinaus (Sprung ${out.jumped.maxDelta.toFixed(4)} vs. eingeschwungen ${out.settled.maxDelta.toFixed(4)})`,
   out.jumped.maxDelta <= out.settled.maxDelta * 1.5 + 0.02);
 check('Zipper: Sprung erzeugt keine NaN', out.jumped.bad === 0);
+check('Slide: kein Hüllkurven-Sprung -- Amplitude bleibt nahe dem bereits '
+  + `abgeklungenen Vor-Trigger-Pegel statt neu anzusteigen (vorher ${out.slide.before.toFixed(4)}, `
+  + `direkt danach ${out.slide.rightAfter.toFixed(4)})`,
+  out.slide.rightAfter <= out.slide.before * 1.15);
+check('Slide: Tonhöhe gleitet tatsächlich zur Zielnote '
+  + `(erwartet ~${out.slide.expectedTarget.toFixed(1)}Hz, gemessen ${out.slide.freqSettled.toFixed(1)}Hz)`,
+  Math.abs(out.slide.freqSettled - out.slide.expectedTarget) < out.slide.expectedTarget * 0.15);
+check('Vergleich: ein ECHTER Retrigger (slide:false) hebt die Hüllkurve sichtbar an -- '
+  + 'Beweis, dass der Slide-Test oben tatsächlich Legato misst, nicht "Trigger kam nicht an" '
+  + `(vorher ${out.retrig.before.toFixed(4)}, direkt danach ${out.retrig.rightAfter.toFixed(4)})`,
+  out.retrig.rightAfter > out.retrig.before * 1.1);
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);
 
