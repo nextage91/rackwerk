@@ -3,7 +3,7 @@
  */
 import './ui/knob.js';                       // registriert <x-knob>
 import './ui/fader.js';                      // registriert <x-fader>
-import { computeLevels } from './ui/meter.js'; // registriert <x-meter>
+import './ui/meter.js'; // registriert <x-meter>
 import { drawQR } from './ui/qr.js';
 import { jsQR } from './vendor/jsqr.js';
 import { engine } from './core/audio-engine.js';
@@ -20,11 +20,12 @@ import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack, REGISTRY } from './rack/rack.js';
 import { initJamView, renderJamView, stopAllClips, exitJamMode } from './rack/jam-view.js';
+import { initChannelStripView, openChannelStrip } from './ui/channel-strip-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 const SAMPLER_CLASS = REGISTRY.find((M) => M.meta.type === 'sampler');
 
-/** Öffnen-Funktionen für Mix/Song/Jam, von wireMixerUI/wireSongUI/
+/** Öffnen-Funktionen für Mix/Song/Jam, von wireChannelStripView/wireSongUI/
  *  wireJamViewUI befüllt -- die Bottom-Bar (wireBottomBar) ruft sie auf,
  *  ohne die jeweilige Sheet-Logik zu duplizieren. */
 const modeOpen = {};
@@ -153,7 +154,7 @@ function boot() {
   wireProjectUI(rack);
   const jam = wireJamUI(rack);
   wireSongUI(rack);
-  wireMixerUI(rack);
+  wireChannelStripView(rack);
   initJamView(rack);
   wireJamViewUI();
   wireBottomBar(rack); // braucht modeOpen.{mix,song,jam}, also NACH den drei wireXUI oben
@@ -869,160 +870,19 @@ function wireSongUI(rack) {
   $('#btn-song-clear').addEventListener('click', () => song.clear());
 }
 
-/* ---------- Mixer: Breitbild-Konsole mit Channel-Strips ----------
+/* ---------- Mixer: Vollbild-Kanalzug pro Maschine/Master ----------
  * Steuert dieselben Werte, die auch die Maschinen-Panels selbst zeigen (eine
  * Quelle der Wahrheit über Machine.setLevel/setPan/setMuted/setSoloed) — der
- * Mixer ist eine zusätzliche, zentrale Bedienoberfläche, kein zweiter Pegel.
- * Layout: horizontal scrollende Kanalzüge mit echten Fadern (dB-Skala) und
- * live mitlaufenden VU-Metern; die BeatBox läuft als klappbare Gruppe
- * (Gesamt-Fader + acht Drum-Spuren, einklappbar auf den Gruppen-Fader). */
-function wireMixerUI(rack) {
-  const sheet = $('#mixer-sheet');
-  const list = $('#mixer-list');
-
-  // Aufklapp-Zustand der Drum-Gruppen (BeatBox/AnalogKit) -- render() baut
-  // #mixer-list bei JEDEM Öffnen komplett neu auf (list.innerHTML = ''),
-  // ohne das hier würde ein zugeklappter Zustand also beim nächsten Öffnen
-  // wieder verloren gehen. Ein WeakSet statt eines Arrays/Objekts, damit
-  // eine aus dem Rack entfernte Maschine automatisch mit rausfällt, ohne
-  // dass wir das selbst aufräumen müssen. Fehlt eine Maschine hier drin,
-  // ist sie zugeklappt -- das ist der gewünschte Default (Nutzer-Anfrage:
-  // Gruppen sollen beim allerersten Öffnen zu sein, nicht aufgeklappt).
-  const expandedGroups = new WeakSet();
-
-  /* Ein gemeinsamer rAF-Ticker treibt alle sichtbaren VU-Meter — nur
-     während der Mixer offen ist, sonst unnötige Dauerlast im Hintergrund. */
-  let meterEntries = [];
-  let meterRAF = null;
-  const meterTick = () => {
-    for (const m of meterEntries) {
-      const { rmsDb, peakDb } = computeLevels(m.analyser, m.buf);
-      m.el.update(rmsDb, peakDb);
-    }
-    meterRAF = requestAnimationFrame(meterTick);
-  };
-  const startMeters = () => { if (!meterRAF) meterRAF = requestAnimationFrame(meterTick); };
-  const stopMeters = () => { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; };
-
-  /** Ein Kanalzug (Fader + VU-Meter + Pan + Sends + Mute/Solo) für eine
-   *  Maschine ODER eine einzelne Drum-Spur — beide teilen sich dieselben
-   *  Setter-Namen (setLevel/setPan/setSend/level/pan/sends/getMeterAnalyser). */
-  const buildStrip = (target, { name, withButtons = true, compact = false } = {}) => {
-    const strip = document.createElement('div');
-    strip.className = 'chstrip' + (compact ? ' chstrip--sub' : '');
-    strip.innerHTML = `
-      <div class="chstrip__head">
-        <span class="chstrip__stripe"></span>
-        <span class="chstrip__name">${name}</span>
-      </div>
-      <div class="chstrip__knobs">
-        <x-knob label="Pan" min="-1" max="1" default="0" value="${target.pan}" data-k="pan"></x-knob>
-        <x-knob label="Dly" min="0" max="1" value="${target.sends.delay}" data-k="sendDelay"></x-knob>
-        <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>
-      </div>
-      <div class="chstrip__meters">
-        <x-meter compact vertical></x-meter>
-        <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
-      </div>
-      ${withButtons ? `
-      <div class="chstrip__buttons">
-        <button class="m-btn m-btn--solo${target.soloed ? ' is-active' : ''}" data-solo>SOLO</button>
-        <button class="m-btn m-btn--mute${target.muted ? ' is-active' : ''}" data-mute>MUTE</button>
-      </div>` : ''}
-    `;
-    strip.querySelector('[data-k="level"]').addEventListener('input', (e) => target.setLevel(e.detail.value));
-    strip.querySelector('[data-k="pan"]').addEventListener('input', (e) => target.setPan(e.detail.value));
-    strip.querySelector('[data-k="sendDelay"]').addEventListener('input', (e) => target.setSend('delay', e.detail.value));
-    strip.querySelector('[data-k="sendReverb"]').addEventListener('input', (e) => target.setSend('reverb', e.detail.value));
-    if (withButtons) {
-      const muteBtn = strip.querySelector('[data-mute]');
-      const soloBtn = strip.querySelector('[data-solo]');
-      muteBtn.addEventListener('click', () => target.setMuted(!target.muted));
-      soloBtn.addEventListener('click', () => target.setSoloed(!target.soloed));
-      // Header-Buttons der Maschine bleiben die Referenz — hält den Mixer
-      // synchron, falls der Zustand von dort (oder programmatisch) ändert
-      target.onMixerChange = () => {
-        muteBtn.classList.toggle('is-active', target.muted);
-        soloBtn.classList.toggle('is-active', target.soloed);
-      };
-    }
-
-    const analyser = target.getMeterAnalyser?.();
-    if (analyser && typeof analyser.getFloatTimeDomainData === 'function') {
-      meterEntries.push({
-        analyser,
-        buf: new Float32Array(analyser.fftSize),
-        el: strip.querySelector('x-meter'),
-      });
-    }
-    return strip;
-  };
-
-  const render = () => {
-    list.innerHTML = '';
-    meterEntries = [];
-    if (!rack.machines.length) {
-      list.innerHTML = '<p class="mixer-empty">No machines in the rack.</p>';
-      return;
-    }
-    for (const m of rack.machines) {
-      const { color } = m.constructor.meta;
-      const name = m.displayName;
-      const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
-
-      if (Array.isArray(m.tracks)) {
-        // Jede Multi-Spur-Maschine (BeatBox, AnalogKit, …) läuft als Gruppe:
-        // Gesamt-Kanalzug (Kit-Bus) + einklappbare Einzel-Spuren. Duck-typed
-        // auf m.tracks statt auf einen bestimmten type -- jede künftige
-        // Multi-Spur-Maschine bekommt das automatisch, ohne main.js
-        // anzufassen (Voraussetzung: dieselben Setter wie BeatBox/AnalogKit:
-        // setTrackLevel/setTrackPan/setTrackSend/getTrackMeterAnalyser).
-        const group = document.createElement('div');
-        group.className = 'mixer-group';
-        if (!expandedGroups.has(m)) group.classList.add('is-collapsed');
-        group.style.setProperty('--m-color', color);
-        group.style.setProperty('--m-color-tint', `rgba(${r},${g},${b},.1)`);
-        group.appendChild(buildStrip(m, { name }));
-
-        const toggle = document.createElement('button');
-        toggle.className = 'mixer-group__toggle';
-        toggle.setAttribute('aria-label', 'Toggle drum tracks');
-        toggle.addEventListener('click', () => {
-          const collapsed = group.classList.toggle('is-collapsed');
-          if (collapsed) expandedGroups.delete(m); else expandedGroups.add(m);
-        });
-        group.appendChild(toggle);
-
-        const subtracks = document.createElement('div');
-        subtracks.className = 'mixer-group__subtracks';
-        m.tracks.forEach((tr, i) => {
-          const sub = buildStrip(
-            {
-              level: tr.level, pan: tr.pan, sends: { delay: tr.sendDelay, reverb: tr.sendReverb },
-              setLevel: (v) => m.setTrackLevel(i, v), setPan: (v) => m.setTrackPan(i, v),
-              setSend: (which, v) => m.setTrackSend(i, which, v),
-              getMeterAnalyser: () => m.getTrackMeterAnalyser(i),
-            },
-            { name: tr.name, withButtons: false, compact: true },
-          );
-          subtracks.appendChild(sub);
-        });
-        group.appendChild(subtracks);
-        list.appendChild(group);
-        continue;
-      }
-
-      const strip = buildStrip(m, { name });
-      strip.style.setProperty('--m-color', color);
-      list.appendChild(strip);
-    }
-  };
-
-  modeOpen.mix = () => { render(); sheet.hidden = false; startMeters(); };
-  sheet.querySelector('[data-close]').addEventListener('click', () => {
-    sheet.hidden = true;
-    stopMeters();
-  });
+ * Kanalzug ist eine zusätzliche, fokussierte Bedienoberfläche, kein zweiter
+ * Pegel. Rendering/Navigation/Drum-Gruppen-Ausklappen sitzt komplett in
+ * ui/channel-strip-view.js (analog zu initJamView/renderJamView) -- hier nur
+ * das Verdrahten mit dem Sheet-Rahmen aus index.html + der Bottom-Bar. */
+function wireChannelStripView(rack) {
+  initChannelStripView(rack);
+  // Bottom-Bar-"Mix"-Tab springt direkt auf Master (Master hat keine eigene
+  // Rack-Zeile, s. fx.js -- der MIX-Button in seinem Panel-Header tut exakt
+  // dasselbe, dies ist nur der zusätzliche globale Schnellzugriff).
+  modeOpen.mix = () => openChannelStrip(masterFX);
 }
 
 /* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
@@ -1046,7 +906,7 @@ function wireJamViewUI() {
 
 /* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------
  * Öffnet/schließt dieselben Sheets, die vorher übers PRJ-Sheet erreichbar
- * waren (modeOpen.mix/song/jam, s. wireMixerUI/wireSongUI/wireJamViewUI) —
+ * waren (modeOpen.mix/song/jam, s. wireChannelStripView/wireSongUI/wireJamViewUI) —
  * dupliziert also keine Render-/Meter-Logik. Zusätzlich: Mutual Exclusion
  * (nur eine Konsole gleichzeitig offen) und Active-Tab-Sync per
  * MutationObserver, weil jede Konsole auch über ihren eigenen ✕-Button

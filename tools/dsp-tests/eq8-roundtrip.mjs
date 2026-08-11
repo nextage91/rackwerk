@@ -98,7 +98,7 @@ if (await page.locator('.machine-focus:not([hidden])').count()) {
 const rowCount = await page.locator('.rack-row').count();
 let found = false;
 for (let i = 0; i < rowCount; i++) {
-  await page.locator('.rack-row').nth(i).click();
+  await page.locator('.rack-row').nth(i).locator('.rack-row__name').click();
   await page.waitForTimeout(100);
   if (await page.locator('.machine-focus:not([hidden]) .eq8__graph').count()) { found = true; break; }
   await page.click('.machine-focus:not([hidden]) .machine-focus__back');

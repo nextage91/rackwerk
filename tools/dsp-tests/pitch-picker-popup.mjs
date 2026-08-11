@@ -30,7 +30,7 @@ await openApp(page, baseUrlFromArgv());
 // newProject() seedet immer einen SubSynth mit einer Demo-Line (s.
 // subsynth.js#seedDemo) -- Step 0 ist an (MIDI 36 = C2), genau der
 // Fall, den der Picker abdecken soll (Tonhöhe eines AKTIVEN Steps ändern).
-await page.locator('.rack-row', { hasText: 'SubSynth' }).click();
+await page.locator('.rack-row', { hasText: 'SubSynth' }).locator('.rack-row__name').click();
 await page.waitForSelector('.machine-focus:not([hidden])');
 await page.waitForTimeout(300);
 

@@ -36,7 +36,7 @@ await openApp(page, baseUrlFromArgv());
 async function setupReverbTail() {
   const rows = page.locator('.rack-row');
   const n = await rows.count();
-  await rows.nth(n - 1).click(); // SubSynth (Default-Projekt: BeatBox dann SubSynth)
+  await rows.nth(n - 1).locator('.rack-row__name').click(); // SubSynth (Default-Projekt: BeatBox dann SubSynth)
   await page.waitForTimeout(300);
   await page.locator('.machine-focus:not([hidden]) x-knob[data-p="sendReverb"]').evaluate((el) => {
     el.value = 1;
@@ -85,7 +85,7 @@ async function teardownReverbTail() {
 // --- Fall 1: Mute EINER Spur, keine Solo aktiv -- Hall darf nicht hart auf 0 springen.
 await setupReverbTail();
 const rows = page.locator('.rack-row');
-await rows.nth((await rows.count()) - 1).click(); // SubSynth erneut öffnen
+await rows.nth((await rows.count()) - 1).locator('.rack-row__name').click(); // SubSynth erneut öffnen
 await page.waitForTimeout(100);
 await page.click('.machine-focus:not([hidden]) [data-mute]');
 const muteSamples = await sampleRms(20, 15);
@@ -97,7 +97,7 @@ await teardownReverbTail();
 
 // --- Fall 2: Solo auf einer ANDEREN Spur -- Hall MUSS weiterhin geflusht werden.
 await setupReverbTail();
-await rows.nth(0).click(); // BeatBox (die andere Standard-Maschine)
+await rows.nth(0).locator('.rack-row__name').click(); // BeatBox (die andere Standard-Maschine)
 await page.waitForTimeout(100);
 await page.click('.machine-focus:not([hidden]) [data-solo]');
 const soloSamples = await sampleRms(15, 15);

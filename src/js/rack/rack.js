@@ -186,15 +186,18 @@ export class Rack {
       <span class="rack-row__stripe"></span>
       <span class="rack-row__name"><span data-name-text>${machine.displayName}</span><span class="rack-row__led" data-led></span></span>
       <span class="rack-row__pattern" data-pattern hidden></span>
-      <span class="rack-row__actions">
-        <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
-        <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
-        <span class="rack-row__move">
-          <button type="button" class="m-btn rack-row__move-btn" data-move="-1" aria-label="Move up">▲</button>
-          <button type="button" class="m-btn rack-row__move-btn" data-move="1" aria-label="Move down">▼</button>
+      <span class="rack-row__tail">
+        <span class="rack-row__actions">
+          <button type="button" class="m-btn m-btn--mixstrip" data-open-strip aria-label="Open channel strip">🎚</button>
+          <button type="button" class="m-btn m-btn--solo" data-solo>S</button>
+          <button type="button" class="m-btn m-btn--mute" data-mute>M</button>
+          <span class="rack-row__move">
+            <button type="button" class="m-btn rack-row__move-btn" data-move="-1" aria-label="Move up">▲</button>
+            <button type="button" class="m-btn rack-row__move-btn" data-move="1" aria-label="Move down">▼</button>
+          </span>
         </span>
+        <span class="rack-row__chevron" aria-hidden="true">›</span>
       </span>
-      <span class="rack-row__chevron" aria-hidden="true">›</span>
     `;
     machine.rowNameEl = row.querySelector('[data-name-text]');
     // Aktivitäts-LED + aktiver Pattern-Buchstabe direkt in der Kompakt-
@@ -213,6 +216,11 @@ export class Rack {
         patternEl.textContent = 'ABCD'[machine.patternIndex] ?? '';
       };
     }
+    const mixBtn = row.querySelector('[data-open-strip]');
+    mixBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onOpenChannelStrip?.(machine);
+    });
     const muteBtn = row.querySelector('[data-mute]');
     const soloBtn = row.querySelector('[data-solo]');
     soloBtn.addEventListener('click', (e) => {

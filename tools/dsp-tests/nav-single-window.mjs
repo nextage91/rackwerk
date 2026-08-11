@@ -45,7 +45,7 @@ const totalOpen = (layers) => Object.values(layers).reduce((a, b) => a + b, 0);
 
 // --- Szenario 1: eine bestehende Maschine öffnen (Rack-Fokus), dann per
 // Bottom-Bar zu Jam wechseln, OHNE vorher "Zurück" zu tippen.
-await page.click('.rack-row');
+await page.click('.rack-row .rack-row__name');
 await page.waitForTimeout(200);
 let layers = await openLayers();
 check('Szenario 1: Maschinen-Fokus ist offen', layers.machineFocus === 1);
@@ -78,7 +78,7 @@ check('Szenario 2: genau EINE Ebene offen (nur Mixer)', totalOpen(layers) === 1 
 // (nicht über die Bottom-Bar, sondern den eigenen Button).
 await page.click('.bb-mode[data-mode="rack"]');
 await page.waitForTimeout(200);
-await page.click('.rack-row');
+await page.click('.rack-row .rack-row__name');
 await page.waitForTimeout(200);
 layers = await openLayers();
 check('Szenario 3: Maschinen-Fokus wieder offen', layers.machineFocus === 1);

@@ -83,6 +83,10 @@ const FX_DEFAULTS = {
   revLevel: 0.4,
   filterSweep: 0,    // -1 (Highpass) .. 0 (transparent) .. +1 (Lowpass)
   filterReso: 5,     // Q, geteilt von HP- und LP-Zweig
+  masterLevel: 0.65, // Gesamtausgangspegel -- deckt sich mit dem bisher fest
+                      // verdrahteten engine.masterBus.gain-Wert (audio-
+                      // engine.js), damit VOR diesem Feld gespeicherte
+                      // Projekte beim Laden exakt gleich klingen wie zuvor.
 };
 
 class MasterFX {
@@ -460,8 +464,24 @@ class MasterFX {
       case 'revDamp':    this.reverbInsert?.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, val))); break;
       case 'filterSweep': this.#applyFilterSweep(val); break;
       case 'filterReso':  this.#applyFilterReso(val); break;
+      case 'masterLevel': engine.masterBus?.gain.setTargetAtTime(val, t, 0.02); break;
     }
   }
+
+  /** Gleiche Setter-/Getter-Namen wie eine Machine (s. machine.js#get level/
+   *  setLevel) -- damit kann der neue Vollbild-Kanalzug (channel-strip-
+   *  view.js) Master genau wie jede andere Maschine als Fader-Ziel behandeln,
+   *  ohne eine Sonderfall-Unterscheidung. Pan/Sends/Solo/Mute gibt es hier
+   *  bewusst NICHT (Master hat weder ein Sende-Ziel noch Sinn für Panning
+   *  nach der Summierung) -- die UI blendet diese Reglergruppen aus, wenn
+   *  sie am Ziel fehlen, s. dortiger Kommentar. */
+  get level() { return this.params.masterLevel; }
+  setLevel(v) { this.setParam('masterLevel', v); }
+
+  /** Für das VU-Meter im Vollbild-Kanalzug -- derselbe Analyser, den
+   *  audio-engine.js schon fürs Clip-/Pegel-Monitoring am Limiter-Ausgang
+   *  anlegt (s. dortiger Kommentar), kein zweiter nötig. */
+  getMeterAnalyser() { return engine.analyser; }
 
   /** xySpring/xyMap sitzen als eigene Felder neben den FX-Params (nicht IN
    *  this.params gemischt -- das würde #syncUI()s knob.dataset.p-Lookup
@@ -503,6 +523,7 @@ class MasterFX {
       this.reverbInsert.setParam('decay', Math.min(REV_DECAY_MAX, Math.max(0, this.params.revDecay)));
       this.reverbInsert.setParam('damping', Math.min(REV_DAMPING_MAX, Math.max(REV_DAMPING_MIN, this.params.revDamp)));
     }
+    if (engine.masterBus) engine.masterBus.gain.value = this.params.masterLevel;
     if (this.sweepFilter) {
       this.#applyFilterSweep(this.params.filterSweep);
       this.#applyFilterReso(this.params.filterReso);
@@ -529,6 +550,9 @@ class MasterFX {
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
         <x-meter class="fx__meter" aria-label="Master level"></x-meter>
+        <div class="machine__head-actions">
+          <button type="button" class="m-btn" data-open-strip aria-label="Open master channel strip">MIX</button>
+        </div>
       </header>
       <div class="machine__body">
         <div class="machine__row fx__row">
@@ -580,6 +604,10 @@ class MasterFX {
         this.addInsert(type);
       });
     });
+    // Gesetzt von main.js#wireChannelStripView -- öffnet den neuen Vollbild-
+    // Kanalzug direkt auf Master (s. dortiger Kommentar für die Ring-
+    // Navigation Rack-Maschinen<->Master).
+    el.querySelector('[data-open-strip]').addEventListener('click', () => this.onOpenChannelStrip?.());
 
     // Auto-Return für Sweep (Nutzer-Anfrage, s. filterSweepSpring-Kommentar
     // im Konstruktor) -- derselbe Taster/dasselbe "Loslassen springt zurück"

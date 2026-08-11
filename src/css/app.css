@@ -243,8 +243,12 @@ button {
   letter-spacing: .04em;
   text-transform: uppercase;
 }
+.rack-row__tail { display: flex; align-items: center; gap: 10px; }
 .rack-row__actions { display: flex; align-items: center; gap: 6px; }
 .rack-row__actions .m-btn { min-width: 40px; min-height: 40px; padding: 0; }
+/* Öffnet den neuen Vollbild-Kanalzug für diese Maschine (s. Chat: "es gibt
+   einen Mixer-Button pro Maschine im Rack"). */
+.rack-row__actions .m-btn--mixstrip { color: var(--m-color, var(--ink-dim)); }
 /* Verschieben-Pfeile: gestapelt statt nebeneinander (spart Breite in der
    ohnehin schon vollen Kompakt-Zeile) -- deshalb bewusst kleiner als S/M
    oben, gleiches Mass wie die Insert-/Modulator-Kopfzeilen-Buttons
@@ -882,30 +886,34 @@ button {
 }
 .jam-scene-chip:not(.is-active) .jam-scene-chip__progress { display: none; }
 
-.mixer-console {
+/* Vollbild-Kanalzug-Container -- ein Ziel nach dem anderen (Maschine ODER
+   Master), ersetzt die alte horizontal scrollende Mixer-Liste (Nutzer-
+   Anfrage: 124px-Spalten waren auf dem Phone kaum präzise bedienbar, s.
+   Chat). Vertikal statt horizontal, weil hier immer nur EIN Ziel gleich-
+   zeitig zu sehen ist -- Navigation zwischen Zielen läuft über Prev/Next
+   (.cs-nav-btn) im Sheet-Header statt über Scrollen. */
+.channel-strip {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  overflow-x: auto;
-  overflow-y: auto;    /* Sicherheitsnetz für sehr kurze Landscape-Screens —
-                           lieber ein bisschen Vertikal-Scroll als abgeschnittene
-                           Mute/Solo-Buttons */
-  padding: 4px 4px 10px;
-  scroll-snap-type: x proximity;
+  overflow-y: auto;
+  padding: 8px 12px 16px;
   -webkit-overflow-scrolling: touch;
 }
-.mixer-empty { color: var(--ink-dim); font-size: 13px; padding: 16px; }
 
-/* Ein Kanalzug — Maschine ODER eine einzelne BeatBox-Drum-Spur. Pan+Sends
+/* Prev/Next im Sheet-Header -- Nutzer-Anfrage: "gleich zur nächsten
+   Maschinen-Mix-View springen ohne wieder zurück über das Rack zu
+   müssen". Gleiche Grösse wie der Schliessen-Button daneben. */
+.cs-nav-btn { min-width: 40px; min-height: 40px; font-size: 20px; padding: 0; }
+
+/* Ein Kanalzug — Maschine, Master ODER eine einzelne Drum-Spur. Pan+Sends
    bewusst in EINER kompakten Reihe (statt gestapelt), damit der Fader
    darunter den grössten Teil der Höhe bekommt — das ist der Regler, der
    beim Mischen am meisten gebraucht wird. */
 .chstrip {
-  flex: 0 0 124px;
   min-height: 0;
-  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -915,10 +923,31 @@ button {
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
 }
-/* Unter-Kanalzüge (BeatBox-Spuren) bleiben in der Breite gleich -- sie
-   tragen dieselben drei Regler (Pan+2 Sends) und brauchen denselben Platz,
-   sparen sich aber die Mute/Solo-Reihe. */
+/* Haupt-Kanalzug im Vollbild-Kanalzug -- deutlich grösser als die alte
+   124px-Mixer-Spalte, weil er jetzt den ganzen Bildschirm für sich hat
+   statt sich mit mehreren Nachbar-Spalten die Breite zu teilen (der
+   eigentliche Grund für diesen ganzen Umbau, s. Chat). */
+.chstrip--big {
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  padding: 14px 16px 18px;
+  gap: 12px;
+}
+.chstrip--big .chstrip__name { font-size: 15px; -webkit-line-clamp: 1; }
+.chstrip--big .chstrip__knobs { gap: 16px; }
+.chstrip--big .chstrip__knobs x-knob { --knob-size: 44px; gap: 8px; }
+.chstrip--big .chstrip__meters { min-height: 300px; gap: 16px; }
+.chstrip--big .chstrip__buttons .m-btn { min-height: 44px; font-size: 12px; }
+
+/* Unter-Kanalzüge (Drum-Spuren einer aufgeklappten Gruppe) -- tragen
+   dieselben drei Regler (Pan+2 Sends), sparen sich aber die Mute/Solo-
+   Reihe. Untereinander statt nebeneinander (anders als früher in der
+   horizontal scrollenden Mixer-Liste), darum volle Breite statt fixer
+   124px-Spalte. */
 .chstrip--sub {
+  width: 100%;
+  max-width: 360px;
   padding-top: 6px;
   background: rgba(0,0,0,.15);
   box-shadow: none;
@@ -986,39 +1015,41 @@ button {
   padding: 0 2px;
 }
 
-/* Gruppe (z. B. BeatBox): der Kanalzug führt den ganzen Kit-Bus, ein
-   Klapp-Button daneben zeigt/versteckt die einzelnen Drum-Spuren. */
-.mixer-group {
-  flex: 0 0 auto;
-  scroll-snap-align: start;
+/* Drum-Gruppe (BeatBox/AnalogKit) im Vollbild-Kanalzug: Kit-Bus-Kanalzug
+   oben, ein Klapp-Button darunter zeigt/versteckt die einzelnen Drum-
+   Spuren -- vertikal gestapelt statt nebeneinander (anders als früher
+   .mixer-group, das noch in der horizontal scrollenden Liste sass).
+   Nutzer-Anfrage: "die Gruppe ausklappen und dann die einzelnen Sounds
+   pegeln", genau wie im alten Mixer, nur jetzt im Vollbild-Kanalzug. */
+.cs-group {
   display: flex;
-  align-items: stretch;
-  gap: 6px;
-  padding: 6px;
-  border-radius: var(--r-ctl);
-  background: var(--m-color-tint, rgba(255,255,255,.03));
-  box-shadow: var(--shadow-panel);
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
-.mixer-group__toggle {
-  flex: 0 0 auto;
-  width: 22px;
-  align-self: stretch;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  background: rgba(0,0,0,.2);
+.cs-group__toggle {
+  width: 100%;
+  max-width: 360px;
+  min-height: 44px;
+  border-radius: 8px;
+  background: var(--m-color-tint, rgba(255,255,255,.03));
   color: var(--ink-dim);
-  font-size: 13px;
+  font-size: 12px;
+  letter-spacing: .03em;
   touch-action: manipulation;
 }
-.mixer-group__toggle::after { content: "‹"; }
-.mixer-group.is-collapsed .mixer-group__toggle::after { content: "›"; }
-.mixer-group__subtracks {
+.cs-group__toggle::after { content: "▾  Drum Tracks"; }
+.cs-group.is-collapsed .cs-group__toggle::after { content: "▸  Drum Tracks"; }
+.cs-group__subtracks {
   display: flex;
+  flex-direction: column;
   align-items: stretch;
   gap: 6px;
+  width: 100%;
+  max-width: 360px;
 }
-.mixer-group.is-collapsed .mixer-group__subtracks { display: none; }
+.cs-group.is-collapsed .cs-group__subtracks { display: none; }
 
 #btn-song-arm.is-active {
   color: #fff; background: linear-gradient(#b33a3a, #7e2727);
