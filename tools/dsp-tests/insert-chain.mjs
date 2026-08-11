@@ -24,7 +24,7 @@ await page.waitForSelector('.rack-row');
 
 // Default project seeds BeatBox + SubSynth — open the first rack row to
 // reveal the full editor with the insert chain.
-await page.click('.rack-row');
+await page.click('.rack-row .rack-row__name');
 await page.waitForTimeout(300);
 const machine = await page.evaluateHandle(() => {
   const all = [...document.querySelectorAll('.machine')].filter((m) => m.offsetParent !== null && !m.classList.contains('machine--master') && m.querySelector('[data-add-insert]'));

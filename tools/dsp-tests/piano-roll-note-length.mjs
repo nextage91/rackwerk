@@ -48,7 +48,7 @@ await page.evaluate(() => {
   sub.seq?.setPattern(sub.pattern); // erzwingt einen Redraw des (noch verborgenen) Grids
 });
 
-await page.locator('.rack-row', { hasText: 'SubSynth' }).click();
+await page.locator('.rack-row', { hasText: 'SubSynth' }).locator('.rack-row__name').click();
 await page.waitForSelector('.machine-focus:not([hidden])');
 await page.waitForTimeout(300);
 

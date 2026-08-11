@@ -36,7 +36,7 @@ await openApp(page, baseUrlFromArgv());
 // einem anfangs verborgenen .machine-focus-Overlay (s. rack.js#openFocus)
 // -- #rack selbst zeigt nur die kompakte .rack-row-Zusammenfassung. Erst
 // ein Klick auf die Zeile öffnet das Overlay mit dem echten Panel.
-await page.locator('.rack-row', { hasText: 'SubSynth' }).click();
+await page.locator('.rack-row', { hasText: 'SubSynth' }).locator('.rack-row__name').click();
 await page.waitForSelector('.machine-focus:not([hidden])');
 await page.waitForTimeout(300);
 const subsynth = page.locator('.machine-focus:not([hidden]) .machine');

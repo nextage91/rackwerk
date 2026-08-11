@@ -222,14 +222,21 @@
     </div>
   </div>
 
-  <!-- ===== Mixer (Bottom Sheet) ===== -->
+  <!-- ===== Kanalzug (Bottom Sheet, Vollbild-Mixer für EINE Maschine/Master) =====
+       Ersetzt die alte Mixer-Listenansicht (Nutzer-Anfrage: horizontal
+       gescrollte 124px-Spalten waren auf dem Phone kaum präzise bedienbar) --
+       ein Ziel nach dem anderen, dafür mit richtig grossem Fader. -->
   <div class="sheet sheet--console" id="mixer-sheet" hidden>
-    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Mixer">
+    <div class="sheet__panel sheet__panel--console" role="dialog" aria-label="Channel Strip">
       <div class="console__head">
-        <h2 class="sheet__title">Mixer</h2>
-        <button class="m-btn console__close" id="btn-mixer-close" aria-label="Close mixer" data-close>✕</button>
+        <div class="console__head-left">
+          <button class="m-btn cs-nav-btn" id="btn-cs-prev" aria-label="Previous channel">‹</button>
+          <h2 class="sheet__title" id="cs-title">Mixer</h2>
+          <button class="m-btn cs-nav-btn" id="btn-cs-next" aria-label="Next channel">›</button>
+        </div>
+        <button class="m-btn console__close" id="btn-mixer-close" aria-label="Close channel strip" data-close>✕</button>
       </div>
-      <div class="mixer-console" id="mixer-list"></div>
+      <div class="channel-strip" id="channel-strip"></div>
     </div>
   </div>
 

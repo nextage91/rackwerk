@@ -99,7 +99,7 @@ check('BeatBox: vel=0.25 klingt deutlich leiser als vel=1', dsp.rmsDrumQuiet < d
 check('BeatBox: vel=0.25 ist trotzdem noch hörbar (nicht stumm)', dsp.rmsDrumQuiet > dsp.rmsDrumFull * 0.05);
 
 // ---------- 2) UI: Velocity-Popup bei SubSynth (Pitch-Picker) ----------
-await page.locator('.rack-row', { hasText: 'SubSynth' }).click();
+await page.locator('.rack-row', { hasText: 'SubSynth' }).locator('.rack-row__name').click();
 await page.waitForSelector('.machine-focus:not([hidden])');
 await page.waitForTimeout(300);
 
@@ -160,7 +160,7 @@ check('Popup schliesst nach Tap ausserhalb', (await page.locator('.pitch-picker'
 // "Tap ausserhalb" gerade trifft) und jede Maschine startet ohnehin wieder
 // mit der bekannten Demo-Besetzung (s. project.js#newProject).
 await openApp(page, baseUrlFromArgv());
-await page.locator('.rack-row', { hasText: 'BeatBox' }).click();
+await page.locator('.rack-row', { hasText: 'BeatBox' }).locator('.rack-row__name').click();
 await page.waitForSelector('.machine-focus:not([hidden])');
 await page.waitForTimeout(300);
 

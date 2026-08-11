@@ -77,6 +77,7 @@ MODULES = [
     ("js/rack/rack.js",         ["Rack", "REGISTRY"]),
     ("js/rack/jam-view.js",     ["initJamView", "renderJamView", "stopAllClips", "exitJamMode", "serializeScenes", "deserializeScenes"]),
     ("js/core/project.js",      ["serializeProject", "loadProject", "importMachines", "newProject"]),
+    ("js/ui/channel-strip-view.js", ["initChannelStripView", "openChannelStrip"]),
     ("js/main.js",              []),
 ]
 
