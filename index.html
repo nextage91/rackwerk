@@ -348,7 +348,16 @@ button {
    (.insert-module .machine__head-actions .m-btn), die dasselbe Problem
    (viele kleine Sekundär-Aktionen in wenig Platz) schon lösen. */
 .rack-row__move { display: flex; flex-direction: column; gap: 2px; }
-.rack-row__actions .rack-row__move-btn { min-width: 26px; min-height: 22px; padding: 0; font-size: 10px; line-height: 1; }
+/* 26x22 -> 32x30: der Touch-Ziel-Audit (Chat) flaggte die alte Grösse als
+   eines von zwei Zielen mit echtem Fehlklick-Risiko -- knapp daneben
+   landet der Tipp nicht einfach "daneben", sondern auf der Zeile selbst
+   (öffnet den Vollbild-Editor statt zu verschieben), weil die Zeile
+   ausserhalb der Buttons einen eigenen, breiten Klick-Handler hat. Noch
+   nicht die vollen --tap-min 44px (zwei gestapelte 44px-Pfeile würden die
+   ohnehin schon volle Kompakt-Zeile deutlich strecken), aber ein
+   spürbarer Sprung -- die Zeile wächst dank min-height statt fixer
+   Höhe automatisch mit, kein Layout-Bruch. */
+.rack-row__actions .rack-row__move-btn { min-width: 32px; min-height: 30px; padding: 0; font-size: 10px; line-height: 1; }
 .rack-row__move-btn:disabled { opacity: .3; }
 .rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
 
@@ -3194,8 +3203,19 @@ x-knob.has-auto .knob__dial::after {
   flex-wrap: wrap;
   row-gap: 6px;
 }
+/* min-width 28px -> 36px: der Touch-Ziel-Audit (Chat) flaggte diese Buttons
+   (Verschieben/Bypass/Entfernen in Insert- und Modular-Kopfzeilen) als
+   eines von zwei Zielen mit echtem Fehlklick-Risiko -- die Zeilen liegen
+   dicht gepackt nebeneinander, ein knapp verfehlter Tipp landet leicht auf
+   dem falschen Nachbar-Insert statt auf dem gemeinten Button. Jetzt
+   quadratisch zur schon vorhandenen 36px min-height statt eines schmalen
+   28x36-Rechtecks. Nicht die vollen --tap-min 44px: bei 4 Buttons in einer
+   Kopfzeile mit Titel+Meter würde das öfter in den zweiten Zeilenumbruch
+   zwingen (s. Kommentar bei .insert-module .machine__head oben) -- 36px
+   ist der Punkt, an dem die reale Fehlklick-Fläche spürbar kleiner wird,
+   ohne die Kopfzeile auf den meisten Bildschirmen umbrechen zu lassen. */
 .insert-module .machine__head-actions .m-btn, .mod-module .machine__head-actions .m-btn {
-  min-width: 28px;
+  min-width: 36px;
   padding: 4px 5px;
   font-size: 11px;
 }

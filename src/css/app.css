@@ -251,7 +251,16 @@ button {
    (.insert-module .machine__head-actions .m-btn), die dasselbe Problem
    (viele kleine Sekundär-Aktionen in wenig Platz) schon lösen. */
 .rack-row__move { display: flex; flex-direction: column; gap: 2px; }
-.rack-row__actions .rack-row__move-btn { min-width: 26px; min-height: 22px; padding: 0; font-size: 10px; line-height: 1; }
+/* 26x22 -> 32x30: der Touch-Ziel-Audit (Chat) flaggte die alte Grösse als
+   eines von zwei Zielen mit echtem Fehlklick-Risiko -- knapp daneben
+   landet der Tipp nicht einfach "daneben", sondern auf der Zeile selbst
+   (öffnet den Vollbild-Editor statt zu verschieben), weil die Zeile
+   ausserhalb der Buttons einen eigenen, breiten Klick-Handler hat. Noch
+   nicht die vollen --tap-min 44px (zwei gestapelte 44px-Pfeile würden die
+   ohnehin schon volle Kompakt-Zeile deutlich strecken), aber ein
+   spürbarer Sprung -- die Zeile wächst dank min-height statt fixer
+   Höhe automatisch mit, kein Layout-Bruch. */
+.rack-row__actions .rack-row__move-btn { min-width: 32px; min-height: 30px; padding: 0; font-size: 10px; line-height: 1; }
 .rack-row__move-btn:disabled { opacity: .3; }
 .rack-row__chevron { color: var(--ink-faint); font-size: 20px; line-height: 1; }
 
