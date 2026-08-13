@@ -142,16 +142,19 @@ function renderCurrent() {
   const { color } = target.constructor.meta;
 
   if (Array.isArray(target.tracks)) {
-    // Drum-Gruppe (BeatBox/AnalogKit): Kit-Bus-Kanalzug + Ausklapp-Toggle
-    // für die einzelnen Spuren darunter -- gleiches Prinzip wie vorher im
-    // Mixer-Sheet, nur vertikal gestapelt statt nebeneinander, weil dieser
-    // Kanalzug den ganzen Bildschirm für sich hat (Nutzer-Anfrage: "wie
-    // bei den anderen, nur dass man in der Vollbild-Ansicht die Gruppe
-    // ausklappen und dann die einzelnen Sounds pegeln kann").
+    // Drum-Gruppe (BeatBox/AnalogKit): Kit-Bus-Kanalzug + Ausklapp-Toggle,
+    // die Spuren erscheinen beim Ausklappen RECHTS DANEBEN im selben
+    // horizontalen Scroll-Fluss statt in einer neuen Zeile darunter
+    // (Nutzer-Anfrage, 2. Anlauf: "auch das Aufklappen seitlich, nicht nach
+    // unten") -- .cs-group__main bündelt Kit-Bus+Toggle als erste "Seite"
+    // dieses Scrolls, s. app.css für die Layout-Begründung.
     const wrap = document.createElement('div');
     wrap.className = 'cs-group';
     wrap.style.setProperty('--m-color', color);
     if (!expandedGroups.has(target)) wrap.classList.add('is-collapsed');
+
+    const mainCol = document.createElement('div');
+    mainCol.className = 'cs-group__main';
 
     const main = buildStrip(target, { name, big: true });
 
@@ -163,6 +166,9 @@ function renderCurrent() {
       const collapsed = wrap.classList.toggle('is-collapsed');
       if (collapsed) expandedGroups.delete(target); else expandedGroups.add(target);
     });
+
+    mainCol.appendChild(main);
+    mainCol.appendChild(toggle);
 
     const subtracks = document.createElement('div');
     subtracks.className = 'cs-group__subtracks';
@@ -179,8 +185,7 @@ function renderCurrent() {
       subtracks.appendChild(sub);
     });
 
-    wrap.appendChild(main);
-    wrap.appendChild(toggle);
+    wrap.appendChild(mainCol);
     wrap.appendChild(subtracks);
     bodyEl.appendChild(wrap);
     return;
