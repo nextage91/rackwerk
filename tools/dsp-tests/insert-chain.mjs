@@ -142,7 +142,7 @@ await page.waitForTimeout(100);
 
 await addEffect('phaser');
 let phaserRow = await machine.evaluateHandle((el) => el.querySelector('.inserts .insert-module'));
-check('phaser: standard param knobs rendered (rate/depth/feedback/mix)', await phaserRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 4));
+check('phaser: standard param knobs rendered (rate/depth/feedback/width/mix)', await phaserRow.evaluate((r) => r.querySelectorAll('[data-insert-param]').length === 5));
 await phaserRow.evaluate((r) => r.querySelector('[data-remove]').click());
 await page.waitForTimeout(100);
 

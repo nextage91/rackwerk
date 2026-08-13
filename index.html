@@ -21369,7 +21369,12 @@ const DEFS = {
     // eine modulierte Delay-ZEIT innerhalb einer Rückkopplungsschleife wäre
     // dagegen der bei DEFS.reverb dokumentierte Instabilitätsfall.
     latencySec: CHORUS_BASE_DELAY_SEC,
-    defaults: { rate: 0.8, depth: 0.5, width: 0.7, mix: 0.35 },
+    // width/mix bewusst am oberen Ende (statt z.B. 0.5/0.5): bei stärker
+    // gedämpfter Stereobreite/Mix bleibt der weitgehend mittige Dry-Anteil
+    // dominant und verwässert die per Messung bestätigte echte Stereo-
+    // Verbreiterung hörbar (Nutzer-Bugreport "klingt sehr mono" -- Grund
+    // war der konservative Default, nicht die DSP selbst).
+    defaults: { rate: 0.8, depth: 0.5, width: 1, mix: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
       const output = ctx.createGain();
@@ -21455,7 +21460,27 @@ const DEFS = {
     // exakt durch den feedback-Reglerwert selbst begrenzt (<=0.9), nie
     // höher. Trotzdem per Stresstest verifiziert (tools/dsp-tests/chorus-
     // phaser.mjs), nicht nur aus der Theorie angenommen.
-    defaults: { rate: 0.3, depth: 0.6, feedback: 0.3, mix: 0.5 },
+    //
+    // GENAU jenes |H(f)|=1 macht den reinen Wet-Ausgang (ohne Dry) aber
+    // auch fast ununterscheidbar von Dry -- der hörbare "Swoosh" entsteht
+    // erst durch die INTERFERENZ von Dry+Wet (Kammfilter), nicht durch die
+    // Allpass-Kette allein. Ein simpler Dry/Wet-Crossfade, der bei Mix=100%
+    // dry.gain auf 0 fährt, würde also ausgerechnet am oberen Reglerende
+    // die Interferenz -- und damit den Effekt -- wegnehmen (Nutzer-
+    // Bugreport, per Offline-Spektrum-Messung bestätigt: Median-Differenz
+    // zum Dry-Signal <0.4dB bei feedback=0). Fix: JEDER Kanal bekommt
+    // seinen eigenen festen 50/50-Blend aus Original + Allpass-Kette
+    // (phasedL/phasedR unten), BEVOR der Mix-Regler überhaupt greift --
+    // der Regler blendet also zwischen "rein trocken" und "voll
+    // interferierendem Phaser", nie zwischen "trocken" und "Allpass pur".
+    //
+    // Stereobreite: zwei komplette Ketten (L/R), von DERSELBEN LFO über
+    // eine invertierte Spannung gegenphasig angesteuert -- exakt dieselbe
+    // Technik wie bei DEFS.chorus oben (s. dortigen Kommentar, warum eine
+    // einzelne invertierte LFO zwei unabhängigen Oszillatoren vorgezogen
+    // wird). Jede Kette hat ihr eigenes Feedback, bleibt also für sich
+    // genommen exakt so stabil begrenzt wie die bisherige Mono-Version.
+    defaults: { rate: 0.3, depth: 0.6, feedback: 0.3, width: 1, mix: 0.5 },
     build(ctx, p) {
       const input = ctx.createGain();
       const output = ctx.createGain();
@@ -21468,33 +21493,64 @@ const DEFS = {
       lfo.type = 'sine';
       lfo.frequency.value = p.rate;
       lfo.start();
+      const invertLfo = ctx.createGain();
+      invertLfo.gain.value = -1;
+      lfo.connect(invertLfo);
 
-      const stages = PHASER_STAGE_FREQS.map((freq) => {
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'allpass';
-        filter.frequency.value = freq;
-        filter.Q.value = PHASER_STAGE_Q;
-        const modGain = ctx.createGain();
-        modGain.gain.value = freq * PHASER_DEPTH_FACTOR * p.depth;
-        lfo.connect(modGain).connect(filter.frequency);
-        return { filter, modGain, baseFreq: freq };
-      });
+      function buildChain(lfoSource) {
+        const stages = PHASER_STAGE_FREQS.map((freq) => {
+          const filter = ctx.createBiquadFilter();
+          filter.type = 'allpass';
+          filter.frequency.value = freq;
+          filter.Q.value = PHASER_STAGE_Q;
+          const modGain = ctx.createGain();
+          modGain.gain.value = freq * PHASER_DEPTH_FACTOR * p.depth;
+          lfoSource.connect(modGain).connect(filter.frequency);
+          return { filter, modGain, baseFreq: freq };
+        });
 
-      const stageInput = ctx.createGain();
-      input.connect(stageInput);
-      let node = stageInput;
-      for (const stage of stages) { node.connect(stage.filter); node = stage.filter; }
-      const chainOut = node;
+        const stageInput = ctx.createGain();
+        let node = stageInput;
+        for (const stage of stages) { node.connect(stage.filter); node = stage.filter; }
+        const chainOut = node;
 
-      const feedbackGain = ctx.createGain();
-      feedbackGain.gain.value = p.feedback;
-      const feedbackClip = ctx.createWaveShaper();
-      feedbackClip.curve = makeFeedbackClipCurve();
-      feedbackClip.oversample = '2x';
-      chainOut.connect(feedbackGain).connect(feedbackClip).connect(stageInput);
+        const feedbackGain = ctx.createGain();
+        feedbackGain.gain.value = p.feedback;
+        const feedbackClip = ctx.createWaveShaper();
+        feedbackClip.curve = makeFeedbackClipCurve();
+        feedbackClip.oversample = '2x';
+        chainOut.connect(feedbackGain).connect(feedbackClip).connect(stageInput);
+
+        return { stageInput, chainOut, stages, feedbackGain, feedbackClip };
+      }
+
+      const chainL = buildChain(lfo);
+      const chainR = buildChain(invertLfo);
+      input.connect(chainL.stageInput);
+      input.connect(chainR.stageInput);
+
+      // Fester interner 50/50-Blend pro Kanal (s. Kommentar oben) --
+      // reine UI-unabhängige Konstante, NICHT vom Mix-Regler betroffen.
+      const phasedL = ctx.createGain();
+      const phasedR = ctx.createGain();
+      const blendDryL = ctx.createGain(); blendDryL.gain.value = 0.5;
+      const blendWetL = ctx.createGain(); blendWetL.gain.value = 0.5;
+      const blendDryR = ctx.createGain(); blendDryR.gain.value = 0.5;
+      const blendWetR = ctx.createGain(); blendWetR.gain.value = 0.5;
+      input.connect(blendDryL).connect(phasedL);
+      chainL.chainOut.connect(blendWetL).connect(phasedL);
+      input.connect(blendDryR).connect(phasedR);
+      chainR.chainOut.connect(blendWetR).connect(phasedR);
+
+      const panL = ctx.createStereoPanner();
+      const panR = ctx.createStereoPanner();
+      panL.pan.value = -p.width;
+      panR.pan.value = p.width;
+      phasedL.connect(panL).connect(wet);
+      phasedR.connect(panR).connect(wet);
 
       input.connect(dry).connect(output);
-      chainOut.connect(wet).connect(output);
+      wet.connect(output);
 
       return {
         input, output,
@@ -21502,17 +21558,28 @@ const DEFS = {
           const t = engine.now;
           if (key === 'rate') lfo.frequency.setTargetAtTime(v, t, 0.05);
           else if (key === 'depth') {
-            for (const stage of stages) stage.modGain.gain.setTargetAtTime(stage.baseFreq * PHASER_DEPTH_FACTOR * v, t, 0.05);
-          } else if (key === 'feedback') feedbackGain.gain.setTargetAtTime(v, t, 0.02);
-          else if (key === 'mix') {
+            for (const chain of [chainL, chainR]) {
+              for (const stage of chain.stages) stage.modGain.gain.setTargetAtTime(stage.baseFreq * PHASER_DEPTH_FACTOR * v, t, 0.05);
+            }
+          } else if (key === 'feedback') {
+            chainL.feedbackGain.gain.setTargetAtTime(v, t, 0.02);
+            chainR.feedbackGain.gain.setTargetAtTime(v, t, 0.02);
+          } else if (key === 'width') {
+            panL.pan.setTargetAtTime(-v, t, 0.02);
+            panR.pan.setTargetAtTime(v, t, 0.02);
+          } else if (key === 'mix') {
             dry.gain.setTargetAtTime(1 - v, t, 0.01);
             wet.gain.setTargetAtTime(v, t, 0.01);
           }
         },
         dispose() {
-          lfo.stop(); lfo.disconnect();
-          for (const stage of stages) { stage.filter.disconnect(); stage.modGain.disconnect(); }
-          stageInput.disconnect(); feedbackGain.disconnect(); feedbackClip.disconnect();
+          lfo.stop(); lfo.disconnect(); invertLfo.disconnect();
+          for (const chain of [chainL, chainR]) {
+            for (const stage of chain.stages) { stage.filter.disconnect(); stage.modGain.disconnect(); }
+            chain.stageInput.disconnect(); chain.feedbackGain.disconnect(); chain.feedbackClip.disconnect();
+          }
+          blendDryL.disconnect(); blendWetL.disconnect(); blendDryR.disconnect(); blendWetR.disconnect();
+          phasedL.disconnect(); phasedR.disconnect(); panL.disconnect(); panR.disconnect();
           input.disconnect(); output.disconnect(); dry.disconnect(); wet.disconnect();
         },
       };
@@ -22195,6 +22262,7 @@ const UI_PARAMS = {
     { key: 'rate', label: 'Rate', min: 0.02, max: 8, curve: 'log', unit: 'Hz' },
     { key: 'depth', label: 'Depth', min: 0, max: 1, unit: '' },
     { key: 'feedback', label: 'Feedback', min: 0, max: 0.9, unit: '' },
+    { key: 'width', label: 'Width', min: 0, max: 1, unit: '' },
     { key: 'mix', label: 'Mix', min: 0, max: 1, unit: '' },
   ],
   gate: [
