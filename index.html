@@ -1039,16 +1039,24 @@ button {
 
 /* Unter-Kanalzüge (Drum-Spuren einer aufgeklappten Gruppe) -- tragen
    dieselben drei Regler (Pan+2 Sends), sparen sich aber die Mute/Solo-
-   Reihe. Untereinander statt nebeneinander (anders als früher in der
-   horizontal scrollenden Mixer-Liste), darum volle Breite statt fixer
-   124px-Spalte. */
+   Reihe. Feste schmale Spaltenbreite (wie früher in der horizontal
+   scrollenden Mixer-Liste) statt voller Breite -- Nutzer-Anfrage: seitlich
+   nebeneinander statt untereinander gestapelt, damit man durch die
+   Drum-Sounds wischt statt die ganze Seite runterzuscrollen, UND der
+   Fader dabei genauso gross bleibt wie der Haupt-Kanalzug oben (s.
+   .chstrip--sub .chstrip__meters unten). */
 .chstrip--sub {
-  width: 100%;
-  max-width: 360px;
+  flex: 0 0 124px;
+  width: auto;
+  max-width: none;
+  scroll-snap-align: start;
   padding-top: 6px;
   background: rgba(0,0,0,.15);
   box-shadow: none;
 }
+/* Gleicher Fader-Hub wie .chstrip--big -- der eigentliche Punkt der
+   seitlichen Anordnung (Nutzer-Anfrage). */
+.chstrip--sub .chstrip__meters { min-height: 300px; }
 .chstrip__head {
   display: flex;
   align-items: center;
@@ -1138,13 +1146,21 @@ button {
 }
 .cs-group__toggle::after { content: "▾  Drum Tracks"; }
 .cs-group.is-collapsed .cs-group__toggle::after { content: "▸  Drum Tracks"; }
+/* Horizontal statt vertikal gestapelt (Nutzer-Anfrage) -- eine Reihe fest
+   124px breiter Kanalzüge, seitlich durchwischbar, genau wie früher die
+   Mixer-Liste. max-width bleibt das "Fenster", durch das gescrollt wird
+   -- der Inhalt selbst darf breiter sein. */
 .cs-group__subtracks {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
   gap: 6px;
   width: 100%;
   max-width: 360px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  padding-bottom: 4px;
 }
 .cs-group.is-collapsed .cs-group__subtracks { display: none; }
 
