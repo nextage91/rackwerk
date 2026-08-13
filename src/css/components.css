@@ -1567,7 +1567,13 @@ x-meter.is-vertical .x-meter__clip { margin-left: 0; margin-bottom: 4px; }
    verfügbarer Kopfzeilenbreite bei 320px-Viewport). Eigene Zeile statt
    Kürzen der Skala -- die Zahlen sind ja gerade der Punkt der Anzeige. */
 .machine--master .machine__head { flex-wrap: wrap; row-gap: 4px; }
-.fx__meter { flex-basis: 100%; margin-left: 0; }
+/* Meter + Vollbild-Kanalzug-Button als ein Grüppchen -- der Button sitzt
+   bewusst direkt neben dem Meter statt weit rechts wie zuvor (Nutzer-
+   Anfrage: "einen Faderbutton dort wo weiss markiert" -- die Stelle war
+   genau das Meter). */
+.fx__meterwrap { flex-basis: 100%; margin-left: 0; display: flex; align-items: center; gap: 8px; }
+.fx__meter { flex: 1 1 auto; }
+.fx__meterwrap .m-btn--mixstrip { flex: 0 0 auto; min-width: 40px; min-height: 40px; padding: 0; color: var(--m-color, var(--ink-dim)); }
 
 /* ===================== Master-FX-Panel (Rack-Ende) ===================== */
 .machine--master .fx__row { align-items: center; }

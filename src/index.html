@@ -54,11 +54,14 @@
     <!-- Maschinen-Slots werden hier von js/rack/rack.js gerendert -->
   </main>
 
-  <!-- ===== Bottom-Bar: Rack/Mix/Song/Jam-Umschalter + Play/Stop/REC =====
-       Ersetzt die Rack-Kurzwahl-Kacheln + PRJ-Sheet-Buttons für Mixer/Song/
-       Jam (immer erreichbar statt scroll-abhängig, s. UI-Review K2/K3) und
+  <!-- ===== Bottom-Bar: Rack/Song/Jam-Umschalter + Play/Stop/REC =====
+       Ersetzt die Rack-Kurzwahl-Kacheln + PRJ-Sheet-Buttons für Song/Jam
+       (immer erreichbar statt scroll-abhängig, s. UI-Review K2/K3) und
        zieht Play/Stop/REC aus der Transport-Leiste hierher, damit sie auch
-       bei offenem Mixer/Song/Jam bedienbar bleiben. -->
+       bei offenem Song/Jam bedienbar bleiben. Keinen eigenen "Mix"-Tab mehr
+       (Nutzer-Anfrage) -- der Vollbild-Kanalzug öffnet sich stattdessen
+       direkt über einen Button pro Rack-Zeile bzw. am Master-FX-Panel
+       selbst, s. rack.js/fx.js. -->
   <footer class="bottombar" id="bottombar">
     <nav class="bb-modes">
       <button class="bb-mode is-active" data-mode="rack" aria-label="Rack">
@@ -66,17 +69,6 @@
           <rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="5" rx="1"/><rect x="3" y="18" width="10" height="2.5" rx="1"/>
         </svg>
         <span>Rack</span>
-      </button>
-      <button class="bb-mode" data-mode="mix" aria-label="Mixer">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <rect x="2.5" y="12.5" width="5" height="3" rx="1" fill="currentColor"/>
-          <rect x="9.5" y="6.5" width="5" height="3" rx="1" fill="currentColor"/>
-          <rect x="16.5" y="15.5" width="5" height="3" rx="1" fill="currentColor"/>
-        </svg>
-        <span>Mix</span>
       </button>
       <button class="bb-mode" data-mode="song" aria-label="Song Timeline">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
