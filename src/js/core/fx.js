@@ -549,9 +549,9 @@ class MasterFX {
           <div class="machine__name">Master FX</div>
           <div class="machine__type">RW-MX · delay + reverb</div>
         </div>
-        <x-meter class="fx__meter" aria-label="Master level"></x-meter>
-        <div class="machine__head-actions">
-          <button type="button" class="m-btn" data-open-strip aria-label="Open master channel strip">MIX</button>
+        <div class="fx__meterwrap">
+          <x-meter class="fx__meter" aria-label="Master level"></x-meter>
+          <button type="button" class="m-btn m-btn--mixstrip" data-open-strip aria-label="Open master channel strip">🎚</button>
         </div>
       </header>
       <div class="machine__body">

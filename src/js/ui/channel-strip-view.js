@@ -191,7 +191,16 @@ function renderCurrent() {
   bodyEl.appendChild(strip);
 }
 
-export function openChannelStrip(target) {
+function openChannelStrip(target) {
+  // Gleicher Hook wie rack.js#openFocus -- schliesst Projekt-/Song-/Jam-
+  // Sheet und ein offenes Maschinen-Fokus-/Add-Sheet, BEVOR dieser Sheet
+  // sich zeigt. Ohne das blieb z. B. das Song-Sheet im Hintergrund offen
+  // liegen, wenn man über den Rack-Zeilen-Button direkt in den Kanalzug
+  // sprang, statt über die (inzwischen entfernte) Bottom-Bar-Mix-Taste,
+  // die diesen Schritt vorher immer miterledigt hat (s. main.js#
+  // wireBottomBar) -- verletzt die App-weite "nur eine Ebene gleichzeitig
+  // offen"-Regel (main.js#closeAllOverlays).
+  rackRef.onBeforeOpenOverlay?.();
   currentTarget = target;
   renderCurrent();
   document.getElementById('mixer-sheet').hidden = false;

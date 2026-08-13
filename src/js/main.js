@@ -20,7 +20,7 @@ import { undo } from './core/undo.js';
 import { hintOnce, showHintToast } from './core/hints.js';
 import { Rack, REGISTRY } from './rack/rack.js';
 import { initJamView, renderJamView, stopAllClips, exitJamMode } from './rack/jam-view.js';
-import { initChannelStripView, openChannelStrip } from './ui/channel-strip-view.js';
+import { initChannelStripView } from './ui/channel-strip-view.js';
 
 const $ = (sel) => document.querySelector(sel);
 const SAMPLER_CLASS = REGISTRY.find((M) => M.meta.type === 'sampler');
@@ -879,10 +879,6 @@ function wireSongUI(rack) {
  * das Verdrahten mit dem Sheet-Rahmen aus index.html + der Bottom-Bar. */
 function wireChannelStripView(rack) {
   initChannelStripView(rack);
-  // Bottom-Bar-"Mix"-Tab springt direkt auf Master (Master hat keine eigene
-  // Rack-Zeile, s. fx.js -- der MIX-Button in seinem Panel-Header tut exakt
-  // dasselbe, dies ist nur der zusätzliche globale Schnellzugriff).
-  modeOpen.mix = () => openChannelStrip(masterFX);
 }
 
 /* ---------- 2b) Jam-Ansicht (Sheet öffnen/schließen — Rendering + Takt-Listener in jam-view.js) ---------- */
@@ -904,13 +900,16 @@ function wireJamViewUI() {
     .observe(sheet, { attributes: true, attributeFilter: ['hidden'] });
 }
 
-/* ---------- 2c) Bottom-Bar: Rack/Mix/Song/Jam-Umschalter ----------
+/* ---------- 2c) Bottom-Bar: Rack/Song/Jam-Umschalter ----------
  * Öffnet/schließt dieselben Sheets, die vorher übers PRJ-Sheet erreichbar
- * waren (modeOpen.mix/song/jam, s. wireChannelStripView/wireSongUI/wireJamViewUI) —
- * dupliziert also keine Render-/Meter-Logik. Zusätzlich: Mutual Exclusion
- * (nur eine Konsole gleichzeitig offen) und Active-Tab-Sync per
- * MutationObserver, weil jede Konsole auch über ihren eigenen ✕-Button
- * schließen kann, nicht nur über die Bottom-Bar selbst. */
+ * waren (modeOpen.song/jam, s. wireSongUI/wireJamViewUI) — dupliziert also
+ * keine Render-/Meter-Logik. Zusätzlich: Mutual Exclusion (nur eine
+ * Konsole gleichzeitig offen) und Active-Tab-Sync per MutationObserver,
+ * weil jede Konsole auch über ihren eigenen ✕-Button schließen kann, nicht
+ * nur über die Bottom-Bar selbst. #mixer-sheet bleibt Teil von `sheets`
+ * (Mutual-Exclusion + Desktop-Klick-ausserhalb-schliesst), obwohl es
+ * keinen eigenen Bottom-Bar-Tab mehr gibt -- öffnet sich jetzt über einen
+ * Button pro Rack-Zeile bzw. am Master-FX-Panel (s. rack.js/fx.js). */
 function wireBottomBar(rack) {
   const sheets = { mix: $('#mixer-sheet'), song: $('#song-sheet'), jam: $('#jam-sheet') };
   const modeBtns = document.querySelectorAll('.bb-mode');
@@ -1153,15 +1152,6 @@ const TOUR_STEPS = [
       const bank = panel?.querySelector('.patbank');
       if (!bank) return null;
       return { el: bank, container: bank, selector: '.patbank__btn', eventType: 'click' };
-    },
-  },
-  {
-    title: 'Mix',
-    body: '<b>Tap Mix</b> to see level, pan, sends and mute/solo for every machine at a glance.',
-    run(ctx) {
-      ctx.closeAllSheets();
-      const el = document.querySelector('.bb-mode[data-mode="mix"]');
-      return { el, container: el, selector: '.bb-mode[data-mode="mix"]', eventType: 'click' };
     },
   },
   {

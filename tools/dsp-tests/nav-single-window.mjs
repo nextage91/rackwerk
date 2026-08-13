@@ -10,12 +10,18 @@
  * blockierten im Fall des Add-Machine-Sheets sogar jeden weiteren Tap
  * komplett, per Reproduktion bestätigt).
  *
- * Prüft drei reale Navigationspfade, die vorher genau das auslösten:
+ * Prüft reale Navigationspfade, die vorher genau das auslösten:
  *  - Maschinen-Fokus offen lassen, per Bottom-Bar zu Jam wechseln,
  *  - "+Add Machine" -> neue Maschine (öffnet automatisch ihren Fokus) ->
- *    zu Mixer wechseln,
+ *    zu Song wechseln,
  *  - Maschinen-Fokus offen lassen, "Projects" über den eigenen Button
- *    öffnen (nicht über die Bottom-Bar).
+ *    öffnen (nicht über die Bottom-Bar),
+ *  - den neuen Vollbild-Kanalzug öffnen (Rack-Zeilen-Button bzw. Master-
+ *    FX-Panel-Button, s. rack.js/fx.js) -- der hat seit Entfernen des
+ *    Bottom-Bar-"Mix"-Tabs keinen eigenen Tab mehr, muss aber weiterhin
+ *    denselben "nur eine Ebene offen"-Vertrag einhalten (s. channel-
+ *    strip-view.js#openChannelStrip, ruft denselben onBeforeOpenOverlay-
+ *    Hook wie rack.js#openFocus).
  * In jedem Fall darf danach GENAU EINE Overlay-Ebene sichtbar sein.
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
@@ -57,7 +63,7 @@ console.log('Szenario 1 nach Tab-Wechsel:', layers);
 check('Szenario 1: genau EINE Ebene offen (nur Jam)', totalOpen(layers) === 1 && layers.jamSheet === 1);
 
 // --- Szenario 2: "+Add Machine" -> neue Maschine wählen (öffnet automatisch
-// deren Fokus, s. addMachine(..., {focus:true})) -> zu Mixer wechseln.
+// deren Fokus, s. addMachine(..., {focus:true})) -> zu Song wechseln.
 await page.click('.bb-mode[data-mode="rack"]');
 await page.waitForTimeout(200);
 await page.click('.rack__add');
@@ -68,11 +74,11 @@ layers = await openLayers();
 console.log('Szenario 2 nach Maschine hinzufügen:', layers);
 check('Szenario 2: neue Maschine öffnet ihren Fokus, Add-Sheet ist zu', layers.machineFocus === 1 && layers.machineSheet === 0);
 
-await page.click('.bb-mode[data-mode="mix"]');
+await page.click('.bb-mode[data-mode="song"]');
 await page.waitForTimeout(300);
 layers = await openLayers();
-console.log('Szenario 2 nach Tab-Wechsel zu Mixer:', layers);
-check('Szenario 2: genau EINE Ebene offen (nur Mixer)', totalOpen(layers) === 1 && layers.mixerSheet === 1);
+console.log('Szenario 2 nach Tab-Wechsel zu Song:', layers);
+check('Szenario 2: genau EINE Ebene offen (nur Song)', totalOpen(layers) === 1 && layers.songSheet === 1);
 
 // --- Szenario 3: Maschinen-Fokus offen lassen, dann "Projects" öffnen
 // (nicht über die Bottom-Bar, sondern den eigenen Button).
@@ -88,6 +94,34 @@ await page.waitForTimeout(200);
 layers = await openLayers();
 console.log('Szenario 3 nach Projects-Öffnen:', layers);
 check('Szenario 3: genau EINE Ebene offen (nur Projects)', totalOpen(layers) === 1 && layers.projectSheet === 1);
+
+// --- Szenario 4: der neue Vollbild-Kanalzug (kein eigener Bottom-Bar-Tab
+// mehr) -- Rack-Zeilen-Button UND Master-FX-Panel-Button öffnen ihn ohne
+// eine andere Ebene im Hintergrund offen zu lassen.
+// Szenario 3 liess #project-sheet offen -- schliessen für einen sauberen
+// Ausgangspunkt. Kein Klick: das Panel deckt auf Mobile-Breite auch den
+// Backdrop/die Bottom-Bar ab (echte Nutzer schliessen hier per Wisch-
+// Geste am .sheet__grip, nicht Gegenstand dieses Tests).
+await page.evaluate(() => { document.getElementById('project-sheet').hidden = true; });
+await page.waitForTimeout(200);
+await page.click('.bb-mode[data-mode="rack"]');
+await page.waitForTimeout(200);
+await page.click('.rack-row [data-open-strip]');
+await page.waitForTimeout(300);
+layers = await openLayers();
+console.log('Szenario 4 nach Rack-Zeilen-Kanalzug-Button:', layers);
+check('Szenario 4a: genau EINE Ebene offen (nur Mixer, via Rack-Zeile)', totalOpen(layers) === 1 && layers.mixerSheet === 1);
+await page.click('#btn-mixer-close');
+await page.waitForTimeout(200);
+
+await page.locator('#master-fx [data-open-strip]').scrollIntoViewIfNeeded();
+await page.click('#master-fx [data-open-strip]');
+await page.waitForTimeout(300);
+layers = await openLayers();
+console.log('Szenario 4 nach Master-FX-Panel-Kanalzug-Button:', layers);
+check('Szenario 4b: genau EINE Ebene offen (nur Mixer, via Master FX)', totalOpen(layers) === 1 && layers.mixerSheet === 1);
+await page.click('#btn-mixer-close');
+await page.waitForTimeout(200);
 
 check('Keine Seitenfehler', errors.length === 0);
 if (errors.length) console.log(errors);
