@@ -1034,7 +1034,15 @@ button {
 .chstrip--big .chstrip__name { font-size: 15px; -webkit-line-clamp: 1; }
 .chstrip--big .chstrip__knobs { gap: 16px; }
 .chstrip--big .chstrip__knobs x-knob { --knob-size: 44px; gap: 8px; }
-.chstrip--big .chstrip__meters { min-height: 300px; gap: 16px; }
+/* height statt min-height: der Kanalzug hängt inzwischen (Drum-Gruppe)
+   auch mal eine Verschachtelungsebene tiefer als ursprünglich (.cs-group
+   -> .cs-group__main -> .chstrip--big) -- mit nur min-height blieb dort
+   unklar, ob diese Höhe als "definit" für x-fader/x-fader (height:100%,
+   s. components.css) gilt, der Fader fiel auf seine Inhaltsgrösse
+   zurück statt zu stretchen. Ein fester Wert räumt die Mehrdeutigkeit
+   aus, ohne dass hier ohnehin je mehr Platz als 300px zur Verfügung
+   stünde (ganze Kette ist sonst überall inhaltsgetrieben). */
+.chstrip--big .chstrip__meters { height: 300px; gap: 16px; }
 .chstrip--big .chstrip__buttons .m-btn { min-height: 44px; font-size: 12px; }
 
 /* Unter-Kanalzüge (Drum-Spuren einer aufgeklappten Gruppe) -- tragen
@@ -1056,7 +1064,7 @@ button {
 }
 /* Gleicher Fader-Hub wie .chstrip--big -- der eigentliche Punkt der
    seitlichen Anordnung (Nutzer-Anfrage). */
-.chstrip--sub .chstrip__meters { min-height: 300px; }
+.chstrip--sub .chstrip__meters { height: 300px; }
 .chstrip__head {
   display: flex;
   align-items: center;
@@ -1126,16 +1134,37 @@ button {
    .mixer-group, das noch in der horizontal scrollenden Liste sass).
    Nutzer-Anfrage: "die Gruppe ausklappen und dann die einzelnen Sounds
    pegeln", genau wie im alten Mixer, nur jetzt im Vollbild-Kanalzug. */
+/* Nutzer-Anfrage (2. Anlauf): nicht nur das Scrollen der Spuren seitlich,
+   auch das AUSKLAPPEN selbst -- Kit-Bus bleibt oben stehen, die Spuren
+   erscheinen beim Ausklappen RECHTS DANEBEN in derselben Zeile statt in
+   einer neuen Zeile darunter. .cs-group ist darum selbst der horizontale
+   Scroll-Container: erste "Seite" ist .cs-group__main (Kit-Bus +
+   Toggle-Leiste darunter, unverändert), danach folgt (nur wenn
+   ausgeklappt) die Spuren-Reihe direkt im selben Scroll-Fluss -- man
+   wischt vom Kit-Bus aus einfach weiter nach rechts, statt dass die Seite
+   nach unten wächst. */
 .cs-group {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+.cs-group__main {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 360px;
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  width: 100%;
 }
 .cs-group__toggle {
   width: 100%;
-  max-width: 360px;
   min-height: 44px;
   border-radius: 8px;
   background: var(--m-color-tint, rgba(255,255,255,.03));
@@ -1146,21 +1175,16 @@ button {
 }
 .cs-group__toggle::after { content: "▾  Drum Tracks"; }
 .cs-group.is-collapsed .cs-group__toggle::after { content: "▸  Drum Tracks"; }
-/* Horizontal statt vertikal gestapelt (Nutzer-Anfrage) -- eine Reihe fest
-   124px breiter Kanalzüge, seitlich durchwischbar, genau wie früher die
-   Mixer-Liste. max-width bleibt das "Fenster", durch das gescrollt wird
-   -- der Inhalt selbst darf breiter sein. */
+/* Feste 124px breite Kanalzüge (wie früher die Mixer-Liste), Fader in
+   voller Hauptfader-Höhe (s. .chstrip--sub .chstrip__meters oben) --
+   Fortsetzung des Scroll-Flusses von .cs-group__main aus, kein eigener
+   Scroll-Container mehr nötig. */
 .cs-group__subtracks {
   display: flex;
   flex-direction: row;
   align-items: stretch;
   gap: 6px;
-  width: 100%;
-  max-width: 360px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
-  padding-bottom: 4px;
+  flex: 0 0 auto;
 }
 .cs-group.is-collapsed .cs-group__subtracks { display: none; }
 
@@ -37879,16 +37903,19 @@ function renderCurrent() {
   const { color } = target.constructor.meta;
 
   if (Array.isArray(target.tracks)) {
-    // Drum-Gruppe (BeatBox/AnalogKit): Kit-Bus-Kanalzug + Ausklapp-Toggle
-    // für die einzelnen Spuren darunter -- gleiches Prinzip wie vorher im
-    // Mixer-Sheet, nur vertikal gestapelt statt nebeneinander, weil dieser
-    // Kanalzug den ganzen Bildschirm für sich hat (Nutzer-Anfrage: "wie
-    // bei den anderen, nur dass man in der Vollbild-Ansicht die Gruppe
-    // ausklappen und dann die einzelnen Sounds pegeln kann").
+    // Drum-Gruppe (BeatBox/AnalogKit): Kit-Bus-Kanalzug + Ausklapp-Toggle,
+    // die Spuren erscheinen beim Ausklappen RECHTS DANEBEN im selben
+    // horizontalen Scroll-Fluss statt in einer neuen Zeile darunter
+    // (Nutzer-Anfrage, 2. Anlauf: "auch das Aufklappen seitlich, nicht nach
+    // unten") -- .cs-group__main bündelt Kit-Bus+Toggle als erste "Seite"
+    // dieses Scrolls, s. app.css für die Layout-Begründung.
     const wrap = document.createElement('div');
     wrap.className = 'cs-group';
     wrap.style.setProperty('--m-color', color);
     if (!expandedGroups.has(target)) wrap.classList.add('is-collapsed');
+
+    const mainCol = document.createElement('div');
+    mainCol.className = 'cs-group__main';
 
     const main = buildStrip(target, { name, big: true });
 
@@ -37900,6 +37927,9 @@ function renderCurrent() {
       const collapsed = wrap.classList.toggle('is-collapsed');
       if (collapsed) expandedGroups.delete(target); else expandedGroups.add(target);
     });
+
+    mainCol.appendChild(main);
+    mainCol.appendChild(toggle);
 
     const subtracks = document.createElement('div');
     subtracks.className = 'cs-group__subtracks';
@@ -37916,8 +37946,7 @@ function renderCurrent() {
       subtracks.appendChild(sub);
     });
 
-    wrap.appendChild(main);
-    wrap.appendChild(toggle);
+    wrap.appendChild(mainCol);
     wrap.appendChild(subtracks);
     bodyEl.appendChild(wrap);
     return;
