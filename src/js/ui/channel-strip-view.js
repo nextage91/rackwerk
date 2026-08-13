@@ -77,7 +77,18 @@ function buildStrip(target, { name, big = false, compact = false, withPan = true
       <x-knob label="Rev" min="0" max="1" value="${target.sends.reverb}" data-k="sendReverb"></x-knob>` : ''}
     </div>` : ''}
     <div class="chstrip__meters">
-      <x-meter${big ? '' : ' compact'} vertical></x-meter>
+      <!-- compact bleibt IMMER an, auch im grossen Haupt-Kanalzug: ohne
+           compact rendert x-meter zusätzlich seine eigene dB-Skala, die
+           bei vertical (x-meter selbst ist dann flex-direction:column)
+           als Geschwister-Element ÜBER dem LED-Balken steht und sich mit
+           ihm die Höhe teilt -- der LED-Balken füllt dann nur noch die
+           halbe Fader-Höhe, und die Skala des Faders daneben (components.
+           css) macht eine zweite, redundante Skala nur noch verwirrender.
+           compact+vertical ist die einzige Kombination, die im Rest der
+           App je benutzt wurde (Maschinen-Kopfzeile, Insert-Zeile) --
+           genau deshalb ist es hier auch bewusst kein Unterschied
+           zwischen "big" und den kleineren Varianten. -->
+      <x-meter compact vertical></x-meter>
       <x-fader default="1" value="${target.level}" data-k="level"></x-fader>
     </div>
     ${withMuteSolo ? `
