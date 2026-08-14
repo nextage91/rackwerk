@@ -18686,6 +18686,16 @@ class RackwerkBeatRepeatProcessor extends AudioWorkletProcessor {
     this.repeatStartPos = 0;
     this.gain = 1;
     this.hasCapturedBefore = false;
+    // Kurze An-/Abschwellzeit an JEDEM Grenze eines wiederholten Grains
+    // (Start eines Repeats, Schleifen-Nahtstelle innerhalb einer laufenden
+    // Wiederholungs-Serie, Rücksprung auf Live) -- ohne das springt der
+    // Lesezeiger auf einen beliebigen Sample-Wert, der so gut wie nie zum
+    // vorherigen passt (Nutzer-Bugreport "knackt/klickt", per Messung
+    // bestätigt: Sample-zu-Sample-Sprünge exakt an den Intervallgrenzen,
+    // ~15x grösser als bei einem glatten Signal möglich). NUR im "repeating"-
+    // Zweig wirksam -- reines Live-Durchleiten (chance=0) bleibt unverändert
+    // klickfrei, weil da nie der Lesezeiger springt.
+    this.fadeSamples = Math.max(1, Math.round(sampleRate * 0.003));
   }
   ensureChannels(n) { while (this.ring.length < n) this.ring.push(new Float32Array(this.ringLen)); }
 
@@ -18720,10 +18730,19 @@ class RackwerkBeatRepeatProcessor extends AudioWorkletProcessor {
           this.hasCapturedBefore = true;
         }
       }
+      let fadeEnv = 1;
+      if (this.repeating) {
+        const fadeLen = Math.min(this.fadeSamples, Math.floor(this.cycleLen / 2));
+        const p = this.cyclePos % this.cycleLen;
+        if (fadeLen > 0) {
+          if (p < fadeLen) fadeEnv = p / fadeLen;
+          else if (p >= this.cycleLen - fadeLen) fadeEnv = (this.cycleLen - 1 - p) / fadeLen;
+        }
+      }
       for (let ch = 0; ch < output.length; ch++) {
         if (this.repeating) {
           const idx = (this.repeatStartPos + (this.cyclePos % this.cycleLen)) % this.ringLen;
-          output[ch][i] = this.ring[ch % this.ring.length][idx] * this.gain;
+          output[ch][i] = this.ring[ch % this.ring.length][idx] * this.gain * fadeEnv;
         } else {
           const inCh = input && input.length ? input[ch % input.length] : null;
           output[ch][i] = inCh ? inCh[i] : 0;
