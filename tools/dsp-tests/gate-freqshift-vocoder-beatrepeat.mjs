@@ -16,9 +16,14 @@
  *    vollen FFT -- reicht für einen einzelnen Frequenz-Peak-Vergleich).
  *  - Vocoder: die Ausgabe folgt der AMPLITUDEN-Hüllkurve des Eingangs
  *    (Modulator), statt eine konstante Trägerfrequenz-Drohne zu sein.
- *  - Beat Repeat: bei chance=1 sinkt die Lautstärke über aufeinander-
- *    folgende Zyklen tatsächlich gemäss `decay` (deterministisch, da
- *    chance=1 IMMER wiederholt -- kein Zufallseinfluss auf die Reihenfolge).
+ *  - Beat Repeat: bei chance=1 sinkt die Lautstärke über eine Wiederholungs-
+ *    Serie gemäss `decay` (deterministisch, da chance=1 IMMER wiederholt --
+ *    kein Zufallseinfluss auf die Reihenfolge), springt aber spätestens
+ *    nach maxConsecutiveRepeats Wiederholungen wieder auf volle Lautstärke
+ *    zurück -- OHNE diese Zwangs-Neuaufnahme würde chance=1 (Regler auf
+ *    Anschlag) den Pegel unbegrenzt gegen null laufen lassen und NIE wieder
+ *    erholen (ehemaliger Bug, Nutzer-Report "chance auf voll + wet auf
+ *    100 -- klingt nichts").
  *
  * Voraussetzung: ein lokaler Server auf dem Repo-Root, z. B.
  *   python3 -m http.server 8901
@@ -309,8 +314,10 @@ const out = await page.evaluate(async () => {
     noiseSrc.connect(insert.input);
     noiseSrc.start();
 
-    // 1/8-Note bei Default-Tempo -- genug Zyklen in ~2.5s, um einen klaren
-    // Decay-Trend über mehrere Wiederholungen zu sehen.
+    // 1/8-Note bei Default-Tempo, maxConsecutiveRepeats=8 (s. beatrepeat-
+    // worklet.js) -- eine volle Wiederholungs-Serie dauert damit 8*0.25s=2s,
+    // die 2.5s dieses Fensters decken also EINEN kompletten Decay-Zyklus
+    // PLUS die Zwangs-Neuaufnahme danach ab.
     let anyNaN = false, maxPeak = 0;
     const samples = [];
     for (let i = 0; i < 25; i++) {
@@ -325,9 +332,19 @@ const out = await page.evaluate(async () => {
     analyser.disconnect();
     mute.disconnect();
 
-    const firstThird = samples.slice(0, 8).reduce((a, b) => a + b, 0) / 8;
-    const lastThird = samples.slice(-8).reduce((a, b) => a + b, 0) / 8;
-    results.beatRepeat = { firstThird, lastThird, anyNaN, maxPeak };
+    // Decay innerhalb der ersten Serie: früh lauter als kurz vor der
+    // erwarteten Zwangs-Neuaufnahme bei ~2s (Index 19-20).
+    const early = samples.slice(1, 4).reduce((a, b) => a + b, 0) / 3;
+    const beforeReset = samples.slice(17, 20).reduce((a, b) => a + b, 0) / 3;
+    // Erholung: irgendwo im Fenster muss die Lautstärke wieder deutlich
+    // nach oben springen (die Zwangs-Neuaufnahme) statt für immer leiser
+    // zu werden.
+    let maxJumpRatio = 0;
+    for (let i = 1; i < samples.length; i++) maxJumpRatio = Math.max(maxJumpRatio, samples[i] / (samples[i - 1] + 1e-9));
+    // Nie dauerhaft verstummt: das letzte Sample dieses Fensters darf nicht
+    // um Grössenordnungen leiser sein als ein frisches (ehemaliger Bug).
+    const lastSample = samples[samples.length - 1];
+    results.beatRepeat = { early, beforeReset, maxJumpRatio, lastSample, anyNaN, maxPeak };
   }
 
   // ---------- Stresstest: Parameter-Extreme + Live-Automation ----------
@@ -414,8 +431,12 @@ check('Vocoder: die beiden Messungen unterscheiden sich klar (kein statischer Ca
 
 check('Beat Repeat: kein NaN/Infinity', !out.beatRepeat.anyNaN);
 check('Beat Repeat: kein unbegrenztes Aufschaukeln (Peak <= 3.0)', out.beatRepeat.maxPeak <= 3);
-check('Beat Repeat: Lautstärke sinkt über die Zeit gemäss decay (chance=1, deterministisch)',
-  out.beatRepeat.lastThird < out.beatRepeat.firstThird * 0.5);
+check('Beat Repeat: Lautstärke sinkt innerhalb einer Wiederholungs-Serie gemäss decay (chance=1, deterministisch)',
+  out.beatRepeat.beforeReset < out.beatRepeat.early * 0.5);
+check('Beat Repeat: Zwangs-Neuaufnahme lässt die Lautstärke wieder deutlich nach oben springen (chance=1)',
+  out.beatRepeat.maxJumpRatio > 3);
+check('Beat Repeat: chance=1 verstummt NICHT dauerhaft (ehemaliger Bug)',
+  out.beatRepeat.lastSample > 0.01);
 
 check('Gate-Stresstest: kein NaN, kein Aufschaukeln (Peak <= 3.0)', !out.gateStress.anyNaN && out.gateStress.maxPeak <= 3);
 check('Frequency-Shifter-Stresstest: kein NaN, kein Aufschaukeln (Peak <= 3.0)', !out.freqShiftStress.anyNaN && out.freqShiftStress.maxPeak <= 3);
