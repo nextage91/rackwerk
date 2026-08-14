@@ -18647,15 +18647,32 @@ const { BEATREPEAT_WORKLET_SRC } = (() => {
  * welchem Zustand sich der Effekt gerade befindet. An jeder Intervall-
  * grenze (Länge = `intervalSec`, tempo-synchron von aussen gesetzt, s.
  * inserts.js#DEFS.beatRepeat) würfelt der Prozessor:
- *  - Treffer (< chance) UND es gibt bereits eine eingefrorene Scheibe:
- *    dieselbe Leseposition wie beim letzten Mal wird erneut abgespielt
- *    (nicht neu eingefangen) -- repeatCount steigt, die Lautstärke sinkt
- *    um (1-decay)^repeatCount.
+ *  - Treffer (< chance) UND es gibt bereits eine eingefrorene Scheibe UND
+ *    die laufende Wiederholungs-Serie hat maxConsecutiveRepeats noch nicht
+ *    erreicht: dieselbe Leseposition wie beim letzten Mal wird erneut
+ *    abgespielt (nicht neu eingefangen) -- repeatCount steigt, die
+ *    Lautstärke sinkt um (1-decay)^repeatCount.
  *  - sonst: die Leseposition wird auf die AKTUELLE Schreibposition gelegt
  *    (frisch eingefangen) und das Live-Signal läuft für dieses Intervall
  *    unverändert durch (repeatCount=0, Gain=1) -- bei chance=0 macht das
  *    dieses Insert zur reinen Durchleitung (keine hörbare Verzögerung, da
  *    im Frisch-Zustand IMMER live statt aus dem Puffer ausgegeben wird).
+ *
+ * Die maxConsecutiveRepeats-Grenze existiert, weil chance EXAKT 1 (Regler
+ * auf Anschlag) sonst nie mehr in den frisch-eingefangen-Zweig zurück
+ * könnte -- Math.random() ist per Definition immer < 1, der "sonst"-Zweig
+ * wäre also, sobald einmal repeating=true, für immer unerreichbar. Da
+ * decay dabei KUMULATIV wirkt (jede weitere Wiederholung multipliziert die
+ * Lautstärke erneut mit (1-decay)), lief das unbegrenzt gegen null -- nach
+ * wenigen Sekunden dauerhaft unhörbar leise, ohne je wieder lauter zu
+ * werden (Nutzer-Bugreport "chance auf voll + wet auf 100 -- klingt
+ * nichts", per Messung bestätigt: RMS fiel binnen 6s von Normallautstärke
+ * auf ~1e-8 und blieb dort). Die erzwungene Neuaufnahme spätestens nach
+ * maxConsecutiveRepeats Wiederholungen begrenzt den Lautstärkeabfall EINER
+ * Serie -- bei chance<1 praktisch unsichtbar, weil der Zufalls-Ausstieg
+ * dort ohnehin meist früher eintritt -- und garantiert bei chance=1
+ * trotzdem dauerhaft hörbares, sich weiter veränderndes Stottern statt
+ * permanenter Stille.
  *
  * Da der Ringpuffer beim Wiederholen exakt an der Stelle weiterliest, wo
  * die vorige Intervall-Länge live durchlief, enthält er zu diesem Zeitpunkt
@@ -18696,6 +18713,9 @@ class RackwerkBeatRepeatProcessor extends AudioWorkletProcessor {
     // Zweig wirksam -- reines Live-Durchleiten (chance=0) bleibt unverändert
     // klickfrei, weil da nie der Lesezeiger springt.
     this.fadeSamples = Math.max(1, Math.round(sampleRate * 0.003));
+    // s. Klassen-Kommentar oben -- verhindert, dass chance=1 den Gain
+    // unbegrenzt gegen null laufen lässt.
+    this.maxConsecutiveRepeats = 8;
   }
   ensureChannels(n) { while (this.ring.length < n) this.ring.push(new Float32Array(this.ringLen)); }
 
@@ -18718,7 +18738,7 @@ class RackwerkBeatRepeatProcessor extends AudioWorkletProcessor {
       }
       if (this.cyclePos === 0) {
         this.cycleLen = newCycleLen;
-        if (this.hasCapturedBefore && Math.random() < chance) {
+        if (this.hasCapturedBefore && this.repeatCount < this.maxConsecutiveRepeats && Math.random() < chance) {
           this.repeating = true;
           this.repeatCount += 1;
           this.gain = Math.pow(1 - decay, this.repeatCount);
